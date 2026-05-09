@@ -28,6 +28,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
+from ._shell import resolve_bash
 from .errors import SymphonyError
 from .workflow import (
     ServiceConfig,
@@ -163,9 +164,40 @@ def check_tracker(cfg: ServiceConfig) -> CheckResult:
     return CheckResult(f"tracker.kind={tracker.kind}", "warn", "unknown tracker kind")
 
 
+def check_shell() -> CheckResult:
+    """Hooks and backend subprocesses spawn via ``bash -lc``. On Windows we
+    must avoid the WSL launcher (``C:\\Windows\\System32\\bash.exe``) — see
+    ``_shell.resolve_bash``. On macOS/Linux we still verify ``bash`` is
+    actually on ``$PATH`` so minimal containers and nix-shells fail loudly
+    here rather than silently at first dispatch."""
+    bash = resolve_bash()
+    if sys.platform == "win32":
+        if bash.lower() == "bash":
+            return CheckResult(
+                "shell.bash",
+                "fail",
+                "no bash on $PATH — install Git for Windows or set $SYMPHONY_BASH",
+            )
+        if not (os.path.isfile(bash) or shutil.which(bash)):
+            return CheckResult(
+                "shell.bash",
+                "fail",
+                f"resolved bash at {bash} but it is not executable",
+            )
+    else:
+        if not (os.path.isfile(bash) or shutil.which(bash)):
+            return CheckResult(
+                "shell.bash",
+                "fail",
+                f"{bash!r} not found on $PATH — install bash or set $SYMPHONY_BASH",
+            )
+    return CheckResult("shell.bash", "pass", bash)
+
+
 def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]:
     return [
         check_port(cfg, host=host),
+        check_shell(),
         check_agent_cli(cfg),
         check_after_create_hook(cfg),
         check_workspace_root(cfg),

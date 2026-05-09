@@ -56,34 +56,36 @@ MAX_TURNS = _env_int("SYMPHONY_MOCK_MAX_TURNS", 0)
 
 
 class _Stdio:
-    """Simple wrapper to read/write JSON lines on stdio asynchronously."""
+    """Cross-platform async wrapper around blocking stdio.
+
+    Uses ``run_in_executor`` for stdin reads and stdout flushes so we don't
+    rely on ``loop.connect_read_pipe(sys.stdin)`` — that path fails on Windows
+    under ``ProactorEventLoop`` with ``OSError: [WinError 6]`` when the
+    interpreter's stdin handle is a redirected anonymous pipe.
+    """
 
     def __init__(self) -> None:
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
+        self._stdin = sys.stdin.buffer
+        self._stdout = sys.stdout.buffer
 
     async def start(self) -> None:
-        loop = asyncio.get_event_loop()
-        self._reader = asyncio.StreamReader(limit=10 * 1024 * 1024)
-        protocol = asyncio.StreamReaderProtocol(self._reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-        transport, write_proto = await loop.connect_write_pipe(
-            asyncio.streams.FlowControlMixin, sys.stdout
-        )
-        self._writer = asyncio.StreamWriter(transport, write_proto, None, loop)
+        return None
 
     async def readline(self) -> bytes:
-        assert self._reader is not None
-        return await self._reader.readline()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._stdin.readline)
 
     def write_json(self, obj: dict[str, Any]) -> None:
-        assert self._writer is not None
-        self._writer.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        line = (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+        try:
+            self._stdout.write(line)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     async def drain(self) -> None:
-        assert self._writer is not None
+        loop = asyncio.get_running_loop()
         try:
-            await self._writer.drain()
+            await loop.run_in_executor(None, self._stdout.flush)
         except (BrokenPipeError, ConnectionResetError):
             pass
 

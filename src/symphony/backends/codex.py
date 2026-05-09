@@ -23,6 +23,7 @@ import os
 import time
 from typing import Any
 
+from .._shell import resolve_bash
 from ..errors import (
     CodexNotFound,
     PortExit,
@@ -104,7 +105,7 @@ class CodexAppServerBackend:
     async def start(self) -> None:
         try:
             self._process = await asyncio.create_subprocess_exec(
-                "bash",
+                resolve_bash(),
                 "-lc",
                 self._codex.command,
                 cwd=str(self._cwd),

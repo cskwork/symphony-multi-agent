@@ -15,7 +15,9 @@ def _hooks(**overrides) -> HooksConfig:
         before_run=None,
         after_run=None,
         before_remove=None,
-        timeout_ms=2000,
+        # Generous default — Git Bash on Windows takes 1–4 s for a cold
+        # `bash -lc` startup; 2 s caused false-positive timeouts in CI.
+        timeout_ms=30_000,
     )
     base.update(overrides)
     return HooksConfig(**base)
@@ -42,12 +44,16 @@ async def test_sanitization(tmp_path):
 
 @pytest.mark.asyncio
 async def test_after_create_hook_runs_only_on_creation(tmp_path):
-    marker = tmp_path / "marker"
+    # Hook writes into its own cwd (the workspace) using a relative path so
+    # the assertion is independent of how bash on the host parses absolute
+    # paths — MSYS bash on Windows mishandles drive-letter prefixes when
+    # they're embedded in the script string.
     mgr = WorkspaceManager(
         tmp_path / "ws",
-        _hooks(after_create=f"echo created > {marker}"),
+        _hooks(after_create="echo created > marker"),
     )
     ws1 = await mgr.create_or_reuse("MT-2")
+    marker = ws1.path / "marker"
     assert marker.exists()
     marker.unlink()
     await mgr.create_or_reuse("MT-2")
