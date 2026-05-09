@@ -8,3 +8,8 @@ dist/
 .coverage
 htmlcov/
 /tmp_workspaces/
+
+# Local user workflow + tracker state — examples are shipped instead
+/WORKFLOW.md
+/kanban/
+/log/

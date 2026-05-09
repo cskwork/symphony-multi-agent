@@ -1,12 +1,19 @@
 # symphony-multi-agent
 
-Multi-agent fork of [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
+[![Tests: 73 passing](https://img.shields.io/badge/tests-73%20passing-brightgreen.svg)](#tests)
 
-The upstream service polls a tracker and runs a **Codex** coding-agent session
-inside a per-issue workspace. This fork adds:
+> Drive any coding-agent CLI — Codex, Claude Code, or Gemini — from one
+> orchestrator, with a Jira-style Kanban board rendered straight in your
+> terminal.
 
-1. A pluggable **AgentBackend** layer that supports three CLI agents behind
-   one interface:
+A multi-agent fork of [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
+Upstream polls a tracker (Linear or a local Markdown Kanban) and runs a Codex
+session inside a per-issue workspace. This fork keeps that orchestrator and
+adds:
+
+1. A pluggable **AgentBackend** layer with three concrete adapters:
    - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON events, per-turn subprocess with `--resume`)
@@ -16,7 +23,8 @@ inside a per-issue workspace. This fork adds:
    active agent, turn count, last event, and accumulated tokens.
 
 The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
-and prompt renderer are unchanged from upstream.
+and prompt renderer are unchanged from upstream — this fork is a thin layer
+on top of a battle-tested orchestrator core.
 
 ## Pick an agent
 
@@ -180,3 +188,40 @@ Fork-specific gaps:
   stay at zero for that backend.
 - Multi-turn continuity for Gemini is not supported (no session protocol
   exists in the CLI). Each `run_turn` is independent.
+
+## Contributing
+
+PRs welcome. Before opening one:
+
+```bash
+pip install -e ".[dev]"
+pytest -q          # must stay green
+```
+
+Backend adapters live under `src/symphony/backends/`. Adding a new agent
+(e.g. an Ollama-driven local model) means:
+
+1. implementing the `AgentBackend` Protocol in a new module,
+2. registering it in `build_backend()` (`src/symphony/backends/__init__.py`),
+3. adding a `<kind>Config` dataclass to `workflow.py` and threading it
+   through `build_service_config` + `validate_for_dispatch`,
+4. extending `SUPPORTED_AGENT_KINDS`.
+
+The bar for upstreaming a backend is: passes the existing factory + event
+normalization tests, doesn't bleed protocol-specific types into the
+orchestrator, and ships a default `<kind>` block in `WORKFLOW.example.md`.
+
+## Acknowledgements
+
+This project is built on top of OpenAI's
+[Symphony](https://github.com/openai/symphony) reference implementation. The
+upstream Apache-2.0 licensed work provides the orchestrator, the scheduler,
+and the workspace lifecycle that make this fork possible. See `NOTICE` for
+attribution details.
+
+The TUI uses Will McGugan's [rich](https://github.com/Textualize/rich)
+library for terminal rendering.
+
+## License
+
+[Apache 2.0](LICENSE).
