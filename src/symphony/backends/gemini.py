@@ -25,6 +25,7 @@ import time
 import uuid
 from typing import Any
 
+from .._shell import resolve_bash
 from ..errors import (
     PortExit,
     ResponseError,
@@ -129,7 +130,7 @@ class GeminiBackend:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "bash",
+                resolve_bash(),
                 "-lc",
                 self._gemini.command,
                 cwd=str(self._cwd),

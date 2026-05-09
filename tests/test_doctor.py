@@ -121,7 +121,12 @@ def test_port_fail_when_already_bound(tmp_path: Path) -> None:
         )
         result = check_port(cfg)
         assert result.status == "fail"
-        assert "Address already in use" in result.message or "in use" in result.message
+        # Doctor wraps the OSError as `cannot bind <host>:<port> — <exc>`.
+        # Avoid asserting on the OSError text — Windows OSes return a
+        # localized "Address already in use" (e.g. Korean "주소 …") that does
+        # not contain the English substring.
+        assert "cannot bind" in result.message
+        assert f"127.0.0.1:{bound_port}" in result.message
     finally:
         sock.close()
 
@@ -185,8 +190,8 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + agent + after_create + workspace + tracker = 5
-    assert len(results) == 5
+    # port + shell + agent + after_create + workspace + tracker = 6
+    assert len(results) == 6
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",

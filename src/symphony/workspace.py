@@ -5,15 +5,46 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._shell import resolve_bash
 from .errors import InvalidWorkspaceCwd, SymphonyError
 from .issue import workspace_key
 from .logging import get_logger
 from .workflow import HooksConfig
 
 log = get_logger()
+
+
+def _force_rmtree(path: Path, *, attempts: int = 5) -> tuple[bool, str | None]:
+    """Best-effort recursive delete with brief retry on Windows.
+
+    Windows can hold a directory's handle open for tens of milliseconds after
+    a child subprocess exits (the subprocess used the directory as its cwd),
+    causing ``shutil.rmtree`` to fail with ``PermissionError`` even though the
+    process is gone. We retry only ``PermissionError`` and only on Windows so
+    POSIX permission failures still surface immediately. Returns
+    ``(success, last_error_str)`` so callers can preserve diagnostic context
+    in their warning logs.
+    """
+    last_err: str | None = None
+    for i in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return True, None
+        except FileNotFoundError:
+            return True, None
+        except PermissionError as exc:
+            last_err = str(exc)
+            if sys.platform != "win32" or i == attempts - 1:
+                return False, last_err
+            time.sleep(0.05 * (i + 1))
+        except OSError as exc:
+            return False, str(exc)
+    return False, last_err
 
 
 @dataclass(frozen=True)
@@ -61,10 +92,11 @@ class WorkspaceManager:
                 await self._run_hook("after_create", self._hooks.after_create, path)
             except Exception:
                 # §9.4 — after_create failure is fatal; clean partial directory.
-                try:
-                    shutil.rmtree(path)
-                except OSError:
-                    pass
+                ok, err = _force_rmtree(path)
+                if not ok:
+                    log.warning(
+                        "workspace_cleanup_incomplete", path=str(path), error=err
+                    )
                 raise
 
         return Workspace(path=path, workspace_key=key, created_now=created_now)
@@ -95,10 +127,9 @@ class WorkspaceManager:
                 await self._run_hook("before_remove", self._hooks.before_remove, path)
             except Exception as exc:  # §9.4 — log and ignore.
                 log.warning("hook_before_remove_failed", path=str(path), error=str(exc))
-        try:
-            shutil.rmtree(path, ignore_errors=False)
-        except OSError as exc:
-            log.warning("workspace_remove_failed", path=str(path), error=str(exc))
+        ok, err = _force_rmtree(path)
+        if not ok:
+            log.warning("workspace_remove_failed", path=str(path), error=err)
 
     def _enforce_root_containment(self, path: Path) -> None:
         """§9.5 invariant 2."""
@@ -116,7 +147,7 @@ class WorkspaceManager:
         log.info("hook_start", hook=name, cwd=str(cwd))
         # §9.4 — run script via `bash -lc` with workspace cwd.
         process = await asyncio.create_subprocess_exec(
-            "bash",
+            resolve_bash(),
             "-lc",
             script,
             cwd=str(cwd),

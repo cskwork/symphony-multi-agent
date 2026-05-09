@@ -27,6 +27,7 @@ import shlex
 import time
 from typing import Any
 
+from .._shell import resolve_bash
 from ..errors import (
     PortExit,
     ResponseError,
@@ -144,7 +145,7 @@ class ClaudeCodeBackend:
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                "bash",
+                resolve_bash(),
                 "-lc",
                 cmd,
                 cwd=str(self._cwd),
