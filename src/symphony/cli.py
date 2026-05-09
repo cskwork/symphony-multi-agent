@@ -4,6 +4,7 @@ Subcommands:
     symphony [WORKFLOW]            run orchestrator (optionally with HTTP API via --port)
     symphony tui [WORKFLOW]        run orchestrator + Jira-style CLI Kanban TUI
     symphony board ...             file-tracker board helper
+    symphony doctor [WORKFLOW]     preflight checks for WORKFLOW.md
 """
 
 from __future__ import annotations
@@ -132,6 +133,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import board_cli
 
         return board_cli.main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "doctor":
+        from . import doctor
+
+        return doctor.main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "tui":
         # Rewrite `symphony tui [...args]` as `symphony --tui [...args]`.
         raw_argv = ["--tui", *raw_argv[1:]]

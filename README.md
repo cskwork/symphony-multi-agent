@@ -150,6 +150,31 @@ you've seen enough; then proceed to the real walkthrough below.
 
 ---
 
+## Preflight — `symphony doctor`
+
+Before launching, sanity-check your setup:
+
+```bash
+symphony doctor ./WORKFLOW.md
+```
+
+Output (one line per check):
+
+```
+PASS  server.port=9999              127.0.0.1:9999 is free
+PASS  agent.kind=claude             claude → /usr/local/bin/claude
+FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Replace with a real clone target or `: noop`.
+PASS  workspace.root=~/symphony_workspaces  exists and is writable
+PASS  tracker.board_root            ./kanban (3 tickets)
+```
+
+Exit code is `0` when all checks pass, `1` if any FAIL, `2` if `WORKFLOW.md`
+itself can't be loaded. The doctor catches the most common first-run
+failures in one pass: port collision, missing CLI on `$PATH`, the shipped
+placeholder clone URL, unwritable workspace, missing board directory.
+
+---
+
 ## Quickstart — your first task end-to-end
 
 This walks from a clean clone to a running ticket, using the file-based
