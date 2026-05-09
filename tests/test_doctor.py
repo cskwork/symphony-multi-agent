@@ -9,6 +9,7 @@ from pathlib import Path
 from symphony.doctor import (
     check_after_create_hook,
     check_agent_cli,
+    check_pi_auth,
     check_port,
     check_tracker,
     check_workspace_root,
@@ -190,14 +191,61 @@ def test_run_checks_returns_one_result_per_check(tmp_path: Path) -> None:
         """,
     )
     results = run_checks(cfg)
-    # port + shell + agent + after_create + workspace + tracker = 6
-    assert len(results) == 6
+    # port + shell + agent + pi_auth + after_create + workspace + tracker = 7
+    assert len(results) == 7
     assert {r.name.split("=")[0].split(".")[0] for r in results} >= {
         "agent",
         "hooks",
         "workspace",
         "tracker",
     }
+
+
+def test_pi_auth_skipped_for_non_pi(tmp_path: Path) -> None:
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: codex }
+        codex: { command: codex app-server }
+        """,
+    )
+    result = check_pi_auth(cfg)
+    assert result.status == "pass"
+    assert "skipped" in result.message
+
+
+def test_pi_auth_warns_when_missing(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))  # ~ resolves to a clean dir
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: pi }
+        pi: { command: 'pi --mode json -p \"\"' }
+        """,
+    )
+    result = check_pi_auth(cfg)
+    assert result.status == "warn"
+    assert "auth.json" in result.message
+
+
+def test_pi_auth_passes_when_present(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    auth = tmp_path / ".pi" / "agent" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text("{}")
+    cfg = _build_cfg(
+        tmp_path,
+        """
+        tracker: { kind: file, board_root: ./kanban }
+        agent: { kind: pi }
+        pi: { command: 'pi --mode json -p \"\"' }
+        """,
+    )
+    result = check_pi_auth(cfg)
+    assert result.status == "pass"
+    assert "auth.json" in result.message
 
 
 def test_format_results_includes_all_statuses() -> None:

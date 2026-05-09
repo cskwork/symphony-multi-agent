@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .backends import (
+    EVENT_TURN_FAILED,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
     BackendInit,
@@ -597,11 +598,36 @@ class Orchestrator:
             if sid:
                 entry.thread_id = str(sid)
                 entry.session_id = entry.thread_id
+            log.info(
+                "agent_session_started",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                session_id=entry.session_id,
+            )
         if ev_name == EVENT_TURN_COMPLETED:
             turn_id = payload.get("turnId") or payload.get("turn_id")
             if turn_id and entry.thread_id:
                 entry.turn_id = str(turn_id)
                 entry.session_id = f"{entry.thread_id}-{entry.turn_id}"
+            log.info(
+                "agent_turn_completed",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                turn=entry.turn_count,
+                input_tokens=entry.codex_input_tokens,
+                output_tokens=entry.codex_output_tokens,
+                total_tokens=entry.codex_total_tokens,
+                last_message=(entry.last_codex_message or "")[:160],
+            )
+        if ev_name == EVENT_TURN_FAILED:
+            reason = payload.get("reason") if isinstance(payload, dict) else None
+            log.warning(
+                "agent_turn_failed",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                turn=entry.turn_count,
+                reason=str(reason) if reason else "",
+            )
 
         # Track recent events.
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())

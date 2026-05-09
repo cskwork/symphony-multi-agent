@@ -86,6 +86,24 @@ async def test_after_run_failure_is_logged_and_ignored(tmp_path):
     await mgr.after_run_best_effort(ws.path)
 
 
+@pytest.mark.asyncio
+async def test_after_run_skipped_when_cwd_missing(tmp_path):
+    """If the agent (or anything else) deletes the workspace before exit,
+    after_run_best_effort must skip the hook silently rather than spawn
+    bash with a missing cwd (which raises a noisy FileNotFoundError that
+    the user cannot act on)."""
+    mgr = WorkspaceManager(
+        tmp_path / "ws", _hooks(after_run="echo should-not-run > marker")
+    )
+    ws = await mgr.create_or_reuse("MT-6")
+    # Simulate post-agent deletion.
+    import shutil as _shutil
+    _shutil.rmtree(ws.path)
+    # Should not raise; hook is skipped, no marker created elsewhere.
+    await mgr.after_run_best_effort(ws.path)
+    assert not ws.path.exists()
+
+
 def test_validate_agent_cwd_rejects_outside(tmp_path):
     root = tmp_path / "root"
     root.mkdir()

@@ -118,6 +118,13 @@ class WorkspaceManager:
     async def after_run_best_effort(self, path: Path) -> None:
         if not self._hooks.after_run:
             return
+        # If the agent (or an external process) removed the workspace before we
+        # got here, skip the hook — spawning bash with a missing cwd raises an
+        # opaque FileNotFoundError that callers cannot act on. Logging at
+        # INFO keeps the trail without the false-alarm warning.
+        if not path.exists():
+            log.info("hook_after_run_skipped_missing_cwd", path=str(path))
+            return
         try:
             await self._run_hook("after_run", self._hooks.after_run, path)
         except Exception as exc:  # §9.4 — log and ignore.
