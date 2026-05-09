@@ -25,7 +25,7 @@ tail -F log/symphony.log
 
 | Log line                                 | Meaning                                                  | Fix                                                                                 |
 |------------------------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------|
-| `hook_failed hook=after_create rc=128`   | First-time clone failed                                  | Replace placeholder repo URL in `WORKFLOW.md`, or set `after_create: \|\n  : noop`   |
+| `hook_failed hook=after_create rc=128`   | First-time clone failed                                  | Replace placeholder repo URL in `WORKFLOW.md`, or set `after_create: \|\n  : noop`. If the hook parses ticket frontmatter, see "awk vs sed for YAML values" below |
 | `worker_exit reason=error`               | Worker terminated abnormally                             | Read the preceding `hook_failed` event or backend stderr for the actual cause       |
 | `outcome=turn_error`                     | Turn ended in error (timeout, agent crash, tool failure) | Inspect backend stderr; for timeouts, raise `<kind>.turn_timeout_ms`                |
 | `hook_timeout`                           | Hook exceeded its time budget                            | Shorten the hook or remove blocking commands                                        |
@@ -74,6 +74,25 @@ By design — workspaces persist for inspection. Manually clean up with
 Both read from the JSON snapshot via the same orchestrator instance, but
 *you can only have one orchestrator process per board at a time*. Stop one
 before starting another, otherwise both will fight for hook locks.
+
+### "after_create exits 128 every retry, same error each time"
+
+If your hook parses ticket frontmatter to compute a clone URL, the
+single most common cause is an `awk -F':'` field separator that splits
+on every colon. A value like `repo: https://github.com/owner/repo.git`
+becomes `$2 = "https"`, which `git clone` rejects with rc=128. The
+retries fail identically because the parse is deterministic.
+
+```bash
+# Wrong — splits on every colon:
+REPO=$(awk -F': *' '/^repo:/ {print $2; exit}' "$TICKET")
+
+# Right — captures everything after the first `: `:
+REPO=$(sed -n 's/^repo: *\(.*\)$/\1/p' "$TICKET" | head -1 | tr -d '\r"')
+```
+
+See `reference/workflow-config.md` ("Hook authoring rules") for the
+full list of related gotchas (CRLF, absolute paths, `set -e`, etc.).
 
 ### Linear-tracker specific: "tickets aren't appearing"
 
