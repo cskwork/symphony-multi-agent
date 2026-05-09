@@ -67,7 +67,8 @@ server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`
 
 tui:
-  language: en          # `en` (default) or `ko` — chrome only. SYMPHONY_LANG env overrides.
+  language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
+  max_cards_per_column: 6    # cap each column at N cards; rest collapses to "+M more"
 ---
 
 You are picking up issue {{ issue.identifier }}: {{ issue.title }}.

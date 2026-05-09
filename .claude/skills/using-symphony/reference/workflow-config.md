@@ -194,9 +194,13 @@ observe via stderr logs and the TUI.
 
 ```yaml
 tui:
-  language: en    # `en` (default) or `ko`. Aliases like `Korean` / `ko-KR`
-                  # also resolve. Unknown values fall back to English.
+  language: en               # `en` (default) or `ko`. Aliases like `Korean` /
+                             # `ko-KR` also resolve. Unknown → English.
+  max_cards_per_column: 6    # cap each column at N cards; rest collapses to
+                             # "+M more". Omit / 0 / negative = render all.
 ```
+
+### `language`
 
 Only TUI chrome (column placeholder, header/footer field labels, card
 meta verbs `turn` / `retry #` / `blocked by`) is localized. Tracker
@@ -207,3 +211,22 @@ Per-key fallback to English is silent — adding a new locale never
 crashes the TUI on missing keys, but a missing translation surfaces as
 the literal key string (e.g. `card.turn`) so the gap is obvious in the
 running board.
+
+The `SYMPHONY_LANG` environment variable overrides `tui.language` for the
+session, so a single operator can flip locale without committing a
+config change others would inherit:
+
+```bash
+SYMPHONY_LANG=ko symphony tui ./WORKFLOW.md
+```
+
+### `max_cards_per_column`
+
+`rich.live.Live(screen=True)` runs in alt-screen mode and clips overflow
+silently — there's no terminal scrollback inside the TUI. When a column
+grows past one viewport, the cards beyond the cutoff just disappear off
+the bottom edge. `max_cards_per_column: N` caps each column at N cards
+and renders a dim `+M more` line for the rest, so the count stays
+honest and you know to filter the board.
+
+Set to `0` (or omit) to keep the original render-everything behavior.
