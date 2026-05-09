@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from symphony.i18n import DEFAULT_LANGUAGE, STRINGS, normalize_language, t
+from symphony.i18n import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_ENV_VAR,
+    STRINGS,
+    normalize_language,
+    resolve_language,
+    t,
+)
 from symphony.workflow import build_service_config, load_workflow
 
 
@@ -116,6 +123,56 @@ def test_workflow_invalid_tui_block_falls_back_to_default(tmp_path, monkeypatch)
     )
     cfg = build_service_config(load_workflow(path))
     assert cfg.tui.language == "en"
+
+
+def test_resolve_language_env_overrides_config(monkeypatch):
+    monkeypatch.setenv(LANGUAGE_ENV_VAR, "ko")
+    assert resolve_language("en") == "ko"
+
+
+def test_resolve_language_env_alias(monkeypatch):
+    monkeypatch.setenv(LANGUAGE_ENV_VAR, "Korean")
+    assert resolve_language("en") == "ko"
+
+
+def test_resolve_language_no_env_uses_config(monkeypatch):
+    monkeypatch.delenv(LANGUAGE_ENV_VAR, raising=False)
+    assert resolve_language("ko") == "ko"
+    assert resolve_language(None) == "en"
+
+
+def test_resolve_language_blank_env_falls_through(monkeypatch):
+    monkeypatch.setenv(LANGUAGE_ENV_VAR, "   ")
+    assert resolve_language("ko") == "ko"
+
+
+def test_lang_hint_keys_exist():
+    assert t("header.lang") == "lang="
+    assert t("header.lang", "ko") == "언어="
+    # Hint contains the env var name in EN, and instructions in KO.
+    assert "SYMPHONY_LANG" in t("header.lang_hint")
+    assert "SYMPHONY_LANG" in t("header.lang_hint", "ko") or "tui.language" in t(
+        "header.lang_hint", "ko"
+    )
+
+
+def test_workflow_env_override_wins_over_config(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "tok")
+    monkeypatch.setenv(LANGUAGE_ENV_VAR, "ko")
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x }
+            tui: { language: en }
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.tui.language == "ko"
 
 
 def test_workflow_alias_korean(tmp_path, monkeypatch):

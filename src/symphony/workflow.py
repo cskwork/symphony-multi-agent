@@ -514,8 +514,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     tui_raw = cfg.get("tui") or {}
     if not isinstance(tui_raw, dict):
         tui_raw = {}
-    from .i18n import normalize_language
-    tui = TuiConfig(language=normalize_language(tui_raw.get("language")))
+    from .i18n import resolve_language
+    # SYMPHONY_LANG env var takes precedence over WORKFLOW.md so a single
+    # operator can flip without editing the shared workflow file.
+    tui = TuiConfig(language=resolve_language(tui_raw.get("language")))
 
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
 
