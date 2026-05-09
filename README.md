@@ -136,9 +136,14 @@ symphony board new TASK-1 "smoke test"
 symphony tui ./WORKFLOW.md
 ```
 
-Within ~5 seconds you should see TASK-1 transition `Todo → In Progress` and
-the card grow a turn counter and token totals. Quit with `Ctrl-C` when
+Within ~5 seconds TASK-1 grows a green ● indicator in the **Todo** column,
+with a turn counter and token totals climbing. Quit with `Ctrl-C` when
 you've seen enough; then proceed to the real walkthrough below.
+
+> Cards stay in their original column under the mock — only a real agent
+> would rewrite `kanban/TASK-1.md` to move the card to **Done**. The mock
+> exists to prove the orchestrator → backend → workspace → hooks pipeline
+> end-to-end without an LLM call.
 
 > Tunables for the mock: `SYMPHONY_MOCK_TURN_SECONDS=12`,
 > `SYMPHONY_MOCK_FAIL_EVERY_N_TURNS=3`, etc. — see `src/symphony/mock_codex.py`.
@@ -222,10 +227,19 @@ symphony board show TASK-1           # full body
 symphony tui ./WORKFLOW.md
 ```
 
-Within one poll tick (`polling.interval_ms`, default 30s) the ticket moves
-into the **In Progress** column with a green ● marker, the agent runs, and
-on success the ticket lands in **Done** with a `## Resolution` section
-appended to its body. Quit with `Ctrl-C`.
+Within one poll tick (`polling.interval_ms`, default 30s) the orchestrator
+dispatches a worker, the card grows a green ● indicator (with turn counter
+and token totals), and the agent runs. On success the agent rewrites
+`kanban/TASK-1.md` to set `state: Done` and append a `## Resolution`
+section — that file edit is what moves the card from the **Todo** column
+into **Done**. Quit with `Ctrl-C`.
+
+> Cards are placed in columns based on the ticket file's `state` field
+> (`tui.py` reads it on each tick). The green ● indicator is overlaid on
+> top of the card and does **not** change which column it sits in. So a
+> running ticket stays in **Todo** until the agent itself rewrites the
+> file — that's by design (the orchestrator only reads ticket files; the
+> agent owns writes).
 
 > The TUI needs a real terminal (TTY). If you launch it from a script /
 > background process / non-interactive shell, the process exits silently —
