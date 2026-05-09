@@ -36,10 +36,32 @@ WORKFLOW_FILES = (
 # selects the matching one. So whatever the issue's state, all stage
 # headings must be present (and the issue's state must be echoed).
 STAGE_HEADINGS = (
+    "TRIAGE",
+    "EXPLORE",
     "IMPLEMENT",
     "REVIEW",
     "QA",
+    "LEARN",
     "DONE",
+)
+
+# Phrases the EXPLORE stage must reference so the agent actually consults
+# the three sources of domain knowledge (wiki, history, code) and produces
+# the structured brief / candidate plans / recommendation.
+EXPLORE_HARD_RULES = (
+    "llm-wiki",
+    "git log",
+    "Domain Brief",
+    "Plan Candidates",
+    "Recommendation",
+)
+
+# Phrases the LEARN stage must reference so wiki updates are not optional.
+LEARN_HARD_RULES = (
+    "llm-wiki",
+    "INDEX.md",
+    "Decision log",
+    "Wiki Updates",
 )
 
 # File-tracker variants record QA via a `## QA Evidence` markdown section in
@@ -79,14 +101,18 @@ def _issue(state: str, **overrides) -> Issue:
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
-def test_active_states_include_review_and_qa(workflow: str) -> None:
+def test_active_states_cover_full_pipeline(workflow: str) -> None:
     cfg = _load(workflow)
-    assert "Review" in cfg.tracker.active_states
-    assert "QA" in cfg.tracker.active_states
+    for required in ("Todo", "Explore", "In Progress", "Review", "QA", "Learn"):
+        assert required in cfg.tracker.active_states, (
+            f"{workflow} active_states missing {required!r} — TUI lane will not render"
+        )
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
-@pytest.mark.parametrize("state", ["Todo", "In Progress", "Review", "QA", "Done"])
+@pytest.mark.parametrize(
+    "state", ["Todo", "Explore", "In Progress", "Review", "QA", "Learn", "Done"]
+)
 def test_prompt_renders_for_every_stage(workflow: str, state: str) -> None:
     cfg = _load(workflow)
     rendered = render(cfg.prompt_template, build_prompt_env(_issue(state), attempt=None))
@@ -101,6 +127,26 @@ def test_qa_stage_demands_real_execution(workflow: str) -> None:
     rendered = render(cfg.prompt_template, build_prompt_env(_issue("QA"), attempt=None))
     for phrase in QA_HARD_RULES:
         assert phrase in rendered, f"QA stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_explore_stage_consults_wiki_history_and_code(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template, build_prompt_env(_issue("Explore"), attempt=None)
+    )
+    for phrase in EXPLORE_HARD_RULES:
+        assert phrase in rendered, f"Explore stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_learn_stage_writes_back_to_wiki(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template, build_prompt_env(_issue("Learn"), attempt=None)
+    )
+    for phrase in LEARN_HARD_RULES:
+        assert phrase in rendered, f"Learn stage missing hard rule: {phrase!r}"
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

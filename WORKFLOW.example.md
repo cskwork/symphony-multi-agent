@@ -3,14 +3,16 @@ tracker:
   kind: linear
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
-  active_states: [Todo, "In Progress", Review, QA]
+  active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
   terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done]
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
-    Todo: "Plan + first failing test"
+    Todo: "Triage; route to Explore"
+    Explore: "Brief from llm-wiki + git + code"
     "In Progress": "TDD loop, draft PR"
     Review: "Read diff, fix CRITICAL/HIGH"
     QA: "Execute real code, capture evidence"
+    Learn: "Distill learnings, update llm-wiki"
     Done: "As-Is -> To-Be report"
 
 polling:
@@ -35,9 +37,11 @@ agent:
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     Todo: 2
+    Explore: 2
     "In Progress": 4
     Review: 2
     QA: 2
+    Learn: 2
 
 codex:
   command: codex app-server
@@ -91,18 +95,24 @@ This issue depends on:
 {% endfor %}
 {% endif %}
 
-## Production pipeline (six stages, no skipping)
+## Production pipeline (seven stages, no skipping)
 
 Every issue flows through the same gates. Honour the gate that matches
 `{{ issue.state }}`. Each stage owns one transition; never jump ahead.
 
 ```
-  Todo / In Progress  ->  Review  ->  QA  ->  Done
-                              \                 ^
-                               +-> Blocked      |
-                                                |
-              (QA failure rewinds to In Progress)
+  Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
+                              \                       \                    ^
+                               +-> Blocked             +-> Blocked          |
+                                                                            |
+                              (QA failure rewinds to In Progress)
 ```
+
+`llm-wiki/` is the project's domain knowledge base — one Markdown entry per
+topic, plus an `INDEX.md` that lists them. Explore reads it before any new
+work; Learn writes back to it after QA passes. Treat it as a living memory
+that future tickets depend on. If the directory does not yet exist, the
+first Learn stage that runs creates it.
 
 State transitions and stage notes are written via the `linear_graphql` tool:
 `issueUpdate` for state changes, `commentCreate` for the per-stage notes
@@ -110,17 +120,54 @@ described below. Each stage produces one comment.
 
 ## Stage rules
 
-### IMPLEMENT  -- when state is `Todo` or `In Progress`
+### TRIAGE  -- when state is `Todo`
 
-1. Research first: search the repo, the test suite, and library docs before
-   writing anything new. Reuse battle-tested helpers over hand-rolled ones.
-2. Post a Plan comment: the smallest sustainable change, the files you
-   intend to touch, the test you will write first.
-3. TDD loop: write a failing test, make it pass, refactor. No production
-   code without a test exercising it.
-4. Open a draft PR. Post an Implementation comment with the PR link, the
+1. Read the ticket end-to-end. Confirm there is enough information
+   (description, acceptance criteria, blocking links) to start exploring.
+2. If the ticket is under-specified or ambiguous, post a Triage comment
+   listing the missing inputs and transition state to `Blocked`.
+3. Otherwise post a one-line Triage comment ("ticket is actionable; routing
+   to Explore") and transition state to `Explore`. Do no implementation in
+   `Todo` — research belongs in `Explore`.
+
+### EXPLORE  -- when state is `Explore`
+
+You are a domain-knowing researcher walking three lenses in one turn:
+**domain expert** (what does this code mean?), **implementer** (smallest
+sustainable change?), **risk reviewer** (what could go wrong?).
+
+1. Open `llm-wiki/INDEX.md`. Read every entry whose topic plausibly relates
+   to the ticket. Follow links into the entry files. If `llm-wiki/` does
+   not exist yet, note that and continue — Learn will seed it later.
+2. Skim git history for prior work in adjacent areas: for each file the
+   ticket likely touches, run `git log --oneline -- <path>` and read the
+   one or two most relevant commits in full (`git show <sha>`). Capture
+   why prior changes were made, not just what they did.
+3. Read the actual source files end-to-end (not just hunks) so the brief
+   reflects current state, not stale memory.
+4. Apply each lens explicitly and produce one consolidated Explore
+   comment with three sections:
+   - `## Domain Brief` — key facts, invariants, and references
+     (`path:line`, wiki entry titles, commit SHAs) the implementer must
+     know before writing code.
+   - `## Plan Candidates` — 2-3 concrete approaches with trade-offs
+     (complexity, blast radius, reversibility). Be specific about files
+     touched and tests added per option.
+   - `## Recommendation` — the option you choose, the rationale (why
+     this lens won), the risks accepted, and the first failing test
+     the implementer should write.
+5. Transition state to `In Progress`.
+
+### IMPLEMENT  -- when state is `In Progress`
+
+1. Read the Explore Recommendation comment first. Implement the chosen
+   option; do not reopen the plan unless you find a fact the brief got
+   wrong (in which case post a one-line note and proceed).
+2. TDD loop: write the failing test the brief specified, make it pass,
+   refactor. No production code without a test exercising it.
+3. Open a draft PR. Post an Implementation comment with the PR link, the
    touched files, and the commit-style intent of each change.
-5. Transition state to `Review`.
+4. Transition state to `Review`.
 
 ### REVIEW  -- when state is `Review`
 
@@ -156,7 +203,56 @@ capture its output as evidence.
 3. If anything fails: transition state back to `In Progress`, post a QA
    Failure comment describing what regressed, and stop. Do NOT silence,
    retry, or skip the failing check.
-4. If everything passes: transition state to `Done`.
+4. If everything passes: transition state to `Learn`.
+
+### LEARN  -- when state is `Learn`
+
+The point of Learn is to make the next ticket cheaper. Distill what this
+ticket actually taught the team and write it back into `llm-wiki/` so
+future Explore stages can find it.
+
+1. Compare the Explore brief against reality:
+   - Which assumptions held? Which were wrong? Why?
+   - Which constraint, gotcha, or invariant only became visible during
+     implementation, review, or QA?
+   - Which prior wiki entry (if any) was incomplete or misleading?
+2. For each non-trivial finding, update `llm-wiki/`:
+   - If a relevant entry exists, edit it in place. Append to its
+     **Decision log** with a `YYYY-MM-DD | <issue.identifier> | note`
+     line and refresh **Last updated**.
+   - Otherwise create `llm-wiki/<topic-slug>.md` with this exact shape:
+
+     ```
+     # <Topic Title>
+
+     **Summary:** one-paragraph overview (what this domain area is and
+     why a coding agent would need to know it).
+
+     **Invariants & Constraints:**
+     - ...
+
+     **Files of interest:**
+     - `path/to/file.py:123` — what the line region does.
+
+     **Decision log:**
+     - YYYY-MM-DD | <issue.identifier> | what changed and why.
+
+     **Last updated:** YYYY-MM-DD by <issue.identifier>.
+     ```
+
+   - Add or refresh the matching row in `llm-wiki/INDEX.md`
+     (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
+     Create `INDEX.md` with a header row if it does not yet exist.
+3. Commit the wiki edits onto the ticket's PR (same branch — wiki updates
+   are part of the change). Do not push wiki edits in a separate PR.
+4. Post a Learn comment with two sections:
+   - `## Learnings` — bullets of new facts, constraints, or surprises
+     this ticket exposed.
+   - `## Wiki Updates` — list of `llm-wiki/<file>.md` paths created or
+     modified, one line each with a brief changelog.
+5. Transition state to `Done`. If you found nothing genuinely new, say
+   so explicitly in the Learn comment ("no new wiki entries; existing
+   coverage was correct") and still transition.
 
 ### DONE  -- when state is `Done`
 
