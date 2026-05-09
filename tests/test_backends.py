@@ -75,7 +75,7 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
             resume_across_turns=True,
         ),
         gemini=GeminiConfig(
-            command="gemini -p",
+            command='gemini -p ""',
             turn_timeout_ms=60_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=30_000,

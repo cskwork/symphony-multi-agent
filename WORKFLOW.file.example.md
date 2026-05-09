@@ -38,7 +38,9 @@ claude:
   command: claude -p --output-format stream-json --verbose
 
 gemini:
-  command: gemini -p
+  # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
+  # so the prompt comes purely from stdin.
+  command: 'gemini -p ""'
 
 server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`

@@ -62,7 +62,7 @@ def _make_config(
             resume_across_turns=True,
         ),
         gemini=GeminiConfig(
-            command="gemini -p",
+            command='gemini -p ""',
             turn_timeout_ms=3_600_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=300_000,
