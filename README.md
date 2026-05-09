@@ -2,9 +2,9 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests: 73 passing](https://img.shields.io/badge/tests-73%20passing-brightgreen.svg)](#tests)
+[![Tests: 156 passing](https://img.shields.io/badge/tests-156%20passing-brightgreen.svg)](#tests)
 
-> Drive any coding-agent CLI — Codex, Claude Code, or Gemini — from one
+> Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
 > orchestrator, with a Jira-style Kanban board rendered straight in your
 > terminal.
 
@@ -409,14 +409,15 @@ src/symphony/
 pytest -q
 ```
 
-73 tests pass: the upstream conformance suite plus 11 backend unit tests
-covering the factory, event normalization, Claude usage accumulation, and
-Gemini session synthesis. Subprocess-driven integration tests against real
-CLIs are intentionally not in CI — run them locally.
+156 tests pass: the upstream conformance suite plus the backend unit tests
+covering the factory, event normalization, Claude / Pi usage accumulation,
+Gemini session synthesis, and Pi failure-reason detection. Subprocess-driven
+integration tests against real CLIs are intentionally not in CI — run them
+locally.
 
 ## Design notes
 
-### Why three different lifecycles behind one Protocol?
+### Why four different lifecycles behind one Protocol?
 
 - **Codex** opens one `app-server` subprocess per issue and speaks the
   current `codex app-server` JSON-RPC protocol (`initialize` + `thread/start`
