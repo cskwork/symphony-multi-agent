@@ -98,6 +98,11 @@ backend.
 - The user wants Linear integration — see `README.md` and
   `WORKFLOW.example.md` for the `tracker.kind: linear` config; then
   upstream Symphony docs apply.
+- The user wants a *whole product* built end-to-end from a single prompt
+  (with shared-knowledge vault, multi-lane workflow, and PDF-gated
+  verification) — use `symphony-oneshot` instead. That skill builds on
+  this one; understand `using-symphony` first, then layer the OneShot
+  pattern on top.
 
 ## Quick reference
 
