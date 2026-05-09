@@ -189,3 +189,21 @@ server:
 
 When unset, the orchestrator runs without an HTTP server and you can only
 observe via stderr logs and the TUI.
+
+## TUI display tweaks
+
+```yaml
+tui:
+  language: en    # `en` (default) or `ko`. Aliases like `Korean` / `ko-KR`
+                  # also resolve. Unknown values fall back to English.
+```
+
+Only TUI chrome (column placeholder, header/footer field labels, card
+meta verbs `turn` / `retry #` / `blocked by`) is localized. Tracker
+state names, ticket titles, and `tracker.state_descriptions` come from
+user data and stay as authored.
+
+Per-key fallback to English is silent — adding a new locale never
+crashes the TUI on missing keys, but a missing translation surfaces as
+the literal key string (e.g. `card.turn`) so the gap is obvious in the
+running board.

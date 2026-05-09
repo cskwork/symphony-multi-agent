@@ -28,6 +28,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .i18n import t
 from .issue import Issue, normalize_state
 from .logging import get_logger
 from .orchestrator import Orchestrator
@@ -170,46 +171,49 @@ class KanbanTUI:
         runtime_index = self._build_runtime_index(snapshot)
         column_panels = self._build_columns(cfg, runtime_index)
         header = self._build_header(cfg, snapshot)
-        footer = self._build_footer(snapshot)
+        footer = self._build_footer(cfg, snapshot)
         return Group(header, Columns(column_panels, expand=True, equal=True), footer)
 
     def _build_header(self, cfg: ServiceConfig, snap: dict[str, Any]) -> Panel:
+        lang = cfg.tui.language
         counts = snap.get("counts", {})
         agent_kind = cfg.agent.kind
         agent_color = AGENT_COLOR.get(agent_kind, "white")
         title = Text("symphony-multi-agent", style="bold")
-        title.append(f"  agent=", style="dim")
+        title.append(f"  {t('header.agent', lang)}", style="dim")
         title.append(agent_kind, style=f"bold {agent_color}")
-        title.append(f"  tracker={cfg.tracker.kind}", style="dim")
-        title.append(f"  workflow={cfg.workflow_path.name}", style="dim")
+        title.append(f"  {t('header.tracker', lang)}{cfg.tracker.kind}", style="dim")
+        title.append(f"  {t('header.workflow', lang)}{cfg.workflow_path.name}", style="dim")
         right = Text()
-        right.append(f"running={counts.get('running', 0)}  ", style="green")
-        right.append(f"retrying={counts.get('retrying', 0)}  ", style="yellow")
-        right.append(f"generated_at {snap.get('generated_at', '?')}", style="dim")
+        right.append(f"{t('header.running', lang)}{counts.get('running', 0)}  ", style="green")
+        right.append(f"{t('header.retrying', lang)}{counts.get('retrying', 0)}  ", style="yellow")
+        right.append(f"{t('header.generated_at', lang)} {snap.get('generated_at', '?')}", style="dim")
         bar = Table.grid(expand=True)
         bar.add_column(justify="left", ratio=2)
         bar.add_column(justify="right", ratio=1)
         bar.add_row(title, right)
         return Panel(bar, box=SIMPLE, padding=(0, 1))
 
-    def _build_footer(self, snap: dict[str, Any]) -> Panel:
+    def _build_footer(self, cfg: ServiceConfig, snap: dict[str, Any]) -> Panel:
+        lang = cfg.tui.language
         totals = snap.get("codex_totals", {})
         rl = snap.get("rate_limits")
         line = Text()
-        line.append("tokens  ", style="dim")
+        line.append(f"{t('footer.tokens', lang)}  ", style="dim")
         line.append(f"in={totals.get('input_tokens', 0):,}  ", style="cyan")
         line.append(f"out={totals.get('output_tokens', 0):,}  ", style="bright_cyan")
         line.append(f"total={totals.get('total_tokens', 0):,}", style="bold cyan")
         line.append("    ", style="dim")
-        line.append(f"runtime={totals.get('seconds_running', 0):.1f}s", style="dim")
+        line.append(f"{t('footer.runtime', lang)}{totals.get('seconds_running', 0):.1f}s", style="dim")
         if rl:
-            line.append("    rate-limits=", style="dim")
+            line.append(f"    {t('footer.rate_limits', lang)}", style="dim")
             line.append(_compact_rate_limits(rl), style="yellow")
         return Panel(line, box=SIMPLE, padding=(0, 1))
 
     def _build_columns(
         self, cfg: ServiceConfig, runtime_index: dict[str, _CardStatus]
     ) -> list[Panel]:
+        empty_text = t("column.empty", cfg.tui.language)
         # Active columns first (in declared order), then terminal columns.
         column_states: list[str] = list(cfg.tracker.active_states) + list(
             cfg.tracker.terminal_states
@@ -236,7 +240,9 @@ class KanbanTUI:
             issues = sorted(issues_by_state.get(state_key, []), key=_card_sort_key)
             color = STATE_COLOR.get(state_key, "white")
             cards = [
-                self._render_card(issue, runtime_index.get(issue.id, _CardStatus()), color)
+                self._render_card(
+                    issue, runtime_index.get(issue.id, _CardStatus()), color, cfg.tui.language
+                )
                 for issue in issues
             ]
             legend = descriptions.get(state_key)
@@ -248,11 +254,11 @@ class KanbanTUI:
                 body: Any = Group(*elements)
             elif legend:
                 elements.append(
-                    Align.center(Text("— empty —", style="dim italic"), vertical="middle")
+                    Align.center(Text(empty_text, style="dim italic"), vertical="middle")
                 )
                 body = Group(*elements)
             else:
-                body = Align.center(Text("— empty —", style="dim italic"), vertical="middle")
+                body = Align.center(Text(empty_text, style="dim italic"), vertical="middle")
             title = Text(f"{state_label} ", style=f"bold {color}")
             title.append(f"({len(issues)})", style="dim")
             panels.append(
@@ -266,7 +272,9 @@ class KanbanTUI:
             )
         return panels
 
-    def _render_card(self, issue: Issue, status: _CardStatus, color: str) -> Panel:
+    def _render_card(
+        self, issue: Issue, status: _CardStatus, color: str, language: str = "en"
+    ) -> Panel:
         title = Text(issue.identifier, style=f"bold {color}")
         if status.runtime == "running":
             title.append("  ●", style="bold green")
@@ -282,7 +290,7 @@ class KanbanTUI:
 
         meta = Text()
         if status.runtime == "running":
-            meta.append(f"turn {status.turn}", style="green")
+            meta.append(f"{t('card.turn', language)} {status.turn}", style="green")
             if status.last_event:
                 meta.append(f"  {status.last_event}", style="dim")
             if status.input_tokens or status.output_tokens or status.tokens:
@@ -293,13 +301,16 @@ class KanbanTUI:
                 meta.append(" / ", style="dim")
                 meta.append(f"total={status.tokens:,}", style="bold cyan")
         elif status.runtime == "retrying":
-            meta.append(f"retry #{status.attempt}", style="yellow")
+            meta.append(f"{t('card.retry', language)}{status.attempt}", style="yellow")
             if status.error:
                 meta.append(f"  {_truncate(status.error, 40)}", style="dim red")
         elif issue.blocked_by:
             blocker_names = [b.identifier for b in issue.blocked_by[:3] if b.identifier]
             if blocker_names:
-                meta.append(f"blocked by {', '.join(blocker_names)}", style="dim red")
+                meta.append(
+                    f"{t('card.blocked_by', language)} {', '.join(blocker_names)}",
+                    style="dim red",
+                )
         elif issue.labels:
             meta.append("  ".join(f"#{l}" for l in issue.labels[:3]), style="dim")
 

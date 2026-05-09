@@ -61,6 +61,10 @@ gemini:
 
 server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`
+
+tui:
+  language: en          # `en` (default) or `ko` — only TUI chrome localizes;
+                        # tracker states and ticket titles stay as authored.
 ---
 
 You are picking up issue {{ issue.identifier }}: {{ issue.title }}.

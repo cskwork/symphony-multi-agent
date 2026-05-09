@@ -237,6 +237,17 @@ class ServerConfig:
 
 
 @dataclass(frozen=True)
+class TuiConfig:
+    """Display-time TUI tweaks. Affects rendering only; orchestrator ignores."""
+
+    # ISO-639-1 language code used to look up localized chrome strings
+    # (column placeholder, header / footer field labels, card meta verbs).
+    # Tracker state names, ticket titles, and `state_descriptions` come from
+    # user data and are never translated. Defaults to "en".
+    language: str = "en"
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     workflow_path: Path
     poll_interval_ms: int
@@ -248,6 +259,7 @@ class ServiceConfig:
     claude: ClaudeConfig
     gemini: GeminiConfig
     server: ServerConfig
+    tui: TuiConfig = field(default_factory=TuiConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
 
@@ -499,6 +511,12 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         port = None
     server = ServerConfig(port=port)
 
+    tui_raw = cfg.get("tui") or {}
+    if not isinstance(tui_raw, dict):
+        tui_raw = {}
+    from .i18n import normalize_language
+    tui = TuiConfig(language=normalize_language(tui_raw.get("language")))
+
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
 
     return ServiceConfig(
@@ -512,6 +530,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         claude=claude,
         gemini=gemini,
         server=server,
+        tui=tui,
         raw=dict(cfg),
         prompt_template=prompt_template,
     )
