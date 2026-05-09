@@ -28,7 +28,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
-from ._shell import resolve_bash
+from ._shell import _is_wsl_launcher, resolve_bash
 from .errors import SymphonyError
 from .workflow import (
     ServiceConfig,
@@ -171,26 +171,31 @@ def check_shell() -> CheckResult:
     actually on ``$PATH`` so minimal containers and nix-shells fail loudly
     here rather than silently at first dispatch."""
     bash = resolve_bash()
-    if sys.platform == "win32":
-        if bash.lower() == "bash":
+    # If ``bash`` is a bare name (e.g. "bash" or "wsl"), resolve via PATH so
+    # WSL-launcher detection sees the actual binary.
+    resolved = bash if os.path.isfile(bash) else (shutil.which(bash) or bash)
+
+    if sys.platform == "win32" and _is_wsl_launcher(resolved):
+        return CheckResult(
+            "shell.bash",
+            "fail",
+            f"{resolved} is the WSL launcher — install Git for Windows "
+            "or set $SYMPHONY_BASH to a Git Bash binary",
+        )
+
+    if not (os.path.isfile(bash) or shutil.which(bash)):
+        if sys.platform == "win32":
             return CheckResult(
                 "shell.bash",
                 "fail",
-                "no bash on $PATH — install Git for Windows or set $SYMPHONY_BASH",
+                "no usable bash found — install Git for Windows or set $SYMPHONY_BASH",
             )
-        if not (os.path.isfile(bash) or shutil.which(bash)):
-            return CheckResult(
-                "shell.bash",
-                "fail",
-                f"resolved bash at {bash} but it is not executable",
-            )
-    else:
-        if not (os.path.isfile(bash) or shutil.which(bash)):
-            return CheckResult(
-                "shell.bash",
-                "fail",
-                f"{bash!r} not found on $PATH — install bash or set $SYMPHONY_BASH",
-            )
+        return CheckResult(
+            "shell.bash",
+            "fail",
+            f"{bash!r} not found on $PATH — install bash or set $SYMPHONY_BASH",
+        )
+
     return CheckResult("shell.bash", "pass", bash)
 
 

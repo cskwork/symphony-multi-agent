@@ -56,10 +56,21 @@ def resolve_bash() -> str:
     the first call (typically before importing symphony) if you need to
     override. Tests that toggle the env var mid-process must call
     ``resolve_bash.cache_clear()`` between toggles.
+
+    A ``SYMPHONY_BASH`` override pointing at the Windows WSL launcher is
+    rejected (the whole reason this helper exists is to avoid that binary);
+    we fall through to the default detection so a misconfigured override
+    can't silently re-introduce the bug. Other override values are returned
+    as-is and validated by ``doctor.check_shell``.
     """
     override = os.environ.get("SYMPHONY_BASH")
     if override:
-        return override
+        if _is_wsl_launcher(override):
+            # Misconfiguration — fall through to default detection rather
+            # than honor a value we know will not work for hooks.
+            pass
+        else:
+            return override
 
     if sys.platform != "win32":
         return "bash"
@@ -72,6 +83,7 @@ def resolve_bash() -> str:
     if found and not _is_wsl_launcher(found):
         return found
 
-    # Last resort: PATH-based lookup, even if it points at WSL — keeps the
-    # behavior predictable rather than silently failing at spawn time.
+    # Last resort: bare ``bash`` so spawn-time error is reproducible from
+    # the doctor's ``check_shell`` failure (instead of failing at the first
+    # hook dispatch with an opaque ``FileNotFoundError``).
     return "bash"
