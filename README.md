@@ -56,7 +56,7 @@ adds:
    - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON events, per-turn subprocess with `--resume`)
-   - **Gemini** — `gemini -p` (one-shot per turn, stdin prompt → stdout result)
+   - **Gemini** — `gemini -p ""` (one-shot per turn, stdin prompt → stdout result)
 2. A **Jira-style CLI Kanban TUI** built on `rich` that replaces the upstream
    server-rendered HTML dashboard. Columns are tracker states; cards show the
    active agent, turn count, last event, and accumulated tokens.

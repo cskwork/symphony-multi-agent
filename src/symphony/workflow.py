@@ -47,7 +47,11 @@ DEFAULT_AGENT_KIND = "codex"
 DEFAULT_CLAUDE_COMMAND = (
     "claude -p --output-format stream-json --include-partial-messages --verbose"
 )
-DEFAULT_GEMINI_COMMAND = "gemini -p"
+# `gemini -p` (no argument) prints help and exits in Gemini CLI 0.39+ — the
+# `-p`/`--prompt` flag now requires a string. We pass an empty string so
+# stdin alone is the prompt (Gemini documents stdin as "Appended to input on
+# stdin (if any).").
+DEFAULT_GEMINI_COMMAND = 'gemini -p ""'
 DEFAULT_BACKEND_TURN_TIMEOUT_MS = 3_600_000
 DEFAULT_BACKEND_READ_TIMEOUT_MS = 5_000
 DEFAULT_BACKEND_STALL_TIMEOUT_MS = 300_000
