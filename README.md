@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests: 156 passing](https://img.shields.io/badge/tests-156%20passing-brightgreen.svg)](#tests)
+[![Tests: 164 passing](https://img.shields.io/badge/tests-164%20passing-brightgreen.svg)](#tests)
 
 > Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
 > orchestrator, with a Jira-style Kanban board rendered straight in your
@@ -409,7 +409,7 @@ src/symphony/
 pytest -q
 ```
 
-156 tests pass: the upstream conformance suite plus the backend unit tests
+164 tests pass: the upstream conformance suite plus the backend unit tests
 covering the factory, event normalization, Claude / Pi usage accumulation,
 Gemini session synthesis, and Pi failure-reason detection. Subprocess-driven
 integration tests against real CLIs are intentionally not in CI — run them
