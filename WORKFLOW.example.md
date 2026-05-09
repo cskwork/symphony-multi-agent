@@ -22,6 +22,7 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
+  kind: codex          # codex | claude | gemini
   max_concurrent_agents: 4
   max_turns: 20
   max_retry_backoff_ms: 300000
@@ -38,8 +39,21 @@ codex:
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
 
+claude:
+  command: claude -p --output-format stream-json --verbose
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
+gemini:
+  command: gemini -p
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
 server:
-  port: 8080
+  port: 8080            # optional JSON API; the primary UI is `symphony tui`
 ---
 
 You are picking up issue {{ issue.identifier }}: {{ issue.title }}.

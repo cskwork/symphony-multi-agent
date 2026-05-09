@@ -42,6 +42,16 @@ DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
+SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini"}
+DEFAULT_AGENT_KIND = "codex"
+DEFAULT_CLAUDE_COMMAND = (
+    "claude -p --output-format stream-json --include-partial-messages --verbose"
+)
+DEFAULT_GEMINI_COMMAND = "gemini -p"
+DEFAULT_BACKEND_TURN_TIMEOUT_MS = 3_600_000
+DEFAULT_BACKEND_READ_TIMEOUT_MS = 5_000
+DEFAULT_BACKEND_STALL_TIMEOUT_MS = 300_000
+
 _VAR_PATTERN = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
 
 
@@ -166,6 +176,7 @@ class HooksConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
+    kind: str
     max_concurrent_agents: int
     max_turns: int
     max_retry_backoff_ms: int
@@ -178,6 +189,29 @@ class CodexConfig:
     approval_policy: Any
     thread_sandbox: Any
     turn_sandbox_policy: Any
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+
+
+@dataclass(frozen=True)
+class ClaudeConfig:
+    """`agent.kind: claude` — driving Claude Code CLI in print/stream mode."""
+
+    command: str
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+    # When True, second and later turns add `--resume <session_id>` so Claude
+    # rejoins the prior session instead of starting fresh.
+    resume_across_turns: bool
+
+
+@dataclass(frozen=True)
+class GeminiConfig:
+    """`agent.kind: gemini` — driving Gemini CLI as one-shot per turn."""
+
+    command: str
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
@@ -199,9 +233,32 @@ class ServiceConfig:
     hooks: HooksConfig
     agent: AgentConfig
     codex: CodexConfig
+    claude: ClaudeConfig
+    gemini: GeminiConfig
     server: ServerConfig
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
+
+    def backend_timeouts(self) -> tuple[int, int, int]:
+        """Return `(turn_ms, read_ms, stall_ms)` for the active backend."""
+        kind = self.agent.kind
+        if kind == "codex":
+            return (
+                self.codex.turn_timeout_ms,
+                self.codex.read_timeout_ms,
+                self.codex.stall_timeout_ms,
+            )
+        if kind == "claude":
+            return (
+                self.claude.turn_timeout_ms,
+                self.claude.read_timeout_ms,
+                self.claude.stall_timeout_ms,
+            )
+        return (
+            self.gemini.turn_timeout_ms,
+            self.gemini.read_timeout_ms,
+            self.gemini.stall_timeout_ms,
+        )
 
 
 def _as_int(value: Any, default: int, *, allow_zero: bool = True) -> int:
@@ -344,7 +401,14 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     max_turns = _validated_positive_or_default(
         agent_raw.get("max_turns"), DEFAULT_MAX_TURNS, name="agent.max_turns"
     )
+    agent_kind = _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower() or DEFAULT_AGENT_KIND
+    if agent_kind not in SUPPORTED_AGENT_KINDS:
+        raise ConfigValidationError(
+            f"agent.kind must be one of {sorted(SUPPORTED_AGENT_KINDS)}",
+            value=agent_kind,
+        )
     agent = AgentConfig(
+        kind=agent_kind,
         max_concurrent_agents=_as_int(
             agent_raw.get("max_concurrent_agents"), DEFAULT_MAX_CONCURRENT_AGENTS
         ),
@@ -370,6 +434,27 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         stall_timeout_ms=_as_int(codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS),
     )
 
+    claude_raw = cfg.get("claude") or {}
+    if not isinstance(claude_raw, dict):
+        claude_raw = {}
+    claude = ClaudeConfig(
+        command=_as_str(claude_raw.get("command"), DEFAULT_CLAUDE_COMMAND) or DEFAULT_CLAUDE_COMMAND,
+        turn_timeout_ms=_as_int(claude_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
+        read_timeout_ms=_as_int(claude_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
+        stall_timeout_ms=_as_int(claude_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        resume_across_turns=bool(claude_raw.get("resume_across_turns", True)),
+    )
+
+    gemini_raw = cfg.get("gemini") or {}
+    if not isinstance(gemini_raw, dict):
+        gemini_raw = {}
+    gemini = GeminiConfig(
+        command=_as_str(gemini_raw.get("command"), DEFAULT_GEMINI_COMMAND) or DEFAULT_GEMINI_COMMAND,
+        turn_timeout_ms=_as_int(gemini_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
+        read_timeout_ms=_as_int(gemini_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
+        stall_timeout_ms=_as_int(gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+    )
+
     server_raw = cfg.get("server") or {}
     if not isinstance(server_raw, dict):
         server_raw = {}
@@ -392,6 +477,8 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         hooks=hooks,
         agent=agent,
         codex=codex,
+        claude=claude,
+        gemini=gemini,
         server=server,
         raw=dict(cfg),
         prompt_template=prompt_template,
@@ -441,8 +528,16 @@ def validate_for_dispatch(config: ServiceConfig) -> None:
             raise ConfigValidationError(
                 "tracker.board_root is required when tracker.kind=file"
             )
-    if not config.codex.command.strip():
-        raise ConfigValidationError("codex.command must be non-empty")
+    kind = config.agent.kind
+    if kind == "codex":
+        if not config.codex.command.strip():
+            raise ConfigValidationError("codex.command must be non-empty")
+    elif kind == "claude":
+        if not config.claude.command.strip():
+            raise ConfigValidationError("claude.command must be non-empty")
+    elif kind == "gemini":
+        if not config.gemini.command.strip():
+            raise ConfigValidationError("gemini.command must be non-empty")
 
 
 # ---------------------------------------------------------------------------

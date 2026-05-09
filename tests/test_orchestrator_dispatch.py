@@ -9,7 +9,9 @@ from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry
 from symphony.workflow import (
     AgentConfig,
+    ClaudeConfig,
     CodexConfig,
+    GeminiConfig,
     HooksConfig,
     ServerConfig,
     ServiceConfig,
@@ -37,6 +39,7 @@ def _make_config(
         ),
         hooks=HooksConfig(None, None, None, None, 60_000),
         agent=AgentConfig(
+            kind="codex",
             max_concurrent_agents=max_concurrent,
             max_turns=20,
             max_retry_backoff_ms=300_000,
@@ -47,6 +50,19 @@ def _make_config(
             approval_policy=None,
             thread_sandbox=None,
             turn_sandbox_policy=None,
+            turn_timeout_ms=3_600_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=300_000,
+        ),
+        claude=ClaudeConfig(
+            command="claude -p --output-format stream-json --verbose",
+            turn_timeout_ms=3_600_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=300_000,
+            resume_across_turns=True,
+        ),
+        gemini=GeminiConfig(
+            command="gemini -p",
             turn_timeout_ms=3_600_000,
             read_timeout_ms=5_000,
             stall_timeout_ms=300_000,

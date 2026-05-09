@@ -1,4 +1,10 @@
-"""SPEC §17.7 — CLI entry point."""
+"""CLI entry point.
+
+Subcommands:
+    symphony [WORKFLOW]            run orchestrator (optionally with HTTP API via --port)
+    symphony tui [WORKFLOW]        run orchestrator + Jira-style CLI Kanban TUI
+    symphony board ...             file-tracker board helper
+"""
 
 from __future__ import annotations
 
@@ -14,10 +20,10 @@ from .server import build_app, run_server
 from .workflow import WorkflowState, resolve_workflow_path
 
 
-def _parse_args(argv: list[str]) -> argparse.Namespace:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="symphony",
-        description="Symphony — coding agent orchestration service.",
+        description="Symphony multi-agent — Codex / Claude Code / Gemini orchestration.",
     )
     parser.add_argument(
         "workflow",
@@ -29,19 +35,24 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--port",
         type=int,
         default=None,
-        help="enable HTTP observability extension on this port (overrides server.port)",
+        help="enable HTTP JSON API on this port (overrides server.port)",
     )
     parser.add_argument(
         "--host",
         default="127.0.0.1",
-        help="bind host for HTTP extension (default: loopback)",
+        help="bind host for HTTP API (default: loopback)",
     )
     parser.add_argument(
         "--log-level",
         default=None,
         help="log level: DEBUG, INFO, WARN, ERROR",
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="launch the Jira-style CLI Kanban board (same as `symphony tui ...`)",
+    )
+    return parser
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -84,10 +95,30 @@ async def _run(args: argparse.Namespace) -> int:
         except NotImplementedError:
             pass  # Windows / restricted env
 
+    tui_task: asyncio.Task[None] | None = None
+    if args.tui:
+        from .tui import KanbanTUI
+
+        tui = KanbanTUI(orchestrator, state)
+
+        async def _tui_runner() -> None:
+            try:
+                await tui.run()
+            finally:
+                stop_event.set()
+
+        tui_task = asyncio.create_task(_tui_runner(), name="symphony-tui")
+
     try:
         await stop_event.wait()
     finally:
         log.info("shutdown_initiated")
+        if tui_task is not None:
+            tui_task.cancel()
+            try:
+                await tui_task
+            except (asyncio.CancelledError, Exception):
+                pass
         await orchestrator.stop()
         if runner is not None:
             await runner.cleanup()
@@ -101,7 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         from . import board_cli
 
         return board_cli.main(raw_argv[1:])
-    args = _parse_args(raw_argv)
+    if raw_argv and raw_argv[0] == "tui":
+        # Rewrite `symphony tui [...args]` as `symphony --tui [...args]`.
+        raw_argv = ["--tui", *raw_argv[1:]]
+    args = _build_parser().parse_args(raw_argv)
     try:
         return asyncio.run(_run(args))
     except KeyboardInterrupt:

@@ -1,63 +1,40 @@
-# Symphony — reference implementation (SPEC v1)
+# symphony-multi-agent
 
-A Python implementation of the
-[OpenAI Symphony service specification](https://github.com/openai/symphony/blob/main/SPEC.md).
+Multi-agent fork of [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
 
-Symphony is a long-running automation service that polls an issue tracker
-(Linear in v1), creates an isolated per-issue workspace, and runs a Codex
-coding-agent session inside that workspace.
+The upstream service polls a tracker and runs a **Codex** coding-agent session
+inside a per-issue workspace. This fork adds:
 
-> The orchestrator is a scheduler/runner and tracker reader. Ticket writes
-> (state transitions, comments, PR links) are performed by the coding agent
-> using tools available in the workflow/runtime environment.
+1. A pluggable **AgentBackend** layer that supports three CLI agents behind
+   one interface:
+   - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
+   - **Claude Code** — `claude -p --output-format stream-json --verbose`
+     (NDJSON events, per-turn subprocess with `--resume`)
+   - **Gemini** — `gemini -p` (one-shot per turn, stdin prompt → stdout result)
+2. A **Jira-style CLI Kanban TUI** built on `rich` that replaces the upstream
+   server-rendered HTML dashboard. Columns are tracker states; cards show the
+   active agent, turn count, last event, and accumulated tokens.
 
-## Status
+The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
+and prompt renderer are unchanged from upstream.
 
-- All §18.1 *Core Conformance* items implemented.
-- §13.7 OPTIONAL HTTP server extension implemented.
-- §10.5 OPTIONAL `linear_graphql` client-side tool advertised to the agent.
-- Pluggable tracker layer with two adapters out of the box:
-  - `tracker.kind: linear` — Linear GraphQL (§11.2)
-  - `tracker.kind: file`   — local file-based Kanban (one Markdown file per
-    ticket with YAML front matter)
-- §A SSH worker extension *not* implemented (local execution only).
+## Pick an agent
 
-## Trust posture (§15.1)
+Set `agent.kind` in your `WORKFLOW.md`:
 
-This implementation targets a **trusted developer machine**:
+```yaml
+agent:
+  kind: claude          # codex | claude | gemini
 
-- Approval: agent approval requests are **auto-approved** (high-trust example
-  in §10.5). To tighten this, set `codex.approval_policy` and remove the
-  auto-approval handler in `agent.py::_handle_approval`.
-- Sandbox: per-turn sandbox policy is taken from `codex.turn_sandbox_policy`.
-  Default unless explicitly set is whatever the targeted Codex app-server
-  defaults to.
-- User-input-required turns are treated as **failure** (§10.5 example).
-- Workflow hooks run via `bash -lc` inside the workspace directory; treat
-  hooks as fully trusted configuration.
-- Workspace path containment (§9.5) is enforced before launching the agent
-  and before workspace removal.
-- API tokens are redacted from log lines and never echoed back.
-
-## Layout
-
+claude:
+  command: claude -p --output-format stream-json --verbose
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
 ```
-src/symphony/
-  errors.py            §5.5 §10.6 §11.4 typed errors
-  logging.py           §13 structured key=value logger
-  issue.py             §4.1.1 §4.2 normalized Issue model
-  workflow.py          §5 §6 WORKFLOW.md loader + typed config + reload
-  prompt.py            §5.4 §12 strict Liquid-semantics renderer
-  tracker.py           §11 TrackerClient protocol + adapter factory
-  tracker_linear.py    §11 Linear GraphQL adapter
-  tracker_file.py      §11 File-based Kanban adapter
-  workspace.py         §9 workspace manager + hooks + safety invariants
-  agent.py             §10 Codex app-server JSON-RPC stdio client
-  orchestrator.py      §7 §8 §16 single-authority state machine
-  server.py            §13.7 optional HTTP observability extension
-  cli.py               §17.7 CLI entry point
-  board_cli.py         `symphony board ...` helper for file-based tracker
-```
+
+Each backend reads its own block (`codex`, `claude`, `gemini`); only the one
+matching `agent.kind` is used at runtime. The Codex `linear_graphql` client
+tool is only advertised when `agent.kind=codex`.
 
 ## Install
 
@@ -67,84 +44,85 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+Make the relevant CLI available on `$PATH`:
+
+| `agent.kind` | required CLI on `$PATH` |
+|--------------|------------------------|
+| `codex`      | `codex` (with `app-server` subcommand) |
+| `claude`     | `claude` (Claude Code) |
+| `gemini`     | `gemini` (Gemini CLI)  |
+
 ## Run
 
-1. Place a `WORKFLOW.md` in the directory you run Symphony from
-   (or pass an explicit path).
-2. Provide a Linear API token, e.g. `export LINEAR_API_KEY=lin_...`.
-3. Make `codex` available on `$PATH` so the configured `codex.command`
-   resolves.
+### Background service + JSON API
 
 ```bash
 symphony ./WORKFLOW.md --port 8080
-# or
-python -m symphony ./WORKFLOW.md
 ```
 
-`WORKFLOW.example.md` in this repo is a complete Linear reference workflow.
-`WORKFLOW.file.example.md` is the equivalent for the file-based Kanban.
+JSON API endpoints (unchanged from upstream):
 
-## File-based Kanban (`tracker.kind: file`)
+| Method | Path                       | Purpose                                      |
+|--------|----------------------------|----------------------------------------------|
+| GET    | `/api/v1/state`            | Snapshot — running, retrying, totals, limits |
+| GET    | `/api/v1/<identifier>`     | Issue detail (404 with structured error)     |
+| POST   | `/api/v1/refresh`          | Coalesced trigger of poll + reconcile        |
 
-If you do not have Linear or want a fully local Kanban, set:
+The HTML dashboard at `/` from upstream has been removed in this fork; the
+primary UI is the CLI Kanban below.
+
+### CLI Kanban TUI (primary UI)
+
+```bash
+symphony tui ./WORKFLOW.md
+# equivalent
+symphony ./WORKFLOW.md --tui
+```
+
+Columns are tracker states (`active_states` first, then `terminal_states`).
+Cards display issue identifier + title, priority, labels (or blockers), and a
+runtime indicator:
+
+- **● green** — currently running, shows `turn N`, last event, accumulated tokens
+- **↻ yellow** — in retry queue, shows `retry #N` and the last error
+- **✓ green** — completed in this session
+
+Quit with `Ctrl-C` (clean shutdown drains active workers).
+
+### File-based Kanban tracker
+
+If you don't have Linear, use the local Markdown-file tracker (unchanged from
+upstream):
 
 ```yaml
 tracker:
   kind: file
-  board_root: ./kanban       # default: ./board next to WORKFLOW.md
-  active_states: [Todo, In Progress]
-  terminal_states: [Done, Cancelled]
+  board_root: ./kanban
 ```
-
-Each ticket is one Markdown file under `board_root`:
-
-```markdown
----
-id: DEV-001
-title: Fix login bug
-state: Todo
-priority: 2
-labels: [backend, bug]
-blocked_by:
-  - identifier: DEV-099
-    state: Todo
-created_at: 2026-05-08T10:00:00Z
-updated_at: 2026-05-08T10:00:00Z
----
-
-Description body in Markdown.
-```
-
-Symphony reads the directory on every poll tick. The coding agent updates
-ticket state by rewriting its front matter via its built-in shell/file tools
-— no special API tool required.
-
-### `symphony board` helper
 
 ```bash
-symphony board init ./kanban                    # create the directory + sample
-symphony board ls [--state Todo]                # list tickets
-symphony board new DEV-1 "Title" --priority 2   # create a ticket
-symphony board mv  DEV-1 "In Progress"          # change state
-symphony board show DEV-1                       # print ticket
+symphony board init ./kanban
+symphony board new DEV-1 "Title" --priority 2
+symphony tui ./WORKFLOW.md
 ```
 
-The helper auto-discovers `board_root` from `./WORKFLOW.md`. Pass `--workflow
-PATH` or `--root PATH` to override.
+## Layout
 
-## HTTP API (extension §13.7)
-
-When `--port` is set or `server.port` is in the workflow front matter:
-
-| Method | Path                       | Purpose                                       |
-|--------|----------------------------|-----------------------------------------------|
-| GET    | `/`                        | Minimal HTML dashboard                        |
-| GET    | `/api/v1/state`            | Snapshot — running, retrying, totals, limits  |
-| GET    | `/api/v1/<identifier>`     | Issue detail (404 with structured error)      |
-| POST   | `/api/v1/refresh`          | Coalesced trigger of poll + reconcile         |
-
-Errors use `{"error":{"code":"...","message":"..."}}`. Wrong methods on
-defined routes return `405`.
+```
+src/symphony/
+  backends/
+    __init__.py        AgentBackend Protocol + factory + normalized events
+    codex.py           Codex JSON-RPC stdio backend (was upstream agent.py)
+    claude_code.py     Claude Code stream-json backend
+    gemini.py          Gemini one-shot backend
+  agent.py             back-compat shim re-exporting backends.* symbols
+  workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini configs
+  orchestrator.py      unchanged scheduler; uses build_backend() factory
+  tui.py               rich Kanban TUI (replaces server.py dashboard)
+  server.py            JSON API only (HTML root removed)
+  cli.py               adds `tui` subcommand / `--tui` flag
+  ...
+```
 
 ## Tests
 
@@ -152,27 +130,53 @@ defined routes return `405`.
 pytest -q
 ```
 
-The deterministic conformance suite exercises §17.1 (workflow/config),
-§17.2 (workspace + safety), §17.4 (dispatch eligibility/sort/blockers),
-§17.6 (logging redaction + sink-failure resilience), and §17.7 (CLI startup).
+73 tests pass: the upstream conformance suite plus 11 backend unit tests
+covering the factory, event normalization, Claude usage accumulation, and
+Gemini session synthesis. Subprocess-driven integration tests against real
+CLIs are intentionally not in CI — run them locally.
 
-A **Real Integration Profile** (§17.8) is intentionally not in CI — those
-checks need a real `LINEAR_API_KEY` and a Codex binary. Run them locally.
+## Design notes
+
+### Why three different lifecycles behind one Protocol?
+
+- **Codex** opens one `app-server` subprocess per issue and speaks JSON-RPC
+  for the lifetime of the worker — multi-turn within one process.
+- **Claude Code** has no persistent server; sessions are tracked by ID. Each
+  `run_turn` spawns a fresh `claude -p` and uses `--resume <session-id>` from
+  turn 2 onward.
+- **Gemini CLI** is one-shot per invocation with no native session model.
+  Each turn is independent; we synthesize a `gemini-<uuid>` session id so the
+  orchestrator's bookkeeping stays consistent.
+
+The `AgentBackend` Protocol hides these differences. The orchestrator only
+sees normalized events (`session_started`, `turn_completed`, `turn_failed`,
+…) and the latest usage / rate-limit snapshots.
+
+### What the TUI deliberately does not do
+
+- No mouse interaction, no card drag-drop. It is a read-only board.
+- No drill-down view — use `/api/v1/<identifier>` for raw issue debug.
+- No log tailing — agent output goes to stderr/log files, not the TUI.
+
+This matches the upstream design philosophy: the orchestrator is the source
+of truth, the UI is a thin observer.
 
 ## What is *not* implemented
 
-- §A SSH worker extension — single-host only.
-- §13.7 dashboard is server-rendered HTML; there is no client-side SPA.
-- Persistent retry queue across process restarts (§18.2 TODO).
-- Tracker adapters beyond Linear and the file-based Kanban (§18.2 TODO).
-- First-class tracker write APIs in the orchestrator (§18.2 TODO). Ticket
-  writes still happen through the agent — `linear_graphql` for Linear, or
-  direct file edits for the file-based Kanban.
+Inherited from upstream:
 
-## Codex app-server protocol notes
+- SSH worker extension — single-host only.
+- Persistent retry queue across process restarts.
+- Tracker adapters beyond Linear and the file-based Kanban.
+- First-class tracker write APIs in the orchestrator. Ticket writes still
+  happen through the agent (`linear_graphql` for Codex, direct file edits for
+  the file-based Kanban).
 
-§10 designates the targeted Codex app-server documentation as the source of
-truth for protocol shape. This implementation uses JSON-RPC line framing over
-stdio and best-effort method names defined in `agent.py` (`METHOD_*`
-constants). If the targeted Codex version uses different method names, those
-constants are the only edits required.
+Fork-specific gaps:
+
+- Claude Code's mid-turn streaming usage events are read but not surfaced;
+  the terminal `result` event is the source of truth for token totals.
+- Gemini token usage is not reported by the CLI in stable form, so totals
+  stay at zero for that backend.
+- Multi-turn continuity for Gemini is not supported (no session protocol
+  exists in the CLI). Each `run_turn` is independent.

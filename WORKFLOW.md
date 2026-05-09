@@ -21,7 +21,6 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
-  kind: codex          # codex | claude | gemini
   max_concurrent_agents: 4
   max_turns: 20
   max_concurrent_agents_by_state:
@@ -34,14 +33,8 @@ codex:
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
 
-claude:
-  command: claude -p --output-format stream-json --verbose
-
-gemini:
-  command: gemini -p
-
 server:
-  port: 8080            # optional JSON API; the primary UI is `symphony tui`
+  port: 8080
 ---
 
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.

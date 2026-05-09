@@ -19,12 +19,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from .agent import (
-    CodexAppServerClient,
+from .backends import (
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
-    linear_graphql_tool,
+    BackendInit,
+    build_backend,
 )
+from .backends.codex import linear_graphql_tool
 from .errors import (
     SymphonyError,
     TurnFailed,
@@ -452,18 +453,17 @@ class Orchestrator:
                 return
 
             tools = []
-            if cfg.tracker.kind == "linear":
+            if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
                 tools.append(linear_graphql_tool())
 
-            client = CodexAppServerClient(
-                codex=cfg.codex,
-                cwd=workspace.path,
-                workspace_root=cfg.workspace_root,
-                on_event=lambda ev: self._on_codex_event(issue.id, ev),
-                approval_policy=cfg.codex.approval_policy,
-                sandbox_policy=cfg.codex.turn_sandbox_policy,
-                thread_sandbox=cfg.codex.thread_sandbox,
-                client_tools=tools,
+            client = build_backend(
+                BackendInit(
+                    cfg=cfg,
+                    cwd=workspace.path,
+                    workspace_root=cfg.workspace_root,
+                    on_event=lambda ev: self._on_codex_event(issue.id, ev),
+                    client_tools=tools,
+                )
             )
             try:
                 await client.start()
@@ -474,7 +474,7 @@ class Orchestrator:
                 env["turn_number"] = turn_number
                 env["max_turns"] = cfg.agent.max_turns
                 first_prompt = render(cfg.prompt_template, env)
-                await client.start_thread(
+                await client.start_session(
                     initial_prompt=first_prompt,
                     issue_title=f"{issue.identifier}: {issue.title}",
                 )
@@ -758,12 +758,13 @@ class Orchestrator:
 
     async def _reconcile_running(self, cfg: ServiceConfig) -> None:
         # Part A: stall detection.
-        if cfg.codex.stall_timeout_ms > 0:
+        _, _, stall_timeout_ms = cfg.backend_timeouts()
+        if stall_timeout_ms > 0:
             now = datetime.now(timezone.utc)
             for issue_id, entry in list(self._running.items()):
                 seen = entry.last_codex_timestamp or entry.started_at
                 elapsed_ms = (now - seen).total_seconds() * 1000
-                if elapsed_ms > cfg.codex.stall_timeout_ms:
+                if elapsed_ms > stall_timeout_ms:
                     log.warning(
                         "stalled_session",
                         issue_id=issue_id,
