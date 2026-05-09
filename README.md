@@ -99,6 +99,131 @@ Make the relevant CLI available on `$PATH`:
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
 
+## Quickstart — your first task end-to-end
+
+This walks from a clean clone to a running ticket, using the file-based
+tracker and Claude Code as the agent.
+
+### 1. Initialize the board
+
+```bash
+symphony board init ./kanban
+# → initialized board at ./kanban, sample ticket DEMO-001.md
+```
+
+Each ticket is one Markdown file with YAML frontmatter at `kanban/<ID>.md`.
+The orchestrator only **reads** ticket files; the agent **writes** them when
+it transitions state.
+
+### 2. Author `WORKFLOW.md`
+
+Copy the example and edit it:
+
+```bash
+cp WORKFLOW.example.md WORKFLOW.md
+```
+
+Three blocks matter for first-run sanity:
+
+```yaml
+tracker:
+  kind: file
+  board_root: ./kanban
+  active_states: [Todo, "In Progress"]
+  terminal_states: [Done, Cancelled, Blocked]
+
+workspace:
+  root: ~/symphony_workspaces
+
+hooks:
+  # Each ticket gets its own workspace at workspace.root/<ID>.
+  # after_create runs once when that workspace is created.
+  after_create: |
+    : noop                       # ← replace with `git clone …` for real work
+  before_run: |
+    : noop                       # runs before every agent turn
+  after_run: |
+    echo "run finished at $(date)"
+```
+
+> ⚠ The shipped `WORKFLOW.md` uses `git clone --depth=1 git@github.com:my-org/my-repo.git .`
+> as a placeholder. If left unchanged, **every dispatch fails immediately**
+> on the SSH clone (`returncode=128`, `worker_exit reason=error`). Either
+> point it at a real repo or use `: noop` while you experiment.
+
+### 3. Add a ticket
+
+```bash
+symphony board new TASK-1 "Fix flaky pagination test" \
+  --priority 2 \
+  --labels backend,test \
+  --description "tests/test_pagination.py::test_cursor_advance is flaky on CI."
+# → created kanban/TASK-1.md
+```
+
+Inspect:
+
+```bash
+symphony board ls                    # all tickets
+symphony board ls --state Todo       # filter by state
+symphony board show TASK-1           # full body
+```
+
+### 4. Launch the TUI
+
+```bash
+symphony tui ./WORKFLOW.md
+```
+
+Within one poll tick (`polling.interval_ms`, default 30s) the ticket moves
+into the **In Progress** column with a green ● marker, the agent runs, and
+on success the ticket lands in **Done** with a `## Resolution` section
+appended to its body. Quit with `Ctrl-C`.
+
+> The TUI needs a real terminal (TTY). If you launch it from a script /
+> background process / non-interactive shell, the process exits silently —
+> always run it in a foreground terminal.
+
+### 5. Inspect the result
+
+```bash
+symphony board show TASK-1               # the agent's ## Resolution lives in the body
+ls ~/symphony_workspaces/TASK-1          # workspace it operated in
+tail -F log/symphony.log                 # structured event stream
+```
+
+### 6. Move tickets manually (rare)
+
+```bash
+symphony board mv TASK-1 Blocked         # forces a state transition
+```
+
+The orchestrator re-evaluates on the next poll tick. Manual transitions are
+for unsticking — normally the agent transitions tickets itself per the
+prompt instructions in `WORKFLOW.md`.
+
+### How dispatch works in one diagram
+
+```
+┌────────────┐    poll      ┌──────────────┐    matches active_states
+│  kanban/   │  ─────────▶  │ Orchestrator │  ─────────────────────────┐
+│  *.md      │   30s tick   │ (scheduler)  │                            │
+└────────────┘              └──────────────┘                            ▼
+      ▲                            │                          ┌──────────────────┐
+      │                            │ creates workspace        │  Workspace       │
+      │ agent writes               ▼                          │  ~/sym…/TASK-1   │
+      │ ## Resolution     ┌──────────────────┐                │  + after_create  │
+      │ + state: Done     │  AgentBackend    │  ◀────────────│    hook ran      │
+      └───────────────────│  (codex/claude/  │                └──────────────────┘
+                          │   gemini)        │                          │
+                          │  per-turn loop   │  before_run hook ──▶ turn(s)
+                          └──────────────────┘                          │
+                                                                        ▼
+                                                                  after_run hook
+```
+
+---
+
 ## Run
 
 ### Background service + JSON API
