@@ -41,7 +41,7 @@ gemini:
   command: gemini -p
 
 server:
-  port: 8080            # optional JSON API; the primary UI is `symphony tui`
+  port: 9999            # optional JSON API; the primary UI is `symphony tui`
 ---
 
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.

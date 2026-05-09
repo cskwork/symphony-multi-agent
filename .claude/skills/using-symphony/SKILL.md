@@ -43,6 +43,32 @@ Key invariants:
 - Each ticket runs in its own **workspace directory** under `workspace.root`
   (default `~/symphony_workspaces/<ID>`). Hooks run inside that directory.
 
+## Try it without an agent CLI installed
+
+`src/symphony/mock_codex.py` ships a JSON-RPC mock that the codex backend
+can drive. Use it to demo or smoke-test without `codex` / `claude` /
+`gemini` on `$PATH`:
+
+```yaml
+agent:
+  kind: codex
+codex:
+  command: python -m symphony.mock_codex
+```
+
+Tunables (env vars, see the file's docstring):
+
+| Var                                 | Default | Effect                          |
+|-------------------------------------|---------|---------------------------------|
+| `SYMPHONY_MOCK_TURN_SECONDS`        | 12      | total turn duration             |
+| `SYMPHONY_MOCK_TICK_SECONDS`        | 2       | token-usage tick interval       |
+| `SYMPHONY_MOCK_TOKENS_PER_TICK`     | 250     | tokens added per tick           |
+| `SYMPHONY_MOCK_FAIL_EVERY_N_TURNS`  | 0       | force the Nth turn to fail      |
+| `SYMPHONY_MOCK_MAX_TURNS`           | 0       | stop accepting turns after N    |
+
+This is the fastest way to verify orchestrator + TUI wiring before
+investing in a real backend setup.
+
 ## Common operations
 
 ### Add a ticket
@@ -92,17 +118,17 @@ user from a non-interactive shell, instead start it headless and use the JSON
 API:
 
 ```bash
-symphony ./WORKFLOW.md --port 8080
-curl -s http://127.0.0.1:8080/api/v1/state | jq
-curl -s http://127.0.0.1:8080/api/v1/TASK-1 | jq
-curl -s -X POST http://127.0.0.1:8080/api/v1/refresh   # force a poll tick
+symphony ./WORKFLOW.md --port 9999
+curl -s http://127.0.0.1:9999/api/v1/state | jq
+curl -s http://127.0.0.1:9999/api/v1/TASK-1 | jq
+curl -s -X POST http://127.0.0.1:9999/api/v1/refresh   # force a poll tick
 ```
 
 ### Stop a stuck server
 
 ```bash
-lsof -ti :8080 | xargs -r kill        # SIGTERM (graceful)
-lsof -ti :8080 | xargs -r kill -9     # only if SIGTERM doesn't take
+lsof -ti :9999 | xargs -r kill        # SIGTERM (graceful)
+lsof -ti :9999 | xargs -r kill -9     # only if SIGTERM doesn't take
 ```
 
 ## Authoring `WORKFLOW.md`
@@ -145,7 +171,7 @@ claude:
   turn_timeout_ms: 3600000
 
 server:
-  port: 8080
+  port: 9999
 ---
 
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
@@ -176,24 +202,34 @@ Replace with `: noop` for experiments or with a real clone for actual work.
 
 ## Diagnosing dispatch failures
 
-Look for these in `log/symphony.log` (or stderr):
+Symphony writes structured logs to **stderr only** by default
+(`src/symphony/logging.py:48`). To preserve them, redirect at launch:
 
-| Log line                                 | Meaning                                         | Fix                                                                                |
-|------------------------------------------|-------------------------------------------------|------------------------------------------------------------------------------------|
-| `hook_failed hook=after_create rc=128`   | First-time clone failed                         | Replace placeholder repo URL in `WORKFLOW.md`, or set `after_create: \|\n  : noop`  |
-| `worker_exit reason=error`               | Worker terminated abnormally                    | Read the preceding `hook_failed` / `turn_failed` event for the actual cause        |
-| `turn_timeout`                           | Agent exceeded `<kind>.turn_timeout_ms`         | Raise the timeout, or break the ticket into smaller scope                          |
-| `OSError [Errno 48]` on startup          | Port already in use                             | `lsof -ti :8080 \| xargs -r kill`                                                  |
-| `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed        | Pass an explicit path; default is `./WORKFLOW.md`                                  |
-| TUI exits immediately, no error          | No TTY (running under a non-interactive shell) | Run from a real terminal, or use `--port 8080` headless mode                       |
+```bash
+mkdir -p log
+symphony tui ./WORKFLOW.md 2>> log/symphony.log
+```
+
+Common failure signatures:
+
+| Log line                                 | Meaning                                                  | Fix                                                                                |
+|------------------------------------------|----------------------------------------------------------|------------------------------------------------------------------------------------|
+| `hook_failed hook=after_create rc=128`   | First-time clone failed                                  | Replace placeholder repo URL in `WORKFLOW.md`, or set `after_create: \|\n  : noop`  |
+| `worker_exit reason=error`               | Worker terminated abnormally                             | Read the preceding `hook_failed` event or backend stderr for the actual cause      |
+| `outcome=turn_error`                     | Turn ended in error (timeout, agent crash, tool failure) | Inspect backend stderr; for timeouts, raise `<kind>.turn_timeout_ms`               |
+| `hook_timeout`                           | Hook exceeded its time budget                            | Shorten the hook or remove blocking commands                                       |
+| `OSError [Errno 48]` on startup          | Port already in use                                      | `lsof -ti :9999 \| xargs -r kill`                                                  |
+| `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                  |
+| `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)            |
+| TUI exits immediately, no error          | No TTY (running under a non-interactive shell)           | Run from a real terminal, or use `--port 9999` headless mode                       |
 
 When triaging, always read the JSON snapshot first — it shows whether a
 ticket is `running`, `retry_pending`, or `errored` and includes the last
 event:
 
 ```bash
-curl -s http://127.0.0.1:8080/api/v1/state | jq '.workers'
-curl -s http://127.0.0.1:8080/api/v1/<ID>  | jq
+curl -s http://127.0.0.1:9999/api/v1/state | jq '.workers'
+curl -s http://127.0.0.1:9999/api/v1/<ID>  | jq
 ```
 
 ## When NOT to use this skill
@@ -217,9 +253,9 @@ curl -s http://127.0.0.1:8080/api/v1/<ID>  | jq
 | Show a ticket                         | `symphony board show <ID>`                                   |
 | Force a state transition              | `symphony board mv <ID> <state>`                             |
 | Launch TUI                            | `symphony tui ./WORKFLOW.md`                                 |
-| Headless + JSON API                   | `symphony ./WORKFLOW.md --port 8080`                         |
-| Force a poll/reconcile                | `curl -X POST http://127.0.0.1:8080/api/v1/refresh`          |
-| Snapshot state                        | `curl -s http://127.0.0.1:8080/api/v1/state \| jq`           |
-| Issue debug                           | `curl -s http://127.0.0.1:8080/api/v1/<ID> \| jq`            |
-| Stop a stuck server                   | `lsof -ti :8080 \| xargs -r kill`                            |
+| Headless + JSON API                   | `symphony ./WORKFLOW.md --port 9999`                         |
+| Force a poll/reconcile                | `curl -X POST http://127.0.0.1:9999/api/v1/refresh`          |
+| Snapshot state                        | `curl -s http://127.0.0.1:9999/api/v1/state \| jq`           |
+| Issue debug                           | `curl -s http://127.0.0.1:9999/api/v1/<ID> \| jq`            |
+| Stop a stuck server                   | `lsof -ti :9999 \| xargs -r kill`                            |
 | Tail logs                             | `tail -F log/symphony.log`                                   |

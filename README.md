@@ -99,6 +99,52 @@ Make the relevant CLI available on `$PATH`:
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
 
+## Try it in 60 seconds (no agent CLI required)
+
+Want to see the TUI move cards around before installing `codex`, `claude`,
+or `gemini`? Use the bundled **mock backend** — it speaks the same JSON-RPC
+protocol as Codex but does no real work, just simulates turns and emits
+token-usage ticks.
+
+```bash
+git clone https://github.com/cskwork/symphony-multi-agent.git
+cd symphony-multi-agent
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# WORKFLOW.md pointed at the mock backend
+cat > WORKFLOW.md <<'YAML'
+---
+tracker: { kind: file, board_root: ./kanban,
+           active_states: [Todo, "In Progress"],
+           terminal_states: [Done, Cancelled, Blocked] }
+polling: { interval_ms: 5000 }
+workspace: { root: ~/symphony_workspaces }
+hooks:
+  after_create: ": noop"
+  before_run:   ": noop"
+  after_run:    "echo done"
+agent:  { kind: codex, max_concurrent_agents: 2, max_turns: 3 }
+codex:  { command: python -m symphony.mock_codex }
+server: { port: 9999 }
+---
+You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
+YAML
+
+symphony board init ./kanban
+symphony board new TASK-1 "smoke test"
+symphony tui ./WORKFLOW.md
+```
+
+Within ~5 seconds you should see TASK-1 transition `Todo → In Progress` and
+the card grow a turn counter and token totals. Quit with `Ctrl-C` when
+you've seen enough; then proceed to the real walkthrough below.
+
+> Tunables for the mock: `SYMPHONY_MOCK_TURN_SECONDS=12`,
+> `SYMPHONY_MOCK_FAIL_EVERY_N_TURNS=3`, etc. — see `src/symphony/mock_codex.py`.
+
+---
+
 ## Quickstart — your first task end-to-end
 
 This walks from a clean clone to a running ticket, using the file-based
@@ -117,10 +163,11 @@ it transitions state.
 
 ### 2. Author `WORKFLOW.md`
 
-Copy the example and edit it:
+Use the **file-tracker** example (the other one, `WORKFLOW.example.md`,
+points at Linear and needs an API key):
 
 ```bash
-cp WORKFLOW.example.md WORKFLOW.md
+cp WORKFLOW.file.example.md WORKFLOW.md
 ```
 
 Three blocks matter for first-run sanity:
@@ -189,8 +236,19 @@ appended to its body. Quit with `Ctrl-C`.
 ```bash
 symphony board show TASK-1               # the agent's ## Resolution lives in the body
 ls ~/symphony_workspaces/TASK-1          # workspace it operated in
-tail -F log/symphony.log                 # structured event stream
 ```
+
+Symphony writes structured logs to **stderr only**. To keep them around,
+redirect at launch:
+
+```bash
+mkdir -p log
+symphony tui ./WORKFLOW.md 2>> log/symphony.log
+# or, while running headless:
+symphony ./WORKFLOW.md --port 9999 2>&1 | tee -a log/symphony.log
+```
+
+Then `tail -F log/symphony.log` works.
 
 ### 6. Move tickets manually (rare)
 
@@ -229,7 +287,7 @@ prompt instructions in `WORKFLOW.md`.
 ### Background service + JSON API
 
 ```bash
-symphony ./WORKFLOW.md --port 8080
+symphony ./WORKFLOW.md --port 9999
 ```
 
 JSON API endpoints (unchanged from upstream):

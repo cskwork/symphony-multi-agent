@@ -53,7 +53,7 @@ gemini:
   stall_timeout_ms: 300000
 
 server:
-  port: 8080            # optional JSON API; the primary UI is `symphony tui`
+  port: 9999            # optional JSON API; the primary UI is `symphony tui`
 ---
 
 You are picking up issue {{ issue.identifier }}: {{ issue.title }}.
