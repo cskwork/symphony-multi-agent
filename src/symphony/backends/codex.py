@@ -87,7 +87,6 @@ class CodexAppServerBackend:
         self._stderr_task: asyncio.Task[None] | None = None
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
-        self._notif_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._closed = False
         self._thread_id: str | None = None
         self._current_turn_id: str | None = None
@@ -204,8 +203,12 @@ class CodexAppServerBackend:
             result.get("threadId")
             or result.get("thread_id")
             or result.get("id")
-            or "thread"
         )
+        if not thread_id:
+            raise ResponseError(
+                "codex app-server returned no thread id from threads.start",
+                method=METHOD_THREAD_START,
+            )
         self._thread_id = str(thread_id)
         await self._emit(
             EVENT_SESSION_STARTED,
@@ -237,7 +240,6 @@ class CodexAppServerBackend:
             raise TurnTimeout("turn timed out") from exc
         turn_id = result.get("turnId") or result.get("turn_id") or result.get("id")
         self._current_turn_id = str(turn_id) if turn_id is not None else None
-        await self._drain_notifications()
         status = result.get("status", EVENT_TURN_COMPLETED)
         last_message = result.get("lastMessage") or result.get("last_message") or ""
         if status == EVENT_TURN_INPUT_REQUIRED:
@@ -348,18 +350,18 @@ class CodexAppServerBackend:
                 break
             log.debug("codex_stderr", line=line.decode("utf-8", errors="replace").rstrip())
 
-    async def _drain_notifications(self) -> None:
-        while not self._notif_queue.empty():
-            msg = self._notif_queue.get_nowait()
-            await self._handle_notification(msg)
-
     async def _handle_notification(self, msg: dict[str, Any]) -> None:
         method = msg.get("method") or msg.get("event") or ""
         params = msg.get("params") or msg.get("payload") or msg
         if method.endswith("/tokenUsage/updated") or method == "thread/tokenUsage/updated":
             self._update_tokens_absolute(params.get("totals") or params)
         elif method.endswith("/rateLimits"):
-            self._latest_rate_limits = params.get("rateLimits") or params
+            rl = params.get("rateLimits")
+            if isinstance(rl, dict):
+                self._latest_rate_limits = rl
+            elif isinstance(params, dict) and "rateLimits" not in params:
+                # Some servers inline the limits directly into `params`.
+                self._latest_rate_limits = params
         elif method == "approval.requested":
             await self._handle_approval(params)
             return

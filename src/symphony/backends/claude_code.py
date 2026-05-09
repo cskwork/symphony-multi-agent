@@ -156,6 +156,12 @@ class ClaudeCodeBackend:
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc
 
+        # `stop()` may have flipped `_closed` while we awaited spawn — in that
+        # case the process is orphaned because `stop()` only inspects
+        # `_active_proc` and we hadn't published yet. Reap and bail.
+        if self._closed:
+            await self._reap(proc)
+            raise ResponseError("backend closed during spawn")
         self._active_proc = proc
         try:
             assert proc.stdin is not None and proc.stdout is not None
@@ -172,7 +178,7 @@ class ClaudeCodeBackend:
                     self._consume_stream(proc), timeout=timeout_s
                 )
             except asyncio.TimeoutError as exc:
-                self._terminate(proc)
+                await self._reap(proc)
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("claude turn timed out") from exc
 
@@ -241,7 +247,8 @@ class ClaudeCodeBackend:
                             {"session_id": sid, "thread_id": sid},
                         )
                 elif kind == "assistant":
-                    self._update_usage_from_message(msg.get("message") or {})
+                    # Mid-stream `usage` deltas are ignored; the terminal
+                    # `result` event is the source of truth for accumulation.
                     last_text = _extract_text(msg.get("message") or {})
                     if last_text:
                         self._last_message = last_text[:400]
@@ -280,21 +287,22 @@ class ClaudeCodeBackend:
                 break
             log.debug("claude_stderr", line=line.decode("utf-8", errors="replace").rstrip())
 
-    def _terminate(self, proc: asyncio.subprocess.Process) -> None:
+    async def _reap(self, proc: asyncio.subprocess.Process) -> None:
+        """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
         if proc.returncode is not None:
             return
         try:
             proc.terminate()
         except ProcessLookupError:
-            pass
-
-    def _update_usage_from_message(self, message: dict[str, Any]) -> None:
-        usage = message.get("usage") if isinstance(message, dict) else None
-        if isinstance(usage, dict):
-            # Mid-turn streaming usage events expose deltas; skip unless they
-            # carry an explicit absolute total. The terminal `result` event
-            # is the source of truth for accumulation.
-            pass
+            return
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
 
     def _update_usage_absolute(self, usage: dict[str, Any]) -> None:
         # Each `result` event reports usage for that one turn — accumulate.

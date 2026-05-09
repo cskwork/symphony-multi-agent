@@ -582,12 +582,21 @@ class Orchestrator:
         rl = event.get("rate_limits")
         if isinstance(rl, dict):
             self._latest_rate_limits = rl
-        # Update session id when known.
+        # Update session id when known. The backend reports a single session
+        # identifier; this orchestrator stores it as `thread_id` for legacy
+        # snapshot-shape stability and mirrors it as `session_id`. Codex
+        # additionally exposes per-turn ids; when present they suffix the
+        # session id so consumers can distinguish turns. Non-Codex backends
+        # never set `turn_id`, so the suffix is silently skipped for them.
         if ev_name == EVENT_SESSION_STARTED:
-            thread_id = (payload.get("thread_id") or payload.get("threadId")) if isinstance(payload, dict) else None
-            if thread_id:
-                entry.thread_id = str(thread_id)
-                entry.session_id = f"{entry.thread_id}-1"
+            sid = (
+                payload.get("session_id")
+                or payload.get("thread_id")
+                or payload.get("threadId")
+            ) if isinstance(payload, dict) else None
+            if sid:
+                entry.thread_id = str(sid)
+                entry.session_id = entry.thread_id
         if ev_name == EVENT_TURN_COMPLETED:
             turn_id = payload.get("turnId") or payload.get("turn_id")
             if turn_id and entry.thread_id:

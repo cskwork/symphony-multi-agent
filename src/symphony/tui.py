@@ -129,12 +129,19 @@ class KanbanTUI:
     async def _candidate_refresh_loop(self) -> None:
         # Pull candidate + terminal issues from the tracker on the same
         # cadence as the orchestrator's poll. Errors are logged at debug;
-        # the TUI keeps the last-known list rather than blanking.
+        # the TUI keeps the last-known list rather than blanking. The wait
+        # races against `_stop` so shutdown is responsive instead of waiting
+        # out a full poll interval.
         while not self._stop.is_set():
             cfg = self._ws.current()
             if cfg is not None:
                 await self._refresh_tracker(cfg)
-            await asyncio.sleep(max(cfg.poll_interval_ms / 1000.0 if cfg else 30, 5))
+            sleep_s = max(cfg.poll_interval_ms / 1000.0 if cfg else 30, 5)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=sleep_s)
+                return  # stop fired
+            except asyncio.TimeoutError:
+                continue
 
     async def _refresh_tracker(self, cfg: ServiceConfig) -> None:
         try:

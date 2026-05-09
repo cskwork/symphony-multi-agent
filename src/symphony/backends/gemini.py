@@ -141,6 +141,11 @@ class GeminiBackend:
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc
 
+        # `stop()` may have flipped `_closed` while we awaited spawn — reap
+        # the orphaned process and bail.
+        if self._closed:
+            await self._reap(proc)
+            raise ResponseError("backend closed during spawn")
         self._active_proc = proc
         try:
             assert proc.stdin is not None and proc.stdout is not None
@@ -157,7 +162,7 @@ class GeminiBackend:
                     proc.communicate(), timeout=timeout_s
                 )
             except asyncio.TimeoutError as exc:
-                self._terminate(proc)
+                await self._reap(proc)
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("gemini turn timed out") from exc
 
@@ -187,13 +192,22 @@ class GeminiBackend:
     # helpers
     # ------------------------------------------------------------------
 
-    def _terminate(self, proc: asyncio.subprocess.Process) -> None:
+    async def _reap(self, proc: asyncio.subprocess.Process) -> None:
+        """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
         if proc.returncode is not None:
             return
         try:
             proc.terminate()
         except ProcessLookupError:
-            pass
+            return
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         try:

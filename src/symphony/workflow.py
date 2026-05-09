@@ -202,8 +202,11 @@ class ClaudeConfig:
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
-    # When True, second and later turns add `--resume <session_id>` so Claude
-    # rejoins the prior session instead of starting fresh.
+    # When True, turns 2+ within one worker attempt add `--resume <session_id>`
+    # so Claude rejoins the prior session instead of starting fresh. Cross-
+    # attempt resume (after a worker error / retry) is intentionally NOT
+    # supported — each retry attempt builds a new backend instance, so the
+    # captured session id is discarded with the prior worker.
     resume_across_turns: bool
 
 
