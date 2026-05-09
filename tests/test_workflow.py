@@ -220,6 +220,77 @@ def test_validate_for_dispatch_missing_project_slug(tmp_path, monkeypatch):
         validate_for_dispatch(cfg)
 
 
+def test_state_descriptions_default_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "tok")
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: x
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.tracker.state_descriptions == {}
+
+
+def test_state_descriptions_normalized(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "tok")
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: x
+              state_descriptions:
+                Todo: "  Triage incoming work  "
+                "In Progress": Code + tests
+                Review: Self-review the diff
+                Empty: ""
+                42: "non-string key dropped"
+                Bogus: 123
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    # Keys lowercased, blank/non-string values dropped, non-string keys dropped,
+    # leading/trailing whitespace stripped.
+    assert cfg.tracker.state_descriptions == {
+        "todo": "Triage incoming work",
+        "in progress": "Code + tests",
+        "review": "Self-review the diff",
+    }
+
+
+def test_state_descriptions_invalid_root_ignored(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "tok")
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: x
+              state_descriptions: not-a-dict
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.tracker.state_descriptions == {}
+
+
 def test_invalid_max_turns_fails_validation(tmp_path):
     path = _write(
         tmp_path,

@@ -167,6 +167,11 @@ class TrackerConfig:
     terminal_states: tuple[str, ...]
     # tracker.kind=file: absolute path to the board directory.
     board_root: Path | None = None
+    # Optional one-line description rendered as a legend under each column
+    # title in the TUI. Keys are state names (case-insensitive match against
+    # active_states / terminal_states); values are short human-readable
+    # explanations of what work happens in that lane.
+    state_descriptions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -313,6 +318,23 @@ def _normalize_state_map(value: Any) -> dict[str, int]:
     return out
 
 
+def _normalize_state_description_map(value: Any) -> dict[str, str]:
+    """tracker.state_descriptions — keys lowercased, non-string entries dropped."""
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, raw in value.items():
+        if not isinstance(key, str):
+            continue
+        if not isinstance(raw, str):
+            continue
+        text = raw.strip()
+        if not text:
+            continue
+        out[key.lower()] = text
+    return out
+
+
 def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     """§6.1 — apply defaults and resolve typed values."""
     cfg = workflow.config
@@ -363,6 +385,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             tracker_raw.get("terminal_states"), DEFAULT_TERMINAL_STATES
         ),
         board_root=board_path,
+        state_descriptions=_normalize_state_description_map(
+            tracker_raw.get("state_descriptions")
+        ),
     )
 
     polling_raw = cfg.get("polling") or {}

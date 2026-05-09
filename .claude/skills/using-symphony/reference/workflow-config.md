@@ -144,6 +144,28 @@ tracker:
 `terminal_states` are end columns (the orchestrator stops watching once a
 ticket lands here).
 
+### Column legends (`tracker.state_descriptions`)
+
+Optional. Maps a state name to a one-line description that the TUI
+renders under each column header. Useful when lanes encode workflow
+semantics (Triage / Fix / Self-review / Deploy) that aren't obvious
+from the lane name alone.
+
+```yaml
+tracker:
+  active_states: [Todo, "In Progress", Review]
+  terminal_states: [Done, Cancelled, Blocked]
+  state_descriptions:
+    Todo: "Triage: read PR + decide next action"
+    "In Progress": "Apply fix locally, run tests"
+    Review: "Self-review the diff before Done"
+    Cancelled: "Junk / stale / agent-rejected"
+```
+
+Keys are matched case-insensitively. Empty strings and non-string
+values are dropped. Omit the field entirely to keep the original
+column-name-only header.
+
 ## Workspace + concurrency
 
 ```yaml

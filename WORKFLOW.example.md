@@ -5,6 +5,11 @@ tracker:
   api_key: $LINEAR_API_KEY
   active_states: [Todo, In Progress]
   terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done]
+  # Optional one-line legend rendered under each TUI column header.
+  state_descriptions:
+    Todo: "Ready for an agent to pick up"
+    "In Progress": "Agent actively working"
+    Done: "Completed by the agent"
 
 polling:
   interval_ms: 30000

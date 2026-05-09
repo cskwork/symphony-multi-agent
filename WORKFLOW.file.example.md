@@ -4,6 +4,14 @@ tracker:
   board_root: ./kanban
   active_states: [Todo, In Progress]
   terminal_states: [Done, Cancelled, Blocked]
+  # Optional one-line legend rendered under each TUI column header so a
+  # casual viewer can tell what work happens in each lane.
+  state_descriptions:
+    Todo: "Ready for an agent to pick up"
+    "In Progress": "Agent actively working"
+    Done: "Completed by the agent"
+    Blocked: "Awaiting human input"
+    Cancelled: "Junk / stale / agent-rejected"
 
 polling:
   interval_ms: 30000
