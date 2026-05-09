@@ -28,6 +28,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from . import _keyboard
 from .i18n import t
 from .issue import Issue, normalize_state
 from .logging import get_logger
@@ -90,6 +91,7 @@ class KanbanTUI:
         self._candidates_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._render_signal = asyncio.Event()
+        self._scroll_offset = 0  # global viewport offset applied to all columns
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -99,6 +101,7 @@ class KanbanTUI:
         # Wake on every orchestrator tick so the board updates as state moves.
         self._orch.add_observer(self._on_orchestrator_tick)
         candidate_task = asyncio.create_task(self._candidate_refresh_loop())
+        keyboard_task = asyncio.create_task(self._keyboard_loop())
         try:
             with Live(
                 self._render(),
@@ -116,11 +119,12 @@ class KanbanTUI:
                     live.update(self._render())
         finally:
             self._stop.set()
-            candidate_task.cancel()
-            try:
-                await candidate_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            for task in (candidate_task, keyboard_task):
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -145,6 +149,92 @@ class KanbanTUI:
                 return  # stop fired
             except asyncio.TimeoutError:
                 continue
+
+    async def _keyboard_loop(self) -> None:
+        """Poll stdin in raw mode and dispatch in-app navigation keys."""
+        try:
+            with _keyboard.raw_mode():
+                while not self._stop.is_set():
+                    key = _keyboard.poll_key()
+                    if key is None:
+                        await asyncio.sleep(0.05)
+                        continue
+                    self._handle_key(key)
+        except Exception as exc:  # never crash the TUI on stdin issues
+            log.debug("tui_keyboard_failed", error=str(exc))
+
+    def _handle_key(self, key: str) -> None:
+        # Quit
+        if key in ("q", "Q", "ESC", "CTRL_C"):
+            self.request_stop()
+            return
+        # Down (j / DOWN / PGDN)
+        if key in ("j", "J", "DOWN"):
+            self._scroll_offset += 1
+            self._render_signal.set()
+            return
+        if key == "PGDN":
+            self._scroll_offset += self._page_step()
+            self._render_signal.set()
+            return
+        # Up (k / UP / PGUP)
+        if key in ("k", "K", "UP"):
+            if self._scroll_offset > 0:
+                self._scroll_offset -= 1
+                self._render_signal.set()
+            return
+        if key == "PGUP":
+            self._scroll_offset = max(0, self._scroll_offset - self._page_step())
+            self._render_signal.set()
+            return
+        # Top / bottom
+        if key in ("g", "HOME"):
+            if self._scroll_offset != 0:
+                self._scroll_offset = 0
+                self._render_signal.set()
+            return
+        if key in ("G", "END"):
+            self._scroll_offset = self._max_scroll_offset()
+            self._render_signal.set()
+            return
+
+    def _page_step(self) -> int:
+        cfg = self._ws.current()
+        if cfg is None:
+            return 1
+        n = cfg.tui.max_cards_per_column
+        return n if isinstance(n, int) and n > 0 else 5
+
+    def _max_scroll_offset(self) -> int:
+        """Tallest column's scrollable extent (so G goes to last hidden card)."""
+        cfg = self._ws.current()
+        max_cards = (cfg.tui.max_cards_per_column if cfg else None) or 0
+        if max_cards <= 0:
+            return 0
+        column_lens = self._column_lengths()
+        if not column_lens:
+            return 0
+        tallest = max(column_lens)
+        return max(0, tallest - max_cards)
+
+    def _column_lengths(self) -> list[int]:
+        cfg = self._ws.current()
+        if cfg is None:
+            return []
+        states = list(cfg.tracker.active_states) + list(cfg.tracker.terminal_states)
+        seen: set[str] = set()
+        lengths: list[int] = []
+        bucket: dict[str, int] = {}
+        for issue in self._all_known_issues():
+            key = normalize_state(issue.state)
+            bucket[key] = bucket.get(key, 0) + 1
+        for s in states:
+            key = normalize_state(s)
+            if key in seen:
+                continue
+            seen.add(key)
+            lengths.append(bucket.get(key, 0))
+        return lengths
 
     async def _refresh_tracker(self, cfg: ServiceConfig) -> None:
         try:
@@ -194,7 +284,15 @@ class KanbanTUI:
         bar.add_column(justify="left", ratio=2)
         bar.add_column(justify="right", ratio=1)
         bar.add_row(title, right)
-        return Panel(bar, box=SIMPLE, padding=(0, 1))
+        max_cards = cfg.tui.max_cards_per_column
+        max_cards_display = (
+            max_cards if (isinstance(max_cards, int) and max_cards > 0) else "off"
+        )
+        controls = Text(
+            t("header.controls", lang).format(n=max_cards_display),
+            style="dim italic",
+        )
+        return Panel(Group(bar, controls), box=SIMPLE, padding=(0, 1))
 
     def _build_footer(self, cfg: ServiceConfig, snap: dict[str, Any]) -> Panel:
         lang = cfg.tui.language
@@ -237,15 +335,27 @@ class KanbanTUI:
 
         descriptions = cfg.tracker.state_descriptions
         max_cards = cfg.tui.max_cards_per_column
+        offset = self._scroll_offset
         panels: list[Panel] = []
         for state_label in ordered:
             state_key = normalize_state(state_label)
             issues = sorted(issues_by_state.get(state_key, []), key=_card_sort_key)
             color = STATE_COLOR.get(state_key, "white")
-            visible_issues = (
-                issues if max_cards is None or max_cards <= 0 else issues[:max_cards]
-            )
-            hidden_count = len(issues) - len(visible_issues)
+            if max_cards is None or max_cards <= 0:
+                start = min(offset, len(issues))
+                visible_issues = issues[start:]
+            else:
+                start = min(offset, max(0, len(issues) - 1)) if issues else 0
+                # When offset would skip past everything, clamp to last page
+                # so scrolling never blanks a column with content above.
+                max_start_for_full_page = max(0, len(issues) - max_cards)
+                if start > max_start_for_full_page and len(issues) > max_cards:
+                    start = max_start_for_full_page
+                if start > len(issues):
+                    start = len(issues)
+                visible_issues = issues[start : start + max_cards]
+            hidden_above = start
+            hidden_below = max(0, len(issues) - (start + len(visible_issues)))
             cards = [
                 self._render_card(
                     issue, runtime_index.get(issue.id, _CardStatus()), color, cfg.tui.language
@@ -256,17 +366,24 @@ class KanbanTUI:
             elements: list[Any] = []
             if legend:
                 elements.append(Text(legend, style="dim italic"))
+            if hidden_above > 0:
+                elements.append(
+                    Text(
+                        t("column.more_above", cfg.tui.language).format(n=hidden_above),
+                        style="dim italic",
+                    )
+                )
             if cards:
                 elements.extend(cards)
-                if hidden_count > 0:
+                if hidden_below > 0:
                     elements.append(
                         Text(
-                            t("column.more", cfg.tui.language).format(n=hidden_count),
+                            t("column.more", cfg.tui.language).format(n=hidden_below),
                             style="dim italic",
                         )
                     )
                 body: Any = Group(*elements)
-            elif legend:
+            elif legend or hidden_above > 0:
                 elements.append(
                     Align.center(Text(empty_text, style="dim italic"), vertical="middle")
                 )
@@ -329,6 +446,9 @@ class KanbanTUI:
             meta.append("  ".join(f"#{l}" for l in issue.labels[:3]), style="dim")
 
         rows: list[Any] = [body]
+        desc_preview = _first_meaningful_line(issue.description)
+        if desc_preview:
+            rows.append(Text(_truncate(desc_preview, 80), style="dim"))
         if meta.plain.strip():
             rows.append(meta)
         if status.last_message:
@@ -394,6 +514,20 @@ def _truncate(text: str, n: int) -> str:
     if len(text) <= n:
         return text
     return text[: max(n - 1, 1)] + "…"
+
+
+def _first_meaningful_line(description: str | None) -> str:
+    """description 본문에서 첫 의미 있는 줄 (markdown 헤딩/코드펜스 skip) 반환."""
+    if not description:
+        return ""
+    for raw in description.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        if s.startswith(("#", "```", "---")):
+            continue
+        return s
+    return ""
 
 
 def _card_sort_key(issue: Issue) -> tuple[int, str]:
