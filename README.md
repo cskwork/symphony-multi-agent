@@ -52,11 +52,14 @@ Upstream polls a tracker (Linear or a local Markdown Kanban) and runs a Codex
 session inside a per-issue workspace. This fork keeps that orchestrator and
 adds:
 
-1. A pluggable **AgentBackend** layer with three concrete adapters:
+1. A pluggable **AgentBackend** layer with four concrete adapters:
    - **Codex** — `codex app-server` (JSON-RPC stdio, multi-turn) — original
    - **Claude Code** — `claude -p --output-format stream-json --verbose`
      (NDJSON events, per-turn subprocess with `--resume`)
    - **Gemini** — `gemini -p ""` (one-shot per turn, stdin prompt → stdout result)
+   - **Pi** — `pi --mode json -p ""` (JSONL events, per-turn subprocess with
+     `--session` resume; supports Anthropic / OpenAI / Gemini / Bedrock backends
+     under one CLI — see [pi.dev](https://pi.dev))
 2. A **Jira-style CLI Kanban TUI** built on `rich` that replaces the upstream
    server-rendered HTML dashboard. Columns are tracker states; cards show the
    active agent, turn count, last event, and accumulated tokens.
@@ -71,17 +74,22 @@ Set `agent.kind` in your `WORKFLOW.md`:
 
 ```yaml
 agent:
-  kind: claude          # codex | claude | gemini
+  kind: claude          # codex | claude | gemini | pi
 
 claude:
   command: claude -p --output-format stream-json --verbose
   resume_across_turns: true
   turn_timeout_ms: 3600000
+
+pi:
+  command: pi --mode json -p ""
+  resume_across_turns: true
+  turn_timeout_ms: 3600000
 ```
 
-Each backend reads its own block (`codex`, `claude`, `gemini`); only the one
-matching `agent.kind` is used at runtime. The Codex `linear_graphql` client
-tool is only advertised when `agent.kind=codex`.
+Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); only the
+one matching `agent.kind` is used at runtime. The Codex `linear_graphql`
+client tool is only advertised when `agent.kind=codex`.
 
 ## Install
 
@@ -98,6 +106,7 @@ Make the relevant CLI available on `$PATH`:
 | `codex`      | `codex` (with `app-server` subcommand) |
 | `claude`     | `claude` (Claude Code) |
 | `gemini`     | `gemini` (Gemini CLI)  |
+| `pi`         | `pi` (Pi coding-agent — `npm i -g @earendil-works/pi-coding-agent` or `curl -fsSL https://pi.dev/install.sh \| sh`; sign in once via `pi` → `/login` (OAuth, credentials cached at `~/.pi/agent/auth.json`) — no env var needed) |
 
 ## Try it in 60 seconds (no agent CLI required)
 
@@ -384,8 +393,9 @@ src/symphony/
     codex.py           Codex JSON-RPC stdio backend (was upstream agent.py)
     claude_code.py     Claude Code stream-json backend
     gemini.py          Gemini one-shot backend
+    pi.py              Pi --mode json backend (per-turn subprocess, --session resume)
   agent.py             back-compat shim re-exporting backends.* symbols
-  workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini configs
+  workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini/Pi configs
   orchestrator.py      unchanged scheduler; uses build_backend() factory
   tui.py               rich Kanban TUI (replaces server.py dashboard)
   server.py            JSON API only (HTML root removed)
@@ -419,6 +429,14 @@ CLIs are intentionally not in CI — run them locally.
 - **Gemini CLI** is one-shot per invocation with no native session model.
   Each turn is independent; we synthesize a `gemini-<uuid>` session id so the
   orchestrator's bookkeeping stays consistent.
+- **Pi** has no persistent server but auto-saves sessions to
+  `~/.pi/agent/sessions/`. Each `run_turn` spawns a fresh `pi --mode json` and
+  passes `--session <id>` from turn 2 onward. The session id is read from the
+  first `{"type":"session"}` JSONL line; per-message `usage` is accumulated
+  off `message_end` events, and `agent_end` is treated as the terminal event.
+  Auth is delegated to Pi: the OAuth/API-key store at `~/.pi/agent/auth.json`
+  populated by `/login` is inherited by the subprocess, so Symphony itself
+  never handles credentials.
 
 The `AgentBackend` Protocol hides these differences. The orchestrator only
 sees normalized events (`session_started`, `turn_completed`, `turn_failed`,

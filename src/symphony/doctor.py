@@ -75,6 +75,8 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
         command = cfg.claude.command
     elif kind == "gemini":
         command = cfg.gemini.command
+    elif kind == "pi":
+        command = cfg.pi.command
     else:
         return CheckResult(f"agent.kind={kind}", "fail", f"unsupported agent kind {kind!r}")
 

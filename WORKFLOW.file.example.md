@@ -28,7 +28,7 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
-  kind: codex          # codex | claude | gemini
+  kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 4
   max_turns: 20
   max_concurrent_agents_by_state:
@@ -50,6 +50,12 @@ gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
   # so the prompt comes purely from stdin.
   command: 'gemini -p ""'
+
+pi:
+  # `pi --mode json` emits JSONL events; stdin carries the prompt.
+  # Auth: sign in once with `pi` → `/login` (OAuth). Credentials cached at
+  # `~/.pi/agent/auth.json` are inherited automatically.
+  command: 'pi --mode json -p ""'
 
 server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`

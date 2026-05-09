@@ -30,6 +30,11 @@ from symphony.backends.codex import (
     _sandbox_policy_to_turn_payload,
 )
 from symphony.backends.gemini import GeminiBackend
+from symphony.backends.pi import (
+    PiBackend,
+    _extract_failure_reason,
+    _extract_text as _pi_extract_text,
+)
 from symphony.errors import ConfigValidationError
 from symphony.workflow import (
     AgentConfig,
@@ -37,6 +42,7 @@ from symphony.workflow import (
     CodexConfig,
     GeminiConfig,
     HooksConfig,
+    PiConfig,
     ServerConfig,
     ServiceConfig,
     TrackerConfig,
@@ -87,6 +93,13 @@ def _make_cfg(kind: str, *, workspace_root: Path) -> ServiceConfig:
             read_timeout_ms=5_000,
             stall_timeout_ms=30_000,
         ),
+        pi=PiConfig(
+            command='pi --mode json -p ""',
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+            resume_across_turns=True,
+        ),
         server=ServerConfig(port=None),
         prompt_template="hi",
     )
@@ -129,6 +142,16 @@ def test_factory_returns_gemini_backend(tmp_path: Path) -> None:
     assert isinstance(backend, GeminiBackend)
 
 
+def test_factory_returns_pi_backend(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = build_backend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert isinstance(backend, PiBackend)
+
+
 def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
     cfg = _make_cfg("codex", workspace_root=tmp_path)
     bogus_cfg = ServiceConfig(
@@ -147,6 +170,7 @@ def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
         codex=cfg.codex,
         claude=cfg.claude,
         gemini=cfg.gemini,
+        pi=cfg.pi,
         server=cfg.server,
         prompt_template="hi",
     )
@@ -469,3 +493,106 @@ async def test_codex_handle_notification_truncates_long_agent_message(
     )
     assert backend._latest_assistant_message.endswith("…")
     assert len(backend._latest_assistant_message) == _ASSISTANT_MESSAGE_PREVIEW_CAP + 1
+
+
+# ---- Pi backend ---------------------------------------------------------
+
+
+def test_pi_extract_text_picks_last_text_block() -> None:
+    msg = {
+        "content": [
+            {"type": "text", "text": "first"},
+            {"type": "tool_use", "name": "edit"},
+            {"type": "text", "text": "final answer"},
+        ]
+    }
+    assert _pi_extract_text(msg) == "final answer"
+
+
+def test_pi_extract_text_handles_string_content() -> None:
+    # Some Pi messages flatten content to a plain string.
+    assert _pi_extract_text({"content": "hello"}) == "hello"
+
+
+def test_pi_extract_text_handles_missing_content() -> None:
+    assert _pi_extract_text({}) == ""
+    assert _pi_extract_text({"content": 123}) == ""
+
+
+def test_pi_extract_failure_reason_returns_none_for_clean_stop() -> None:
+    terminal = {"type": "agent_end", "messages": [{"stopReason": "stop"}]}
+    assert _extract_failure_reason(terminal) is None
+
+
+def test_pi_extract_failure_reason_returns_message_for_error_stop() -> None:
+    terminal = {
+        "type": "agent_end",
+        "messages": [{"stopReason": "error", "errorMessage": "model timed out"}],
+    }
+    assert _extract_failure_reason(terminal) == "model timed out"
+
+
+def test_pi_extract_failure_reason_returns_fallback_when_aborted_without_message() -> None:
+    terminal = {"type": "agent_end", "messages": [{"stopReason": "aborted"}]}
+    reason = _extract_failure_reason(terminal)
+    assert reason is not None
+    assert "aborted" in reason
+
+
+def test_pi_usage_accumulates_across_messages(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    backend._update_usage(
+        {"input": 100, "cacheRead": 50, "output": 40, "totalTokens": 190}
+    )
+    backend._update_usage(
+        {"input": 10, "cacheWrite": 5, "output": 20, "totalTokens": 35}
+    )
+    usage = backend.latest_usage
+    # Mirror the Claude bucketing: cacheRead + cacheWrite count toward input.
+    # Turn 1: input 100 + cacheRead 50 = 150 in, 40 out, 190 total
+    # Turn 2: input 10 + cacheWrite 5 = 15 in, 20 out, 35 total
+    # Cumulative: 165 in, 60 out, 225 total
+    assert usage["input_tokens"] == 165
+    assert usage["output_tokens"] == 60
+    assert usage["total_tokens"] == 225
+
+
+def test_pi_workflow_config_validates_kind(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: pi}
+---
+prompt body
+"""
+    wf = parse_workflow_text(text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert cfg.agent.kind == "pi"
+    assert cfg.pi.command  # default applied
+    assert cfg.pi.resume_across_turns is True
+
+
+def test_pi_workflow_config_honors_custom_command(tmp_path: Path) -> None:
+    from symphony.workflow import build_service_config, parse_workflow_text
+
+    # OAuth credentials live in ~/.pi/agent/auth.json after `/login`, so a
+    # realistic override only flips Pi's own flags (e.g. --no-session for an
+    # ephemeral run) rather than injecting an API key.
+    text = """---
+tracker: {kind: file, board_root: ./board}
+agent: {kind: pi}
+pi:
+  command: pi --mode json --no-session -p ""
+  resume_across_turns: false
+---
+"""
+    wf = parse_workflow_text(text, tmp_path / "WORKFLOW.md")
+    cfg = build_service_config(wf)
+    assert "--no-session" in cfg.pi.command
+    assert cfg.pi.resume_across_turns is False

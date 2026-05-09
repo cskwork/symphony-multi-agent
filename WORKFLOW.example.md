@@ -29,7 +29,7 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
-  kind: codex          # codex | claude | gemini
+  kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 4
   max_turns: 20
   max_retry_backoff_ms: 300000
@@ -59,6 +59,18 @@ gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass an
   # empty `""` so the prompt comes purely from stdin.
   command: 'gemini -p ""'
+  turn_timeout_ms: 3600000
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
+
+pi:
+  # `pi --mode json -p ""` emits JSONL events; stdin carries the prompt and
+  # `--session <id>` is appended automatically on continuation turns.
+  # Auth: sign in once with `pi` → `/login` (OAuth). Credentials are cached
+  # at `~/.pi/agent/auth.json` and inherited by every subprocess Symphony
+  # spawns — no env var or `--api-key` flag is needed.
+  command: 'pi --mode json -p ""'
+  resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
