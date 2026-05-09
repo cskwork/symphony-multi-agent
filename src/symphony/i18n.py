@@ -16,9 +16,15 @@ Tech-y tokens that look the same across locales (`in=`, `out=`, `total=`,
 
 from __future__ import annotations
 
+import os
 from typing import Final
 
 DEFAULT_LANGUAGE: Final[str] = "en"
+
+# Environment variable that overrides `tui.language` from WORKFLOW.md.
+# Useful for flipping the chrome locale per-session without editing the
+# shared workflow file (e.g. one operator on a multi-operator board).
+LANGUAGE_ENV_VAR: Final[str] = "SYMPHONY_LANG"
 
 # All keys must exist in the English map. Other locales may omit keys,
 # in which case `t()` falls back to English.
@@ -41,6 +47,9 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "turn",
         "card.retry": "retry #",
         "card.blocked_by": "blocked by",
+        # language switch hint shown in the header
+        "header.lang": "lang=",
+        "header.lang_hint": "(SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)",
     },
     "ko": {
         # header
@@ -60,6 +69,9 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "턴",
         "card.retry": "재시도 #",
         "card.blocked_by": "차단:",
+        # language switch hint shown in the header
+        "header.lang": "언어=",
+        "header.lang_hint": "(SYMPHONY_LANG=en 또는 WORKFLOW.md tui.language 수정 후 재시작)",
     },
 }
 
@@ -97,3 +109,11 @@ def normalize_language(value: str | None) -> str:
         "ko-kr": "ko",
     }
     return aliases.get(candidate, DEFAULT_LANGUAGE)
+
+
+def resolve_language(config_value: str | None) -> str:
+    """Effective TUI language. ENV var (SYMPHONY_LANG) wins over config."""
+    env_value = os.environ.get(LANGUAGE_ENV_VAR, "").strip()
+    if env_value:
+        return normalize_language(env_value)
+    return normalize_language(config_value)

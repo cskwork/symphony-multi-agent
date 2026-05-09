@@ -184,6 +184,8 @@ class KanbanTUI:
         title.append(agent_kind, style=f"bold {agent_color}")
         title.append(f"  {t('header.tracker', lang)}{cfg.tracker.kind}", style="dim")
         title.append(f"  {t('header.workflow', lang)}{cfg.workflow_path.name}", style="dim")
+        title.append(f"  {t('header.lang', lang)}{lang}", style="bright_magenta")
+        title.append(f"  {t('header.lang_hint', lang)}", style="dim italic")
         right = Text()
         right.append(f"{t('header.running', lang)}{counts.get('running', 0)}  ", style="green")
         right.append(f"{t('header.retrying', lang)}{counts.get('retrying', 0)}  ", style="yellow")
