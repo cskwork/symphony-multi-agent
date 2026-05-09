@@ -76,6 +76,53 @@ immediately with `worker_exit reason=error`. The shipped sample
 box. Replace with `: noop` for experiments or with a real clone for actual
 work. `symphony doctor` catches this.
 
+### Hook authoring rules
+
+Hooks run via `bash -lc` in the workspace directory and inherit only
+`os.environ.copy()` — no ticket-specific env vars are injected
+(`workspace.py:155-167`). The ticket ID is recoverable as
+`basename "$PWD"`; everything else must be parsed out of
+`<board_root>/<ID>.md` by hand. Six rules to avoid the most common
+self-inflicted hook failures:
+
+1. **Never parse YAML frontmatter with `awk -F':'`.** It splits on every
+   colon, so a value like `repo: https://github.com/owner/repo.git`
+   becomes `$2 = "https"` — `git clone https .` then fails with rc=128
+   and the worker bounces through retries with the same error. Capture
+   everything after the first `: ` instead:
+   ```bash
+   # Wrong:
+   REPO=$(awk -F': *' '/^repo:/ {print $2; exit}' "$TICKET")
+
+   # Right:
+   REPO=$(sed -n 's/^repo: *\(.*\)$/\1/p' "$TICKET" | head -1 | tr -d '\r"')
+   ```
+2. **Verify the hook body in isolation before launching the TUI.** Drop
+   the `after_create` body into `/tmp/sym-verify-<ID>` and run it
+   manually. Symphony cleans up failed workspaces aggressively, which
+   makes post-mortem hard.
+3. **`set -e` at the top of every non-trivial hook.** Without it, a
+   failed `git clone` happily continues into `git checkout` and the
+   error trail becomes ambiguous.
+4. **Use absolute paths inside hook bodies.** `./kanban/$ID.md` is
+   resolved against the workspace cwd, not the WORKFLOW.md directory —
+   so it points at a file that doesn't exist. Hardcode the absolute
+   board path:
+   ```bash
+   BOARD="/abs/path/to/kanban"
+   TICKET="$BOARD/$(basename "$PWD").md"
+   ```
+5. **Strip CR and quotes after parsing.** `tr -d '\r"'` on every
+   sed-extracted value. Frontmatter authored on Windows is CRLF, and
+   string values often pick up surrounding quotes that break shell
+   substitution.
+6. **`after_create` runs once but is not idempotent.** Symphony removes
+   the workspace on hook failure before retrying, so from-scratch is
+   safe — but a partial-success scenario (e.g. clone OK, checkout fail)
+   leaves you debugging in the workspace before symphony wipes it.
+   Defensive checks (`[ -d .git ] && exit 0` early, `git rev-parse
+   HEAD` to validate clone, etc.) are worth the lines.
+
 ## Tracker
 
 Two kinds:
