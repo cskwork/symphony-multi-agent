@@ -126,6 +126,8 @@ work; Learn writes back to it after QA passes. Treat it as a living memory
 that future tickets depend on. If the directory does not yet exist, the
 first Learn stage that runs creates it.
 
+`docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules at the bottom for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./llm-wiki}/<topic>.md`, the only artefact outside that root.
+
 State transitions and stage notes are written via the `linear_graphql` tool:
 `issueUpdate` for state changes, `commentCreate` for the per-stage notes
 described below. Each stage produces one comment.
@@ -141,6 +143,15 @@ described below. Each stage produces one comment.
 3. Otherwise post a one-line Triage comment ("ticket is actionable; routing
    to Explore") and transition state to `Explore`. Do no implementation in
    `Todo` — research belongs in `Explore`.
+{% for label in issue.labels %}{% if label == "bug" %}
+4. Because this ticket carries the `bug` label, capture the symptom *as is*
+   before any RCA. Author a Playwright (or Cypress) spec that walks the
+   failing flow at `docs/{{ issue.identifier }}/reproduce/repro.spec.ts`,
+   run it, and save trace/screenshot/console under
+   `docs/{{ issue.identifier }}/reproduce/`. Post a Reproduction comment
+   with the command, spec path, and a 3-10 line failure excerpt.
+   Triage still ends with state `Explore`.
+{% endif %}{% endfor %}
 
 ### EXPLORE  -- when state is `Explore`
 
@@ -148,7 +159,8 @@ You are a domain-knowing researcher walking three lenses in one turn:
 **domain expert** (what does this code mean?), **implementer** (smallest
 sustainable change?), **risk reviewer** (what could go wrong?).
 
-1. Open `llm-wiki/INDEX.md`. Read every entry whose topic plausibly relates
+1. Open `llm-wiki/INDEX.md`. Path defaults to ./llm-wiki/ but respects
+   $LLM_WIKI_PATH if set. Read every entry whose topic plausibly relates
    to the ticket. Follow links into the entry files. If `llm-wiki/` does
    not exist yet, note that and continue — Learn will seed it later.
 2. Skim git history for prior work in adjacent areas: for each file the
@@ -157,7 +169,11 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    why prior changes were made, not just what they did.
 3. Read the actual source files end-to-end (not just hunks) so the brief
    reflects current state, not stale memory.
-4. Apply each lens explicitly and produce one consolidated Explore
+4. Drop boost material — citations, vendor-doc snippets, candidate helpers,
+   reuse inventory — into `docs/{{ issue.identifier }}/explore/` (e.g.
+   `notes.md`, `vendor-docs.md`, `reuse-inventory.md`). The brief sections
+   below cite these files.
+5. Apply each lens explicitly and produce one consolidated Explore
    comment with three sections:
    - `## Domain Brief` — key facts, invariants, and references
      (`path:line`, wiki entry titles, commit SHAs) the implementer must
@@ -168,7 +184,7 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    - `## Recommendation` — the option you choose, the rationale (why
      this lens won), the risks accepted, and the first failing test
      the implementer should write.
-5. Transition state to `In Progress`.
+6. Transition state to `In Progress`.
 
 ### IMPLEMENT  -- when state is `In Progress`
 
@@ -177,9 +193,13 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    wrong (in which case post a one-line note and proceed).
 2. TDD loop: write the failing test the brief specified, make it pass,
    refactor. No production code without a test exercising it.
-3. Open a draft PR. Post an Implementation comment with the PR link, the
+3. Pair the change with user-facing documentation under
+   `docs/{{ issue.identifier }}/work/feature.md` (or `bug.md` if this ticket
+   carries the `bug` label) — what changed, how a user observes it, any
+   knobs/flags. Plain language, no jargon.
+4. Open a draft PR. Post an Implementation comment with the PR link, the
    touched files, and the commit-style intent of each change.
-4. Transition state to `Review`.
+5. Transition state to `Review`.
 
 ### REVIEW  -- when state is `Review`
 
@@ -187,11 +207,17 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    touched files end-to-end, not just the hunks.
 2. Apply the checklist: clarity, naming, error handling, security,
    performance, simplicity, no dead code, no debug prints, no secrets.
-3. Fix every CRITICAL and HIGH issue. Post a Review comment with one
-   bullet per finding (`severity | file:line | fix`).
-4. If unfixable / out of scope: transition state to `Blocked`, post a
+3. Verify with live HTTP proof when the change touches an API. Hit both
+   baseline (As-Is) and the new build (To-Be) with curl/httpie/`requests`
+   and save under `docs/{{ issue.identifier }}/verify/`:
+   `baseline.json`, `pr.json`, `diff.txt`, `curl.log`. Code-only review
+   for an API change is not enough.
+4. Fix every CRITICAL and HIGH issue. Post a Review comment with one
+   bullet per finding (`severity | file:line | fix`), referencing any
+   verify artefacts under docs/{{ issue.identifier }}/verify/.
+5. If unfixable / out of scope: transition state to `Blocked`, post a
    Blocker comment with what is needed and stop.
-5. Otherwise transition state to `QA`.
+6. Otherwise transition state to `QA`.
 
 ### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
 
@@ -202,16 +228,20 @@ capture its output as evidence.
    - **Tests**: run the full suite (`pytest -q`, `npm test`, etc.).
    - **HTTP API**: capture the As-Is response by hitting the baseline
      build and the To-Be response by hitting the new build (curl /
-     httpie / `requests`). Diff the two.
-   - **Web UI**: run or author a Playwright / Cypress script that walks
-     the flow end-to-end. Attach screenshots / traces to the PR.
+     httpie / `requests`). Diff the two. Save artefacts under
+     `docs/{{ issue.identifier }}/qa/`.
+   - **Web UI**: author a durable Playwright / Cypress spec at
+     `docs/{{ issue.identifier }}/qa/e2e.spec.ts` that walks the flow
+     end-to-end. Run it and save traces, videos, and HAR under
+     `docs/{{ issue.identifier }}/qa/` (e.g. `traces/`, `videos/`, `har/`).
    - **CLI / script**: run the command and assert exit code plus
-     observable stdout/stderr / file output.
+     observable stdout/stderr / file output. Save the run log to
+     `docs/{{ issue.identifier }}/qa/cli.log`.
 2. Post a QA Evidence comment listing:
    - the exact commands run,
    - their exit codes,
    - a short excerpt of relevant output (3-10 lines),
-   - links to PR-attached artefacts (screenshots, logs, traces).
+   - links to artefacts under `docs/{{ issue.identifier }}/qa/`.
 3. If anything fails: transition state back to `In Progress`, post a QA
    Failure comment describing what regressed, and stop. Do NOT silence,
    retry, or skip the failing check.
@@ -289,6 +319,11 @@ structure:
 - Commands run during QA, with exit codes.
 - Test names, PR-attached artefacts.
 - Links to log lines or dashboards.
+- `docs/{{ issue.identifier }}/reproduce/` — bug reproduction (bug label only).
+- `docs/{{ issue.identifier }}/explore/` — exploration boost notes.
+- `docs/{{ issue.identifier }}/work/` — user-facing feature/bug docs.
+- `docs/{{ issue.identifier }}/verify/` — review HTTP baseline/PR artefacts.
+- `docs/{{ issue.identifier }}/qa/` — QA durable specs, traces, logs.
 ```
 
 Leave the state as `Done` and stop.
@@ -299,3 +334,8 @@ Leave the state as `Done` and stop.
 - Never silence failing tests or hide errors. Fix the root cause or move
   to `Blocked`.
 - Touch only what the issue requires. No drive-by refactors.
+- Every artefact this ticket produces lives under
+  `docs/{{ issue.identifier }}/<stage>/` — never scatter outputs across
+  `qa-artifacts/`, `runs/`, ad-hoc `tests/e2e/<name>/`, or sibling `docs/`
+  files. Create the folder yourself (`mkdir -p`). The llm-wiki write-back
+  in Learn is the only artefact that lives outside this root.

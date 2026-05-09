@@ -32,12 +32,14 @@ Implementation that starts from whatever stale context the agent happens to
 have produces drive-by refactors and missed invariants. Explore forces a
 single, structured pass over three sources before any code changes:
 
-- **`llm-wiki/`** — domain knowledge written by prior tickets (read first).
+- **`llm-wiki/`**
 - **git history** — `git log --oneline -- <path>` for files the ticket
   likely touches, then `git show <sha>` on the relevant commits to
   recover the *why* behind prior changes.
 - **the source files themselves**, end-to-end, so the brief reflects
   current state and not stale memory.
+
+Source 1 (llm-wiki) is documented in [The llm-wiki/ knowledge base](#the-llm-wiki-knowledge-base) below.
 
 The agent applies three lenses in one turn — domain expert, implementer,
 risk reviewer — and writes `## Domain Brief`, `## Plan Candidates`, and
@@ -71,12 +73,7 @@ QA passes, the agent compares the Explore brief against reality — which
 assumptions held, which were wrong, what only became visible during
 implementation — and persists the delta to `llm-wiki/`:
 
-- If a relevant entry exists, it is edited in place. A new line is
-  appended to its **Decision log** (`YYYY-MM-DD | <issue.identifier> |
-  note`) and **Last updated** is refreshed.
-- Otherwise a new `llm-wiki/<topic-slug>.md` is created with a fixed
-  shape (Summary / Invariants & Constraints / Files of interest /
-  Decision log / Last updated) and a row is added to `llm-wiki/INDEX.md`.
+See the LEARN stage rule in WORKFLOW.file.example.md for the canonical wiki-entry template.
 
 The agent then writes `## Learnings` (bullets of new facts and
 surprises) and `## Wiki Updates` (paths created or modified) into the
@@ -142,6 +139,17 @@ brief reflects a quiet workspace.
    common first-run failures (port collision, missing CLI on PATH,
    placeholder clone URL).
 
+## Per-ticket artefact root
+
+Every artefact a pipeline ticket produces lives under a single root:
+`docs/<TICKET-ID>/<stage>/`. Triage drops bug reproductions into
+`reproduce/` (bug-labeled tickets only); Explore drops citations and
+reuse inventory into `explore/`; Implement writes user-facing docs into
+`work/`; Review writes HTTP baseline/PR/diff/curl logs into `verify/`;
+QA writes durable e2e specs and traces/videos/HAR into `qa/`. Workers
+create folders themselves with `mkdir -p`. Learn is the only stage that
+writes outside this root — its target is `${LLM_WIKI_PATH:-./llm-wiki}/`.
+
 ## Reference ticket
 
 A complete worked example lives at [`docs/PIPELINE-DEMO.md`](./PIPELINE-DEMO.md).
@@ -149,3 +157,5 @@ It carries every section a finished pipeline ticket should have
 (`## Plan`, `## Implementation`, `## Review`, `## QA Evidence`, and the
 `## As-Is -> To-Be Report` block). Copy its structure when authoring a
 real ticket — the test suite asserts this exact shape stays consistent.
+
+Evidence-first stage rules (reproduce/work/verify/qa-engineer) adapt ideas from cskwork/backend-dev-skills (MIT).

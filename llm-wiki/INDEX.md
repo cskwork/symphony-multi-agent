@@ -6,4 +6,4 @@ Learn writes back to them after QA passes.
 
 | topic-slug | summary | last touched |
 |------------|---------|--------------|
-| production-pipeline | Seven-stage pipeline shape and the docs/WORKFLOW sync invariant | 2026-05-09 (SMK-1) |
+| production-pipeline | Seven-stage pipeline + docs/<id>/<stage>/ artefact convention + WORKFLOW/PIPELINE sync invariant | 2026-05-09 (this ticket) |

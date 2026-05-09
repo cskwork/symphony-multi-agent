@@ -328,6 +328,10 @@ prompt instructions in `WORKFLOW.md`.
                                                                   after_run hook
 ```
 
+## Per-ticket artefacts
+
+Every artefact a ticket produces lives under `docs/<TICKET-ID>/<stage>/`. See [`docs/PIPELINE.md`](docs/PIPELINE.md#per-ticket-artefact-root) for the layout, what to commit, and the `${LLM_WIKI_PATH:-./llm-wiki}/` carve-out.
+
 ---
 
 ## Run
@@ -504,6 +508,8 @@ attribution details.
 
 The TUI uses Will McGugan's [rich](https://github.com/Textualize/rich)
 library for terminal rendering.
+
+Pipeline stage rules adapt the evidence-first ideas of [cskwork/backend-dev-skills](https://github.com/cskwork/backend-dev-skills) (MIT).
 
 ## License
 
