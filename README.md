@@ -8,6 +8,45 @@
 > orchestrator, with a Jira-style Kanban board rendered straight in your
 > terminal.
 
+## What it looks like
+
+`symphony tui ./WORKFLOW.md` opens a full-terminal Kanban board. Columns are
+your tracker's states; cards show the active agent, turn count, last event,
+and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done.
+
+![symphony tui screenshot](docs/tui-screenshot.svg)
+
+<details>
+<summary>Plain-text version (for terminals viewing raw README)</summary>
+
+```text
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=2  retrying=1  generated_at
+                                                                                                          2026-05-09T03:48:09Z
+
+╭───────────────── Todo (3) ─────────────────╮      ╭───────────── In Progress (2) ──────────────╮
+│    DEMO-120                                │      │    DEMO-104  ●                             │
+│   Migrate auth middleware to async  P1     │      │   Fix race condition in pagination cursor  │
+│   #backend  #tech-debt                     │      │     P1                                     │
+│                                            │      │   turn 4  turn_completed  20,180 tok       │
+│    DEMO-111  ↻                             │      │   Patched cursor advance; running tests... │
+│   Refactor cache invalidation helper  P2   │      │                                            │
+│   retry #2  turn_error: Turn timed out     │      │    DEMO-098  ●                             │
+│                                            │      │   Add /api/search rate limiting  P2        │
+│    DEMO-121                                │      │   turn 2  turn_completed  11,310 tok       │
+│   Wire feature flag for new dashboard  P2  │      │   Added token-bucket middleware…           │
+│   blocked by DEMO-098                      │      ╰────────────────────────────────────────────╯
+╰────────────────────────────────────────────╯
+╭──────────────── Review (1) ────────────────╮      ╭───────────────── Done (2) ─────────────────╮
+│    DEMO-122                                │      │    DEMO-088   DEMO-091                     │
+│   Doc: contributor onboarding guide  P3    │      │   chore work (deps bump, dead-code drop)   │
+│   #docs                                    │      │   #chore                                   │
+╰────────────────────────────────────────────╯      ╰────────────────────────────────────────────╯
+
+  tokens  in=84,200  out=27,640  total=111,840   runtime=412.7s   rate-limits=requests_remaining=4823, tokens_remaining=1.2M
+```
+
+</details>
+
 A multi-agent fork of [OpenAI's Symphony reference implementation](https://github.com/openai/symphony).
 Upstream polls a tracker (Linear or a local Markdown Kanban) and runs a Codex
 session inside a per-issue workspace. This fork keeps that orchestrator and
