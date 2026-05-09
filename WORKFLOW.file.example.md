@@ -52,6 +52,13 @@ gemini:
 
 server:
   port: 9999            # optional JSON API; the primary UI is `symphony tui`
+
+tui:
+  # TUI chrome language. Currently `en` (default) and `ko`. Tracker state
+  # names, ticket titles, and `tracker.state_descriptions` are user data
+  # and are never translated — only the column placeholder, header / footer
+  # field labels, and card meta verbs (turn / retry / blocked by) localize.
+  language: en
 ---
 
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
