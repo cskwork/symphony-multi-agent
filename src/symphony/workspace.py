@@ -6,7 +6,6 @@ import asyncio
 import os
 import shutil
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,31 +18,42 @@ from .workflow import HooksConfig
 log = get_logger()
 
 
-def _force_rmtree(path: Path, *, attempts: int = 5) -> tuple[bool, str | None]:
+def _try_rmtree_once(path: Path) -> tuple[bool, str | None, bool]:
+    """Single rmtree attempt.
+
+    Returns ``(success, last_error, retryable)``. ``retryable`` is True only
+    for ``PermissionError`` on Windows — every other failure must propagate
+    immediately so POSIX permission errors aren't masked.
+    """
+    try:
+        shutil.rmtree(path)
+        return True, None, False
+    except FileNotFoundError:
+        return True, None, False
+    except PermissionError as exc:
+        return False, str(exc), sys.platform == "win32"
+    except OSError as exc:
+        return False, str(exc), False
+
+
+async def _force_rmtree(path: Path, *, attempts: int = 5) -> tuple[bool, str | None]:
     """Best-effort recursive delete with brief retry on Windows.
 
     Windows can hold a directory's handle open for tens of milliseconds after
     a child subprocess exits (the subprocess used the directory as its cwd),
     causing ``shutil.rmtree`` to fail with ``PermissionError`` even though the
-    process is gone. We retry only ``PermissionError`` and only on Windows so
-    POSIX permission failures still surface immediately. Returns
-    ``(success, last_error_str)`` so callers can preserve diagnostic context
-    in their warning logs.
+    process is gone. The backoff uses ``await asyncio.sleep`` so concurrent
+    workspace cleanups don't stall the event loop.
     """
     last_err: str | None = None
     for i in range(attempts):
-        try:
-            shutil.rmtree(path)
+        ok, err, retryable = _try_rmtree_once(path)
+        if ok:
             return True, None
-        except FileNotFoundError:
-            return True, None
-        except PermissionError as exc:
-            last_err = str(exc)
-            if sys.platform != "win32" or i == attempts - 1:
-                return False, last_err
-            time.sleep(0.05 * (i + 1))
-        except OSError as exc:
-            return False, str(exc)
+        last_err = err
+        if not retryable or i == attempts - 1:
+            return False, last_err
+        await asyncio.sleep(0.05 * (i + 1))
     return False, last_err
 
 
@@ -92,7 +102,7 @@ class WorkspaceManager:
                 await self._run_hook("after_create", self._hooks.after_create, path)
             except Exception:
                 # §9.4 — after_create failure is fatal; clean partial directory.
-                ok, err = _force_rmtree(path)
+                ok, err = await _force_rmtree(path)
                 if not ok:
                     log.warning(
                         "workspace_cleanup_incomplete", path=str(path), error=err
@@ -127,7 +137,7 @@ class WorkspaceManager:
                 await self._run_hook("before_remove", self._hooks.before_remove, path)
             except Exception as exc:  # §9.4 — log and ignore.
                 log.warning("hook_before_remove_failed", path=str(path), error=str(exc))
-        ok, err = _force_rmtree(path)
+        ok, err = await _force_rmtree(path)
         if not ok:
             log.warning("workspace_remove_failed", path=str(path), error=err)
 
