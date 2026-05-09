@@ -50,6 +50,8 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         # language switch hint shown in the header
         "header.lang": "lang=",
         "header.lang_hint": "(SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)",
+        # column overflow indicator. {n} is replaced at format time.
+        "column.more": "+{n} more",
     },
     "ko": {
         # header
@@ -72,6 +74,8 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         # language switch hint shown in the header
         "header.lang": "언어=",
         "header.lang_hint": "(SYMPHONY_LANG=en 또는 WORKFLOW.md tui.language 수정 후 재시작)",
+        # column overflow indicator. {n} is replaced at format time.
+        "column.more": "+{n}개 더",
     },
 }
 

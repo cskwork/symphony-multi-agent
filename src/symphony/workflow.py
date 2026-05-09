@@ -246,6 +246,12 @@ class TuiConfig:
     # user data and are never translated. Defaults to "en".
     language: str = "en"
 
+    # Cap how many cards each column renders before collapsing the rest into
+    # a single "+N more" indicator. None / 0 / negative = render every card.
+    # `rich.live.Live(screen=True)` clips overflow silently — capping the
+    # count is the cheap fix for boards that have outgrown one terminal page.
+    max_cards_per_column: int | None = None
+
 
 @dataclass(frozen=True)
 class ServiceConfig:
@@ -517,7 +523,17 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     from .i18n import resolve_language
     # SYMPHONY_LANG env var takes precedence over WORKFLOW.md so a single
     # operator can flip without editing the shared workflow file.
-    tui = TuiConfig(language=resolve_language(tui_raw.get("language")))
+    raw_max = tui_raw.get("max_cards_per_column")
+    if isinstance(raw_max, bool):
+        max_cards: int | None = None
+    elif isinstance(raw_max, int) and raw_max > 0:
+        max_cards = raw_max
+    else:
+        max_cards = None
+    tui = TuiConfig(
+        language=resolve_language(tui_raw.get("language")),
+        max_cards_per_column=max_cards,
+    )
 
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
 

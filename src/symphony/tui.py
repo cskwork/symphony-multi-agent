@@ -236,16 +236,21 @@ class KanbanTUI:
             issues_by_state.setdefault(key, []).append(issue)
 
         descriptions = cfg.tracker.state_descriptions
+        max_cards = cfg.tui.max_cards_per_column
         panels: list[Panel] = []
         for state_label in ordered:
             state_key = normalize_state(state_label)
             issues = sorted(issues_by_state.get(state_key, []), key=_card_sort_key)
             color = STATE_COLOR.get(state_key, "white")
+            visible_issues = (
+                issues if max_cards is None or max_cards <= 0 else issues[:max_cards]
+            )
+            hidden_count = len(issues) - len(visible_issues)
             cards = [
                 self._render_card(
                     issue, runtime_index.get(issue.id, _CardStatus()), color, cfg.tui.language
                 )
-                for issue in issues
+                for issue in visible_issues
             ]
             legend = descriptions.get(state_key)
             elements: list[Any] = []
@@ -253,6 +258,13 @@ class KanbanTUI:
                 elements.append(Text(legend, style="dim italic"))
             if cards:
                 elements.extend(cards)
+                if hidden_count > 0:
+                    elements.append(
+                        Text(
+                            t("column.more", cfg.tui.language).format(n=hidden_count),
+                            style="dim italic",
+                        )
+                    )
                 body: Any = Group(*elements)
             elif legend:
                 elements.append(
