@@ -21,7 +21,14 @@ from symphony.backends import (
     build_backend,
 )
 from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text
-from symphony.backends.codex import _normalize_event_name
+from symphony.backends.codex import (
+    CodexAppServerBackend,
+    NOTIF_ITEM_COMPLETED,
+    NOTIF_TURN_COMPLETED,
+    NOTIF_THREAD_TOKEN_USAGE,
+    _normalize_event_name,
+    _sandbox_policy_to_turn_payload,
+)
 from symphony.backends.gemini import GeminiBackend
 from symphony.errors import ConfigValidationError
 from symphony.workflow import (
@@ -238,3 +245,110 @@ agent: {kind: bogus}
     wf = parse_workflow_text(text, tmp_path / "WORKFLOW.md")
     with pytest.raises(ConfigValidationError):
         build_service_config(wf)
+
+
+# ---- Codex v2 protocol -------------------------------------------------
+
+
+def test_codex_sandbox_policy_workspace_write_to_v2_payload() -> None:
+    assert _sandbox_policy_to_turn_payload("workspace-write") == {
+        "type": "workspaceWrite"
+    }
+    assert _sandbox_policy_to_turn_payload("read-only") == {"type": "readOnly"}
+    assert _sandbox_policy_to_turn_payload("danger-full-access") == {
+        "type": "dangerFullAccess"
+    }
+
+
+def test_codex_sandbox_policy_passes_through_dict() -> None:
+    """Already-v2-shaped payloads must not be rewrapped."""
+    payload = {"type": "workspaceWrite", "networkAccess": True}
+    assert _sandbox_policy_to_turn_payload(payload) is payload
+
+
+def test_codex_sandbox_policy_returns_unknown_string_unchanged() -> None:
+    """Unknown values pass through so codex itself can produce a clear
+    rejection rather than the backend silently guessing."""
+    assert _sandbox_policy_to_turn_payload("custom-mode") == "custom-mode"
+
+
+def test_codex_sandbox_policy_none() -> None:
+    assert _sandbox_policy_to_turn_payload(None) is None
+
+
+@pytest.mark.asyncio
+async def test_codex_handles_v2_token_usage_notification(tmp_path: Path) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "totals": {
+                    "input_tokens": 120,
+                    "output_tokens": 80,
+                    "total_tokens": 200,
+                }
+            },
+        }
+    )
+    assert backend.latest_usage == {
+        "input_tokens": 120,
+        "output_tokens": 80,
+        "total_tokens": 200,
+    }
+
+
+@pytest.mark.asyncio
+async def test_codex_captures_agent_message_from_item_completed(tmp_path: Path) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_ITEM_COMPLETED,
+            "params": {
+                "threadId": "t1",
+                "turnId": "tn1",
+                "item": {
+                    "id": "i1",
+                    "type": "agentMessage",
+                    "text": "patched the function",
+                },
+            },
+        }
+    )
+    assert backend._latest_assistant_message == "patched the function"
+
+
+@pytest.mark.asyncio
+async def test_codex_turn_completed_notification_resolves_waiter(
+    tmp_path: Path,
+) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    waiter: asyncio.Future = asyncio.get_event_loop().create_future()
+    backend._turn_completion_waiter = waiter
+    await backend._handle_notification(
+        {
+            "method": NOTIF_TURN_COMPLETED,
+            "params": {
+                "threadId": "t1",
+                "turn": {"id": "tn1", "status": "completed", "items": []},
+            },
+        }
+    )
+    assert waiter.done()
+    payload = waiter.result()
+    assert payload["turn"]["status"] == "completed"

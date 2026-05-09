@@ -408,8 +408,11 @@ CLIs are intentionally not in CI — run them locally.
 
 ### Why three different lifecycles behind one Protocol?
 
-- **Codex** opens one `app-server` subprocess per issue and speaks JSON-RPC
-  for the lifetime of the worker — multi-turn within one process.
+- **Codex** opens one `app-server` subprocess per issue and speaks the
+  current `codex app-server` JSON-RPC protocol (`initialize` + `thread/start`
+  + `turn/start` + streamed `turn/completed` and `item/completed`
+  notifications). Multi-turn within one process. Older `v2/initialize`-style
+  releases are not supported — pin to `codex-cli ≥ 0.39` (current upstream).
 - **Claude Code** has no persistent server; sessions are tracked by ID. Each
   `run_turn` spawns a fresh `claude -p` and uses `--resume <session-id>` from
   turn 2 onward.
