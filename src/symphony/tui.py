@@ -66,6 +66,8 @@ class _CardStatus:
     turn: int = 0
     last_event: str = ""
     tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     attempt: int | None = None
     error: str | None = None
     last_message: str = ""
@@ -227,6 +229,7 @@ class KanbanTUI:
             key = normalize_state(issue.state)
             issues_by_state.setdefault(key, []).append(issue)
 
+        descriptions = cfg.tracker.state_descriptions
         panels: list[Panel] = []
         for state_label in ordered:
             state_key = normalize_state(state_label)
@@ -236,9 +239,18 @@ class KanbanTUI:
                 self._render_card(issue, runtime_index.get(issue.id, _CardStatus()), color)
                 for issue in issues
             ]
-            body: Any
+            legend = descriptions.get(state_key)
+            elements: list[Any] = []
+            if legend:
+                elements.append(Text(legend, style="dim italic"))
             if cards:
-                body = Group(*cards)
+                elements.extend(cards)
+                body: Any = Group(*elements)
+            elif legend:
+                elements.append(
+                    Align.center(Text("— empty —", style="dim italic"), vertical="middle")
+                )
+                body = Group(*elements)
             else:
                 body = Align.center(Text("— empty —", style="dim italic"), vertical="middle")
             title = Text(f"{state_label} ", style=f"bold {color}")
@@ -273,8 +285,13 @@ class KanbanTUI:
             meta.append(f"turn {status.turn}", style="green")
             if status.last_event:
                 meta.append(f"  {status.last_event}", style="dim")
-            if status.tokens:
-                meta.append(f"  {status.tokens:,} tok", style="cyan")
+            if status.input_tokens or status.output_tokens or status.tokens:
+                meta.append("  ", style="dim")
+                meta.append(f"in={status.input_tokens:,}", style="cyan")
+                meta.append(" / ", style="dim")
+                meta.append(f"out={status.output_tokens:,}", style="bright_cyan")
+                meta.append(" / ", style="dim")
+                meta.append(f"total={status.tokens:,}", style="bold cyan")
         elif status.runtime == "retrying":
             meta.append(f"retry #{status.attempt}", style="yellow")
             if status.error:
@@ -328,12 +345,14 @@ class KanbanTUI:
         index: dict[str, _CardStatus] = {}
         for row in snap.get("running", []):
             issue_id = row.get("issue_id") or ""
-            tokens = row.get("tokens", {}).get("total_tokens", 0)
+            tokens_block = row.get("tokens") or {}
             index[issue_id] = _CardStatus(
                 runtime="running",
                 turn=int(row.get("turn_count", 0) or 0),
                 last_event=str(row.get("last_event") or ""),
-                tokens=int(tokens or 0),
+                tokens=int(tokens_block.get("total_tokens") or 0),
+                input_tokens=int(tokens_block.get("input_tokens") or 0),
+                output_tokens=int(tokens_block.get("output_tokens") or 0),
                 last_message=str(row.get("last_message") or ""),
             )
         for row in snap.get("retrying", []):
