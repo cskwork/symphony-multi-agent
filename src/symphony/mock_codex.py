@@ -172,73 +172,113 @@ async def main() -> int:
         params = msg.get("params") or {}
         _log("request", method=method, id=msg_id)
 
-        if method == "v2/initialize":
+        if method == "initialize":
             io.write_json(
                 {
                     "jsonrpc": "2.0",
                     "id": msg_id,
                     "result": {
-                        "server": {"name": "mock-codex", "version": "0.0.1"},
-                        "capabilities": {"tools": True, "approvals": True},
+                        "serverInfo": {"name": "mock-codex", "version": "0.0.1"},
+                        "capabilities": {},
                     },
                 }
             )
             await io.drain()
             continue
 
-        if method == "v2/threads.start":
+        if method == "thread/start":
             state["thread_count"] += 1
             tid = f"mock-thread-{state['thread_count']}"
             state["current_thread"] = tid
             cwd = params.get("cwd")
-            initial = (params.get("initialPrompt") or "")[:80].replace("\n", " ")
-            _log("thread.start", thread_id=tid, cwd=cwd, prompt_preview=initial)
+            _log("thread.start", thread_id=tid, cwd=cwd)
             io.write_json(
-                {"jsonrpc": "2.0", "id": msg_id, "result": {"threadId": tid}}
+                {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "thread": {"id": tid},
+                        "cwd": cwd or "",
+                        "model": "mock-model",
+                        "modelProvider": "mock",
+                        "approvalPolicy": "never",
+                        "approvalsReviewer": "user",
+                        "sandbox": "workspace-write",
+                    },
+                }
             )
             await io.drain()
             continue
 
-        if method == "v2/threads.runTurn":
+        if method == "turn/start":
             state["turn_count"] += 1
             turn_n = state["turn_count"]
             tid = f"mock-turn-{turn_n}"
             should_fail = FAIL_EVERY_N and (turn_n % FAIL_EVERY_N == 0)
             duration = max(0.1, TURN_SECONDS + random.uniform(-1.5, 1.5))
             _log("turn.start", turn_id=tid, will_fail=should_fail, duration_s=round(duration, 2))
-            await _emit_token_progress(io, state["totals"], duration)
-            if should_fail:
-                io.write_json(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "result": {
-                            "turnId": tid,
-                            "status": "turn_failed",
-                            "error": "mock simulated failure",
-                        },
-                    }
-                )
-            else:
-                io.write_json(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": msg_id,
-                        "result": {
-                            "turnId": tid,
-                            "status": "turn_completed",
-                            "lastMessage": f"Mock turn {turn_n} finished after {duration:.1f}s.",
-                        },
-                    }
-                )
+
+            # Respond immediately with status=inProgress so the backend
+            # exercises the v2 notification-driven completion path.
+            io.write_json(
+                {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "turn": {"id": tid, "status": "inProgress", "items": []}
+                    },
+                }
+            )
             await io.drain()
+
+            # Stream token-usage notifications during the simulated work.
+            await _emit_token_progress(io, state["totals"], duration)
+
+            # Emit an item/completed agentMessage so backends can capture
+            # last_message — mirrors what the real codex does.
+            io.write_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": state["current_thread"],
+                        "turnId": tid,
+                        "item": {
+                            "id": f"item-{turn_n}",
+                            "type": "agentMessage",
+                            "text": f"Mock turn {turn_n} finished after {duration:.1f}s.",
+                        },
+                    },
+                }
+            )
+            await io.drain()
+
+            # Final turn/completed notification.
+            final_status = "failed" if should_fail else "completed"
+            final_turn = {"id": tid, "status": final_status, "items": []}
+            if should_fail:
+                final_turn["error"] = {
+                    "type": "other",
+                    "message": "mock simulated failure",
+                }
+            io.write_json(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": state["current_thread"],
+                        "turn": final_turn,
+                    },
+                }
+            )
+            await io.drain()
+
             if MAX_TURNS and state["turn_count"] >= MAX_TURNS:
                 _log("max_turns_reached", n=MAX_TURNS)
-                # Exit so the worker treats this as subprocess death.
                 return 0
             continue
 
-        if method == "v2/threads.stop":
+        if method == "thread/archive":
             io.write_json({"jsonrpc": "2.0", "id": msg_id, "result": {}})
             await io.drain()
             continue

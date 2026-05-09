@@ -58,16 +58,50 @@ log = get_logger()
 
 MAX_LINE_BYTES = 10 * 1024 * 1024  # upstream §10.1 — 10 MB
 
-METHOD_INITIALIZE = "v2/initialize"
-METHOD_THREAD_START = "v2/threads.start"
-METHOD_TURN_START = "v2/threads.runTurn"
-METHOD_THREAD_STOP = "v2/threads.stop"
-METHOD_AUTH_RESPOND = "v2/threads.respondToApproval"
-METHOD_TOOL_RESPOND = "v2/threads.respondToToolCall"
+# Codex app-server protocol (v2 of `codex app-server`, codex-cli ≥ 0.39).
+# Older releases used `v2/initialize`, `v2/threads.start`, `v2/threads.runTurn`
+# — see commit history if you need to support a legacy app-server.
+METHOD_INITIALIZE = "initialize"
+METHOD_THREAD_START = "thread/start"
+METHOD_TURN_START = "turn/start"
+METHOD_THREAD_ARCHIVE = "thread/archive"
+# `thread/approveGuardianDeniedAction` is the rough equivalent of the legacy
+# respondToApproval; symphony auto-approves so this is rarely used.
+METHOD_APPROVAL_RESPOND = "thread/approveGuardianDeniedAction"
+
+# Notifications we react to.
+NOTIF_TURN_COMPLETED = "turn/completed"
+NOTIF_TURN_STARTED = "turn/started"
+NOTIF_ITEM_COMPLETED = "item/completed"
+NOTIF_THREAD_TOKEN_USAGE = "thread/tokenUsage/updated"
+NOTIF_RATE_LIMITS = "account/rateLimits/updated"
 
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+# v2 turn/start `sandboxPolicy` is a tagged enum object, not a kebab-case
+# string. We keep WORKFLOW.md's familiar kebab-case values and translate
+# here. (Thread-level `sandbox` in v2 still accepts the kebab-case string.)
+_SANDBOX_POLICY_TAG: dict[str, str] = {
+    "workspace-write": "workspaceWrite",
+    "read-only": "readOnly",
+    "danger-full-access": "dangerFullAccess",
+}
+
+
+def _sandbox_policy_to_turn_payload(value: Any) -> Any:
+    """Translate a workflow ``turn_sandbox_policy`` string to v2 payload."""
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value  # already v2-shaped
+    tag = _SANDBOX_POLICY_TAG.get(str(value))
+    if tag is None:
+        # Unknown — let codex reject with a clear error rather than guess.
+        return value
+    return {"type": tag}
 
 
 class CodexAppServerBackend:
@@ -91,6 +125,11 @@ class CodexAppServerBackend:
         self._closed = False
         self._thread_id: str | None = None
         self._current_turn_id: str | None = None
+        # v2 streams the assistant text via item/completed notifications
+        # rather than returning it in the turn response, so we accumulate
+        # the latest agentMessage text here.
+        self._latest_assistant_message: str = ""
+        self._turn_completion_waiter: asyncio.Future[dict[str, Any]] | None = None
         self._latest_usage: dict[str, int] = {
             "input_tokens": 0,
             "output_tokens": 0,
@@ -126,14 +165,9 @@ class CodexAppServerBackend:
         if self._closed:
             return
         self._closed = True
-        if self._thread_id and self._process and self._process.returncode is None:
-            try:
-                await asyncio.wait_for(
-                    self._request(METHOD_THREAD_STOP, {"threadId": self._thread_id}),
-                    timeout=self._codex.read_timeout_ms / 1000.0,
-                )
-            except Exception:
-                pass
+        # v2 has no `thread/stop` — `thread/archive` exists but only
+        # finalizes server-side bookkeeping. Symphony already terminates
+        # the subprocess below, which is sufficient for cleanup.
         if self._process is not None:
             if self._process.returncode is None:
                 try:
@@ -173,41 +207,40 @@ class CodexAppServerBackend:
         return dict(self._latest_rate_limits) if self._latest_rate_limits is not None else None
 
     async def initialize(self) -> dict[str, Any]:
+        # The v2 codex app-server `initialize` schema is just `clientInfo`
+        # plus optional `capabilities`. Tools are no longer declared at
+        # initialize time — they're handled per-thread / per-turn now.
         params = {
-            "client": {"name": "symphony", "version": "0.2.0"},
-            "tools": [
-                {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "schema": tool.schema,
-                }
-                for tool in self._client_tools
-            ],
+            "clientInfo": {"name": "symphony", "version": "0.2.0"},
         }
         return await self._request(METHOD_INITIALIZE, params)
 
     async def start_session(
         self, *, initial_prompt: str, issue_title: str | None
     ) -> str:
-        params: dict[str, Any] = {
-            "cwd": str(self._cwd),
-            "initialPrompt": initial_prompt,
-        }
-        if issue_title:
-            params["title"] = issue_title
+        # v2 `thread/start` no longer accepts `initialPrompt` — the prompt
+        # is delivered via the first `turn/start`. Orchestrator already
+        # passes the rendered prompt as the first run_turn input, so we
+        # discard `initial_prompt` and `issue_title` here.
+        del initial_prompt, issue_title
+        params: dict[str, Any] = {"cwd": str(self._cwd)}
         if self._thread_sandbox is not None:
             params["sandbox"] = self._thread_sandbox
         if self._approval_policy is not None:
             params["approvalPolicy"] = self._approval_policy
         result = await self._request(METHOD_THREAD_START, params)
+        # v2 returns `result.thread.id` (Thread object); tolerate the legacy
+        # `threadId` shape so older mock servers still work.
+        thread = result.get("thread") if isinstance(result.get("thread"), dict) else {}
         thread_id = (
-            result.get("threadId")
+            (thread.get("id") if isinstance(thread, dict) else None)
+            or result.get("threadId")
             or result.get("thread_id")
             or result.get("id")
         )
         if not thread_id:
             raise ResponseError(
-                "codex app-server returned no thread id from threads.start",
+                "codex app-server returned no thread id from thread/start",
                 method=METHOD_THREAD_START,
             )
         self._thread_id = str(thread_id)
@@ -220,44 +253,107 @@ class CodexAppServerBackend:
     async def run_turn(self, *, prompt: str, is_continuation: bool) -> TurnResult:
         if self._thread_id is None:
             raise ResponseError("run_turn called before thread started")
+        # v2 wraps turn input as a UserInput[] array; tolerate empty prompts
+        # so callers passing "" don't get a malformed payload.
         params: dict[str, Any] = {
             "threadId": self._thread_id,
-            "prompt": prompt,
-            "cwd": str(self._cwd),
-            "continuation": is_continuation,
+            "input": [{"type": "text", "text": prompt}],
         }
-        if self._sandbox_policy is not None:
-            params["sandboxPolicy"] = self._sandbox_policy
+        del is_continuation  # the legacy `continuation` flag is gone
+        sandbox_payload = _sandbox_policy_to_turn_payload(self._sandbox_policy)
+        if sandbox_payload is not None:
+            params["sandboxPolicy"] = sandbox_payload
         if self._approval_policy is not None:
             params["approvalPolicy"] = self._approval_policy
-        try:
-            result = await self._request(
-                METHOD_TURN_START,
-                params,
-                timeout_s=self._codex.turn_timeout_ms / 1000.0,
-            )
-        except ResponseTimeout as exc:
-            await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
-            raise TurnTimeout("turn timed out") from exc
-        turn_id = result.get("turnId") or result.get("turn_id") or result.get("id")
-        self._current_turn_id = str(turn_id) if turn_id is not None else None
-        status = result.get("status", EVENT_TURN_COMPLETED)
-        last_message = result.get("lastMessage") or result.get("last_message") or ""
-        if status == EVENT_TURN_INPUT_REQUIRED:
-            await self._emit(EVENT_TURN_INPUT_REQUIRED, result)
-            raise TurnInputRequired("user input required treated as failure")
-        if status == EVENT_TURN_CANCELLED:
-            await self._emit(EVENT_TURN_CANCELLED, result)
-            raise TurnCancelled("turn cancelled")
-        if status in (EVENT_TURN_FAILED, EVENT_TURN_ENDED_WITH_ERROR):
-            await self._emit(status, result)
-            raise TurnFailed(str(result.get("error") or "turn failed"))
-        await self._emit(EVENT_TURN_COMPLETED, result)
-        return TurnResult(
-            status=EVENT_TURN_COMPLETED,
-            turn_id=self._current_turn_id,
-            last_message=last_message,
+
+        # The turn-completion future is set when we observe a
+        # `turn/completed` notification matching our turn id. We arm it
+        # *before* sending so a fast server can't notify before we listen.
+        completion: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_event_loop().create_future()
         )
+        # Token-key the bucket so concurrent turns (future-proofing) don't
+        # collide. For now there's only ever one outstanding turn per
+        # backend instance.
+        self._turn_completion_waiter = completion
+
+        try:
+            try:
+                result = await self._request(
+                    METHOD_TURN_START,
+                    params,
+                    timeout_s=self._codex.turn_timeout_ms / 1000.0,
+                )
+            except ResponseTimeout as exc:
+                await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
+                raise TurnTimeout("turn timed out") from exc
+
+            turn = (
+                result.get("turn")
+                if isinstance(result.get("turn"), dict)
+                else {}
+            )
+            assert isinstance(turn, dict)
+            turn_id = (
+                turn.get("id")
+                or result.get("turnId")
+                or result.get("turn_id")
+                or result.get("id")
+            )
+            self._current_turn_id = str(turn_id) if turn_id is not None else None
+
+            # Status mapping: v2 enum is {completed, interrupted, failed,
+            # inProgress}; legacy was {turn_completed, turn_failed, …}.
+            status = (turn.get("status") or result.get("status") or "").strip()
+
+            if status == "inProgress":
+                # Wait for `turn/completed` notification (or matching error).
+                try:
+                    final = await asyncio.wait_for(
+                        completion,
+                        timeout=self._codex.turn_timeout_ms / 1000.0,
+                    )
+                except asyncio.TimeoutError as exc:
+                    await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
+                    raise TurnTimeout("turn timed out waiting for completion") from exc
+                final_turn = (
+                    final.get("turn")
+                    if isinstance(final.get("turn"), dict)
+                    else {}
+                )
+                assert isinstance(final_turn, dict)
+                status = (
+                    final_turn.get("status") or final.get("status") or ""
+                ).strip()
+                # Prefer the final Turn object for downstream parsing.
+                if final_turn:
+                    turn = final_turn
+            # Done waiting (or never had to).
+
+            if status == "interrupted":
+                await self._emit(EVENT_TURN_CANCELLED, turn)
+                raise TurnCancelled("turn interrupted")
+            if status == "failed":
+                err = turn.get("error") or {}
+                await self._emit(EVENT_TURN_FAILED, turn)
+                if isinstance(err, dict):
+                    msg = err.get("message") or err.get("type") or "turn failed"
+                else:
+                    msg = str(err)
+                raise TurnFailed(msg)
+            if status not in ("completed", ""):
+                # Unknown status — don't silently coerce to success.
+                await self._emit(EVENT_TURN_FAILED, turn)
+                raise TurnFailed(f"unexpected turn status {status!r}")
+
+            await self._emit(EVENT_TURN_COMPLETED, turn)
+            return TurnResult(
+                status=EVENT_TURN_COMPLETED,
+                turn_id=self._current_turn_id,
+                last_message=self._latest_assistant_message,
+            )
+        finally:
+            self._turn_completion_waiter = None
 
     # ------------------------------------------------------------------
     # JSON-RPC line protocol over stdio
@@ -354,19 +450,39 @@ class CodexAppServerBackend:
     async def _handle_notification(self, msg: dict[str, Any]) -> None:
         method = msg.get("method") or msg.get("event") or ""
         params = msg.get("params") or msg.get("payload") or msg
-        if method.endswith("/tokenUsage/updated") or method == "thread/tokenUsage/updated":
+        # ----- token usage (unchanged in v2) -----
+        if method == NOTIF_THREAD_TOKEN_USAGE or method.endswith(
+            "/tokenUsage/updated"
+        ):
             self._update_tokens_absolute(params.get("totals") or params)
-        elif method.endswith("/rateLimits"):
-            rl = params.get("rateLimits")
+            return
+        # ----- rate limits (v2: account/rateLimits/updated) -----
+        if method == NOTIF_RATE_LIMITS or method.endswith("/rateLimits"):
+            rl = params.get("rateLimits") if isinstance(params, dict) else None
             if isinstance(rl, dict):
                 self._latest_rate_limits = rl
             elif isinstance(params, dict) and "rateLimits" not in params:
-                # Some servers inline the limits directly into `params`.
                 self._latest_rate_limits = params
-        elif method == "approval.requested":
+            return
+        # ----- turn lifecycle -----
+        if method == NOTIF_TURN_COMPLETED:
+            waiter = self._turn_completion_waiter
+            if waiter is not None and not waiter.done():
+                waiter.set_result(params if isinstance(params, dict) else {})
+            return
+        # ----- streamed thread items (assistant text, tool calls, etc.) -----
+        if method == NOTIF_ITEM_COMPLETED:
+            item = params.get("item") if isinstance(params, dict) else None
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    self._latest_assistant_message = text[:1000]
+            return
+        # ----- legacy approval / tool-call requests -----
+        if method == "approval.requested":
             await self._handle_approval(params)
             return
-        elif method == "tool.requested":
+        if method == "tool.requested":
             await self._handle_tool_call(params)
             return
         await self._emit(_normalize_event_name(method), params)
@@ -380,36 +496,32 @@ class CodexAppServerBackend:
                 self._latest_usage[key] = int(payload[key])
 
     async def _handle_approval(self, params: dict[str, Any]) -> None:
-        # High-trust posture: auto-approve (upstream §10.5).
+        # Best-effort auto-approve. The legacy `respondToApproval` method is
+        # gone in v2 — set `approval_policy: never` in WORKFLOW.md to
+        # prevent codex from asking in the first place. If we *do* get here
+        # despite that, log and emit but don't try the v2 equivalent
+        # (`thread/approveGuardianDeniedAction`) without verifying its
+        # exact param shape per release.
         approval_id = params.get("id") or params.get("approvalId")
         if approval_id is None:
             return
         await self._emit(EVENT_APPROVAL_AUTO_APPROVED, params)
-        try:
-            await self._request(METHOD_AUTH_RESPOND, {"id": approval_id, "approved": True})
-        except Exception as exc:
-            log.warning("approval_respond_failed", error=str(exc))
+        log.warning(
+            "codex_approval_received_but_v2_respond_unimplemented",
+            approval_id=str(approval_id),
+            hint="set codex.approval_policy: never to avoid this path",
+        )
 
     async def _handle_tool_call(self, params: dict[str, Any]) -> None:
-        tool_name = params.get("name") or params.get("tool")
-        call_id = params.get("id") or params.get("callId")
+        # Same caveat as `_handle_approval` — the legacy `respondToToolCall`
+        # method has no direct v2 replacement. Symphony advertises no
+        # tools at initialize time anymore, so codex shouldn't request
+        # symphony-side tools — we emit a diagnostic event and return.
         await self._emit(EVENT_UNSUPPORTED_TOOL_CALL, params)
-        if call_id is None:
-            return
-        try:
-            await self._request(
-                METHOD_TOOL_RESPOND,
-                {
-                    "id": call_id,
-                    "ok": False,
-                    "error": {
-                        "code": "tool_not_supported",
-                        "message": f"tool {tool_name} not supported",
-                    },
-                },
-            )
-        except Exception as exc:
-            log.warning("tool_respond_failed", error=str(exc))
+        log.warning(
+            "codex_tool_call_received_but_v2_respond_unimplemented",
+            tool=str(params.get("name") or params.get("tool") or ""),
+        )
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         ev_payload = payload if isinstance(payload, dict) else {"data": payload}
