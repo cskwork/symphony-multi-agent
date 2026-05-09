@@ -42,7 +42,7 @@ DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
-SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini"}
+SUPPORTED_AGENT_KINDS = {"codex", "claude", "gemini", "pi"}
 DEFAULT_AGENT_KIND = "codex"
 DEFAULT_CLAUDE_COMMAND = (
     "claude -p --output-format stream-json --include-partial-messages --verbose"
@@ -52,6 +52,10 @@ DEFAULT_CLAUDE_COMMAND = (
 # stdin alone is the prompt (Gemini documents stdin as "Appended to input on
 # stdin (if any).").
 DEFAULT_GEMINI_COMMAND = 'gemini -p ""'
+# Pi (https://pi.dev) print mode: `-p ""` lets stdin carry the full prompt;
+# `--mode json` switches stdout to JSONL events so we can parse session id,
+# turn boundaries, and per-message token usage.
+DEFAULT_PI_COMMAND = 'pi --mode json -p ""'
 DEFAULT_BACKEND_TURN_TIMEOUT_MS = 3_600_000
 DEFAULT_BACKEND_READ_TIMEOUT_MS = 5_000
 DEFAULT_BACKEND_STALL_TIMEOUT_MS = 300_000
@@ -230,6 +234,20 @@ class GeminiConfig:
 
 
 @dataclass(frozen=True)
+class PiConfig:
+    """`agent.kind: pi` — driving the Pi coding-agent CLI in print/json mode."""
+
+    command: str
+    turn_timeout_ms: int
+    read_timeout_ms: int
+    stall_timeout_ms: int
+    # When True, turns 2+ within one worker attempt add `--session <id>` so Pi
+    # rejoins the prior session. Cross-attempt resume is intentionally not
+    # supported — each retry attempt builds a new backend instance.
+    resume_across_turns: bool
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     """§13.7 optional HTTP extension."""
 
@@ -264,6 +282,7 @@ class ServiceConfig:
     codex: CodexConfig
     claude: ClaudeConfig
     gemini: GeminiConfig
+    pi: PiConfig
     server: ServerConfig
     tui: TuiConfig = field(default_factory=TuiConfig)
     raw: dict[str, Any] = field(default_factory=dict)
@@ -283,6 +302,12 @@ class ServiceConfig:
                 self.claude.turn_timeout_ms,
                 self.claude.read_timeout_ms,
                 self.claude.stall_timeout_ms,
+            )
+        if kind == "pi":
+            return (
+                self.pi.turn_timeout_ms,
+                self.pi.read_timeout_ms,
+                self.pi.stall_timeout_ms,
             )
         return (
             self.gemini.turn_timeout_ms,
@@ -505,6 +530,17 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         stall_timeout_ms=_as_int(gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
     )
 
+    pi_raw = cfg.get("pi") or {}
+    if not isinstance(pi_raw, dict):
+        pi_raw = {}
+    pi = PiConfig(
+        command=_as_str(pi_raw.get("command"), DEFAULT_PI_COMMAND) or DEFAULT_PI_COMMAND,
+        turn_timeout_ms=_as_int(pi_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
+        read_timeout_ms=_as_int(pi_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
+        stall_timeout_ms=_as_int(pi_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        resume_across_turns=bool(pi_raw.get("resume_across_turns", True)),
+    )
+
     server_raw = cfg.get("server") or {}
     if not isinstance(server_raw, dict):
         server_raw = {}
@@ -547,6 +583,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         codex=codex,
         claude=claude,
         gemini=gemini,
+        pi=pi,
         server=server,
         tui=tui,
         raw=dict(cfg),
@@ -607,6 +644,9 @@ def validate_for_dispatch(config: ServiceConfig) -> None:
     elif kind == "gemini":
         if not config.gemini.command.strip():
             raise ConfigValidationError("gemini.command must be non-empty")
+    elif kind == "pi":
+        if not config.pi.command.strip():
+            raise ConfigValidationError("pi.command must be non-empty")
 
 
 # ---------------------------------------------------------------------------
