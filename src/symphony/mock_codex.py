@@ -275,6 +275,7 @@ async def main() -> int:
 
             if MAX_TURNS and state["turn_count"] >= MAX_TURNS:
                 _log("max_turns_reached", n=MAX_TURNS)
+                # Exit so the worker treats this as subprocess death.
                 return 0
             continue
 

@@ -76,6 +76,10 @@ NOTIF_ITEM_COMPLETED = "item/completed"
 NOTIF_THREAD_TOKEN_USAGE = "thread/tokenUsage/updated"
 NOTIF_RATE_LIMITS = "account/rateLimits/updated"
 
+# Last-message preview is rendered in the dashboard / passed back as
+# `TurnResult.last_message`. 1000 chars matches what the legacy backend used.
+_ASSISTANT_MESSAGE_PREVIEW_CAP = 1000
+
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -102,6 +106,18 @@ def _sandbox_policy_to_turn_payload(value: Any) -> Any:
         # Unknown — let codex reject with a clear error rather than guess.
         return value
     return {"type": tag}
+
+
+def _coerce_turn(result: Any) -> dict[str, Any]:
+    """Extract the ``turn`` sub-object from a v2 result/notification payload.
+
+    Returns ``{}`` when the field is missing or wrong-typed so callers can
+    safely use ``.get(...)`` without isinstance guards.
+    """
+    if not isinstance(result, dict):
+        return {}
+    turn = result.get("turn")
+    return turn if isinstance(turn, dict) else {}
 
 
 class CodexAppServerBackend:
@@ -253,99 +269,12 @@ class CodexAppServerBackend:
     async def run_turn(self, *, prompt: str, is_continuation: bool) -> TurnResult:
         if self._thread_id is None:
             raise ResponseError("run_turn called before thread started")
-        # v2 wraps turn input as a UserInput[] array; tolerate empty prompts
-        # so callers passing "" don't get a malformed payload.
-        params: dict[str, Any] = {
-            "threadId": self._thread_id,
-            "input": [{"type": "text", "text": prompt}],
-        }
-        del is_continuation  # the legacy `continuation` flag is gone
-        sandbox_payload = _sandbox_policy_to_turn_payload(self._sandbox_policy)
-        if sandbox_payload is not None:
-            params["sandboxPolicy"] = sandbox_payload
-        if self._approval_policy is not None:
-            params["approvalPolicy"] = self._approval_policy
-
-        # The turn-completion future is set when we observe a
-        # `turn/completed` notification matching our turn id. We arm it
-        # *before* sending so a fast server can't notify before we listen.
-        completion: asyncio.Future[dict[str, Any]] = (
-            asyncio.get_event_loop().create_future()
-        )
-        # Token-key the bucket so concurrent turns (future-proofing) don't
-        # collide. For now there's only ever one outstanding turn per
-        # backend instance.
-        self._turn_completion_waiter = completion
-
+        del is_continuation  # the legacy `continuation` flag is gone in v2
+        params = self._build_turn_params(prompt)
+        completion = self._arm_completion_waiter()
         try:
-            try:
-                result = await self._request(
-                    METHOD_TURN_START,
-                    params,
-                    timeout_s=self._codex.turn_timeout_ms / 1000.0,
-                )
-            except ResponseTimeout as exc:
-                await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
-                raise TurnTimeout("turn timed out") from exc
-
-            turn = (
-                result.get("turn")
-                if isinstance(result.get("turn"), dict)
-                else {}
-            )
-            assert isinstance(turn, dict)
-            turn_id = (
-                turn.get("id")
-                or result.get("turnId")
-                or result.get("turn_id")
-                or result.get("id")
-            )
-            self._current_turn_id = str(turn_id) if turn_id is not None else None
-
-            # Status mapping: v2 enum is {completed, interrupted, failed,
-            # inProgress}; legacy was {turn_completed, turn_failed, …}.
-            status = (turn.get("status") or result.get("status") or "").strip()
-
-            if status == "inProgress":
-                # Wait for `turn/completed` notification (or matching error).
-                try:
-                    final = await asyncio.wait_for(
-                        completion,
-                        timeout=self._codex.turn_timeout_ms / 1000.0,
-                    )
-                except asyncio.TimeoutError as exc:
-                    await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
-                    raise TurnTimeout("turn timed out waiting for completion") from exc
-                final_turn = (
-                    final.get("turn")
-                    if isinstance(final.get("turn"), dict)
-                    else {}
-                )
-                assert isinstance(final_turn, dict)
-                status = (
-                    final_turn.get("status") or final.get("status") or ""
-                ).strip()
-                # Prefer the final Turn object for downstream parsing.
-                if final_turn:
-                    turn = final_turn
-            # Done waiting (or never had to).
-
-            if status == "interrupted":
-                await self._emit(EVENT_TURN_CANCELLED, turn)
-                raise TurnCancelled("turn interrupted")
-            if status == "failed":
-                err = turn.get("error") or {}
-                await self._emit(EVENT_TURN_FAILED, turn)
-                if isinstance(err, dict):
-                    msg = err.get("message") or err.get("type") or "turn failed"
-                else:
-                    msg = str(err)
-                raise TurnFailed(msg)
-            if status not in ("completed", ""):
-                # Unknown status — don't silently coerce to success.
-                await self._emit(EVENT_TURN_FAILED, turn)
-                raise TurnFailed(f"unexpected turn status {status!r}")
-
+            turn = await self._send_turn_and_resolve(params, completion)
+            await self._raise_for_terminal_status(turn)
             await self._emit(EVENT_TURN_COMPLETED, turn)
             return TurnResult(
                 status=EVENT_TURN_COMPLETED,
@@ -354,6 +283,93 @@ class CodexAppServerBackend:
             )
         finally:
             self._turn_completion_waiter = None
+
+    def _build_turn_params(self, prompt: str) -> dict[str, Any]:
+        # v2 wraps turn input as a UserInput[] array; tolerate empty prompts
+        # so callers passing "" don't get a malformed payload.
+        params: dict[str, Any] = {
+            "threadId": self._thread_id,
+            "input": [{"type": "text", "text": prompt}],
+        }
+        sandbox_payload = _sandbox_policy_to_turn_payload(self._sandbox_policy)
+        if sandbox_payload is not None:
+            params["sandboxPolicy"] = sandbox_payload
+        if self._approval_policy is not None:
+            params["approvalPolicy"] = self._approval_policy
+        return params
+
+    def _arm_completion_waiter(self) -> asyncio.Future[dict[str, Any]]:
+        # Arm *before* sending so a fast server can't notify before we listen.
+        completion: asyncio.Future[dict[str, Any]] = (
+            asyncio.get_running_loop().create_future()
+        )
+        self._turn_completion_waiter = completion
+        return completion
+
+    async def _send_turn_and_resolve(
+        self,
+        params: dict[str, Any],
+        completion: asyncio.Future[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Send turn/start; if status=inProgress, await turn/completed notif.
+
+        Returns the final Turn dict for downstream status parsing.
+        """
+        try:
+            result = await self._request(
+                METHOD_TURN_START,
+                params,
+                timeout_s=self._codex.turn_timeout_ms / 1000.0,
+            )
+        except ResponseTimeout as exc:
+            await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
+            raise TurnTimeout("turn timed out") from exc
+
+        turn = _coerce_turn(result)
+        turn_id = (
+            turn.get("id")
+            or result.get("turnId")
+            or result.get("turn_id")
+            or result.get("id")
+        )
+        self._current_turn_id = str(turn_id) if turn_id is not None else None
+
+        status = (turn.get("status") or result.get("status") or "").strip()
+        if status != "inProgress":
+            return turn
+
+        # Wait for `turn/completed` notification (or matching error).
+        try:
+            final = await asyncio.wait_for(
+                completion,
+                timeout=self._codex.turn_timeout_ms / 1000.0,
+            )
+        except asyncio.TimeoutError as exc:
+            await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
+            raise TurnTimeout("turn timed out waiting for completion") from exc
+        final_turn = _coerce_turn(final)
+        return final_turn or turn
+
+    async def _raise_for_terminal_status(self, turn: dict[str, Any]) -> None:
+        # Status mapping: v2 enum is {completed, interrupted, failed,
+        # inProgress}; legacy was {turn_completed, turn_failed, …}.
+        status = (turn.get("status") or "").strip()
+        if status in ("completed", ""):
+            return
+        if status == "interrupted":
+            await self._emit(EVENT_TURN_CANCELLED, turn)
+            raise TurnCancelled("turn interrupted")
+        if status == "failed":
+            err = turn.get("error") or {}
+            await self._emit(EVENT_TURN_FAILED, turn)
+            if isinstance(err, dict):
+                msg = err.get("message") or err.get("type") or "turn failed"
+            else:
+                msg = str(err)
+            raise TurnFailed(msg)
+        # Unknown status — don't silently coerce to success.
+        await self._emit(EVENT_TURN_FAILED, turn)
+        raise TurnFailed(f"unexpected turn status {status!r}")
 
     # ------------------------------------------------------------------
     # JSON-RPC line protocol over stdio
@@ -374,7 +390,7 @@ class CodexAppServerBackend:
             raise ResponseError("subprocess not started")
         msg_id = self._next_id
         self._next_id += 1
-        future: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
         body = json.dumps(
             {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params},
@@ -476,7 +492,14 @@ class CodexAppServerBackend:
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str) and text.strip():
-                    self._latest_assistant_message = text[:1000]
+                    # Cap the dashboard preview at 1000 chars; mark truncation
+                    # explicitly so a "…" trail isn't mistaken for prose.
+                    if len(text) > _ASSISTANT_MESSAGE_PREVIEW_CAP:
+                        self._latest_assistant_message = (
+                            text[:_ASSISTANT_MESSAGE_PREVIEW_CAP] + "…"
+                        )
+                    else:
+                        self._latest_assistant_message = text
             return
         # ----- legacy approval / tool-call requests -----
         if method == "approval.requested":

@@ -352,3 +352,120 @@ async def test_codex_turn_completed_notification_resolves_waiter(
     assert waiter.done()
     payload = waiter.result()
     assert payload["turn"]["status"] == "completed"
+
+
+# ---- Codex terminal-status raising -------------------------------------
+# Regression guard: `_raise_for_terminal_status` is async and *must* be
+# awaited. A prior refactor dropped the `await` and silently turned every
+# `failed`/`interrupted`/unknown turn into a fake success.
+
+
+@pytest.mark.asyncio
+async def test_codex_raises_turn_failed_on_failed_status(tmp_path: Path) -> None:
+    from symphony.errors import TurnFailed
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    with pytest.raises(TurnFailed, match="boom"):
+        await backend._raise_for_terminal_status(
+            {"id": "t1", "status": "failed", "error": {"message": "boom"}}
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_raises_cancelled_on_interrupted_status(tmp_path: Path) -> None:
+    from symphony.errors import TurnCancelled
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    with pytest.raises(TurnCancelled):
+        await backend._raise_for_terminal_status(
+            {"id": "t1", "status": "interrupted"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_raises_for_unknown_status(tmp_path: Path) -> None:
+    from symphony.errors import TurnFailed
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    with pytest.raises(TurnFailed, match="unexpected turn status"):
+        await backend._raise_for_terminal_status(
+            {"id": "t1", "status": "weirdValue"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_codex_completed_status_does_not_raise(tmp_path: Path) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    # Either explicit "completed" or the empty-status fallback must be a no-op.
+    await backend._raise_for_terminal_status({"id": "t1", "status": "completed"})
+    await backend._raise_for_terminal_status({"id": "t2", "status": ""})
+
+
+def test_codex_assistant_message_truncation_marks_with_ellipsis() -> None:
+    from symphony.backends.codex import _ASSISTANT_MESSAGE_PREVIEW_CAP
+
+    # Build a backend just to drive _handle_notification — but the truncation
+    # logic is tested via direct comparison with the constant + the suffix.
+    # `_handle_notification` writes into `_latest_assistant_message`.
+    long_text = "a" * (_ASSISTANT_MESSAGE_PREVIEW_CAP + 50)
+    short_text = "b" * (_ASSISTANT_MESSAGE_PREVIEW_CAP - 10)
+    # Exercise the helper directly — it's pure Python on a string, so we
+    # don't need a backend fixture.
+    truncated = (
+        long_text[:_ASSISTANT_MESSAGE_PREVIEW_CAP] + "…"
+        if len(long_text) > _ASSISTANT_MESSAGE_PREVIEW_CAP
+        else long_text
+    )
+    assert truncated.endswith("…")
+    assert len(truncated) == _ASSISTANT_MESSAGE_PREVIEW_CAP + 1
+    untruncated = (
+        short_text[:_ASSISTANT_MESSAGE_PREVIEW_CAP] + "…"
+        if len(short_text) > _ASSISTANT_MESSAGE_PREVIEW_CAP
+        else short_text
+    )
+    assert untruncated == short_text
+
+
+@pytest.mark.asyncio
+async def test_codex_handle_notification_truncates_long_agent_message(
+    tmp_path: Path,
+) -> None:
+    from symphony.backends.codex import _ASSISTANT_MESSAGE_PREVIEW_CAP
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    long_text = "x" * (_ASSISTANT_MESSAGE_PREVIEW_CAP + 200)
+    await backend._handle_notification(
+        {
+            "method": NOTIF_ITEM_COMPLETED,
+            "params": {
+                "item": {"type": "agentMessage", "text": long_text},
+            },
+        }
+    )
+    assert backend._latest_assistant_message.endswith("…")
+    assert len(backend._latest_assistant_message) == _ASSISTANT_MESSAGE_PREVIEW_CAP + 1

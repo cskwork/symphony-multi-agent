@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from typing import Iterator
 
 import pytest
 
@@ -11,7 +12,7 @@ from symphony._shell import _is_wsl_launcher, resolve_bash
 
 
 @pytest.fixture(autouse=True)
-def _reset_resolve_bash_cache() -> None:
+def _reset_resolve_bash_cache() -> Iterator[None]:
     resolve_bash.cache_clear()
     yield
     resolve_bash.cache_clear()
