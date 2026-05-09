@@ -52,6 +52,9 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "header.lang_hint": "(SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)",
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n} more",
+        "column.more_above": "↑ {n} above",
+        # controls hint shown in the header of the TUI
+        "header.controls": "controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap={n}",
     },
     "ko": {
         # header
@@ -76,6 +79,9 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "header.lang_hint": "(SYMPHONY_LANG=en 또는 WORKFLOW.md tui.language 수정 후 재시작)",
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n}개 더",
+        "column.more_above": "↑ 위로 {n}개",
+        # controls hint shown in the header of the TUI
+        "header.controls": "조작: j/↓ 다음 · k/↑ 이전 · PgDn/PgUp 페이지 · g/G 처음/끝 · q 종료 · cap={n}",
     },
 }
 
