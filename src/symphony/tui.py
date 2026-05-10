@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from rich.align import Align
@@ -60,6 +61,12 @@ AGENT_COLOR = {
 }
 
 
+# Threshold above which a running card grows a yellow "silent Ns" badge.
+# Tuned to be just past the longest expected pi/claude turn warm-up
+# (≈30 s for opus-4 cold start) so the indicator never fires on healthy runs.
+SILENT_THRESHOLD_S = 30.0
+
+
 @dataclass
 class _CardStatus:
     """Per-issue runtime overlay for a kanban card."""
@@ -67,6 +74,7 @@ class _CardStatus:
     runtime: str = "idle"  # one of: idle, running, retrying, completed
     turn: int = 0
     last_event: str = ""
+    last_event_at: datetime | None = None
     tokens: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -422,6 +430,11 @@ class KanbanTUI:
         meta = Text()
         if status.runtime == "running":
             meta.append(f"{t('card.turn', language)} {status.turn}", style="green")
+            silent_s = _silent_seconds(status.last_event_at)
+            if silent_s is not None and silent_s >= SILENT_THRESHOLD_S:
+                # Past the silence threshold — surface as a yellow badge so
+                # the operator notices stalls without polling logs/JSON.
+                meta.append(f"  silent {int(silent_s)}s", style="bold yellow")
             if status.last_event:
                 meta.append(f"  {status.last_event}", style="dim")
             if status.input_tokens or status.output_tokens or status.tokens:
@@ -495,6 +508,7 @@ class KanbanTUI:
                 runtime="running",
                 turn=int(row.get("turn_count", 0) or 0),
                 last_event=str(row.get("last_event") or ""),
+                last_event_at=_parse_iso(row.get("last_event_at")),
                 tokens=int(tokens_block.get("total_tokens") or 0),
                 input_tokens=int(tokens_block.get("input_tokens") or 0),
                 output_tokens=int(tokens_block.get("output_tokens") or 0),
@@ -508,6 +522,28 @@ class KanbanTUI:
                 error=str(row.get("error") or "") or None,
             )
         return index
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Parse the ISO-8601 strings the orchestrator emits for `last_event_at`.
+
+    Returns None for missing/malformed values — the renderer treats `None`
+    as "no data", which is the right fallback during the first poll tick
+    (before any agent event has fired) and across orchestrator restarts.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _silent_seconds(last_event_at: datetime | None) -> float | None:
+    if last_event_at is None:
+        return None
+    now = datetime.now(timezone.utc)
+    return max(0.0, (now - last_event_at).total_seconds())
 
 
 def _truncate(text: str, n: int) -> str:

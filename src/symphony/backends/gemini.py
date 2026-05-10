@@ -170,7 +170,16 @@ class GeminiBackend:
             rc = proc.returncode
             if rc != 0:
                 err_msg = (stderr or b"").decode("utf-8", errors="replace").strip()[:400]
-                payload = {"reason": f"gemini exit {rc}", "stderr": err_msg}
+                # Standardize on `stderr_tail` (list[str]) so orchestrator /
+                # operator grep handles every backend the same way; keep the
+                # legacy `stderr` key for back-compat with anything that read
+                # the previous shape.
+                tail = [s for s in err_msg.splitlines() if s][-20:]
+                payload = {
+                    "reason": f"gemini exit {rc}" + (f"; stderr: {err_msg}" if err_msg else ""),
+                    "stderr_tail": tail,
+                    "stderr": err_msg,
+                }
                 await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(err_msg or f"gemini failed with exit {rc}")
 

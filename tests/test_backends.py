@@ -596,3 +596,115 @@ pi:
     cfg = build_service_config(wf)
     assert "--no-session" in cfg.pi.command
     assert cfg.pi.resume_across_turns is False
+
+
+# --- stderr ring buffer + compaction event surfacing (improve/observability) ---
+
+def test_pi_stderr_blob_handles_empty_buffer(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend._stderr_blob() == ""
+
+
+def test_pi_stderr_blob_truncates_long_tail(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    for i in range(40):
+        backend._stderr_tail.append("x" * 60 + str(i))
+    blob = backend._stderr_blob()
+    assert len(blob) <= 400
+    # Ring buffer is bounded — only the last 20 lines survive even before
+    # blob-level truncation kicks in.
+    assert len(backend._stderr_tail) == 20
+
+
+def test_claude_stderr_blob_present(tmp_path: Path) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    backend._stderr_tail.append("Error: bad token")
+    backend._stderr_tail.append("Retrying once")
+    blob = backend._stderr_blob()
+    assert "bad token" in blob
+    assert "Retrying" in blob
+    assert " | " in blob  # joiner
+
+
+def test_pi_consume_stream_surfaces_compaction_events(tmp_path: Path) -> None:
+    """`compaction_start` / `compaction_end` events flow through to
+    EVENT_COMPACTION with phase + reason fields normalized."""
+    from symphony.backends import EVENT_COMPACTION, EVENT_AGENT_RETRY
+
+    captured: list[dict] = []
+
+    async def collect(ev):
+        captured.append(ev)
+
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=collect)
+    )
+
+    # Fake stream: session, compaction_start, compaction_end, auto_retry_*, agent_end.
+    lines = [
+        b'{"type":"session","version":3,"id":"abc"}\n',
+        b'{"type":"compaction_start","reason":"threshold"}\n',
+        b'{"type":"compaction_end","reason":"threshold","aborted":false,'
+        b'"willRetry":false,"result":{"tokensBefore":48000,'
+        b'"firstKeptEntryId":"x1"}}\n',
+        b'{"type":"auto_retry_start","attempt":1,"maxAttempts":3,'
+        b'"delayMs":1000,"errorMessage":"upstream 503"}\n',
+        b'{"type":"auto_retry_end","success":true,"attempt":1}\n',
+        b'{"type":"agent_end","messages":[]}\n',
+    ]
+
+    class _FakeStdout:
+        def __init__(self, lines):
+            self._lines = list(lines)
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = _FakeStdout(lines)
+            self.stderr = None
+            self.returncode = 0
+
+    asyncio.get_event_loop().run_until_complete(
+        backend._consume_stream(_FakeProc())
+    )
+    kinds = [c["event"] for c in captured]
+    # We expect: session_started, compaction(start), compaction(end),
+    # agent_retry(start), agent_retry(end). agent_end is terminal — handler
+    # returns it but doesn't emit.
+    assert EVENT_COMPACTION in kinds
+    assert kinds.count(EVENT_COMPACTION) == 2
+    assert EVENT_AGENT_RETRY in kinds
+    assert kinds.count(EVENT_AGENT_RETRY) == 2
+
+    compaction_events = [c for c in captured if c["event"] == EVENT_COMPACTION]
+    assert compaction_events[0]["payload"]["phase"] == "start"
+    assert compaction_events[0]["payload"]["reason"] == "threshold"
+    assert compaction_events[1]["payload"]["phase"] == "end"
+    assert compaction_events[1]["payload"]["tokens_before"] == 48000
+    assert compaction_events[1]["payload"]["first_kept_entry_id"] == "x1"
+
+    retry_events = [c for c in captured if c["event"] == EVENT_AGENT_RETRY]
+    assert retry_events[0]["payload"]["phase"] == "start"
+    assert retry_events[0]["payload"]["attempt"] == 1
+    assert retry_events[0]["payload"]["max_attempts"] == 3
+    assert retry_events[1]["payload"]["phase"] == "end"
+    assert retry_events[1]["payload"]["success"] is True
