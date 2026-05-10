@@ -185,3 +185,32 @@ def test_continuation_prompt_default_english_path():
     # language — this is the orchestrator's own glue text, not the
     # WORKFLOW.md body. Only artefact language is operator-controlled.
     assert "turn 2 of up to 20" in out
+
+
+def test_first_turn_prompt_exposes_is_rewind_to_template():
+    """`is_rewind` must reach WORKFLOW templates so the retry preamble
+    can branch on in-flight Review/QA → In Progress rewinds (which the
+    dispatch-level `attempt` counter does NOT cover)."""
+    body = "rewind={{ is_rewind }} attempt={% if attempt %}{{ attempt }}{% else %}none{% endif %}"
+    rewind_prompt, env = build_first_turn_prompt(
+        prompt_template=body,
+        issue=_issue(),
+        attempt=None,
+        language="en",
+        max_turns=5,
+        is_rewind=True,
+    )
+    assert "rewind=True" in rewind_prompt
+    assert env["is_rewind"] is True
+
+    forward_prompt, env = build_first_turn_prompt(
+        prompt_template=body,
+        issue=_issue(),
+        attempt=None,
+        language="en",
+        max_turns=5,
+    )
+    # Default is False so existing WORKFLOW templates that newly add a
+    # `{% if is_rewind %}` branch render cleanly without a rewind.
+    assert "rewind=False" in forward_prompt
+    assert env["is_rewind"] is False

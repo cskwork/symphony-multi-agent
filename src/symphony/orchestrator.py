@@ -25,6 +25,7 @@ from .backends import (
     EVENT_TURN_FAILED,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
+    AgentBackend,
     BackendInit,
     build_backend,
 )
@@ -54,6 +55,28 @@ log = get_logger()
 
 CONTINUATION_RETRY_DELAY_MS = 1_000  # §7.1
 RETRY_BASE_MS = 10_000  # §8.4
+
+
+# States that, when re-entered from a downstream stage, count as a rewind.
+# `normalize_state` lowercases its input, so compare in lowercase.
+_REWIND_DOWNSTREAM_STATES = frozenset({"review", "qa"})
+_REWIND_TARGET_STATE = "in progress"
+
+
+def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
+    """True when a phase transition is moving backwards in the pipeline.
+
+    `Review → In Progress` (CRITICAL/HIGH findings) and `QA → In Progress`
+    (test/spec failure) both rewind by design — see WORKFLOW.md hard
+    rules. The agent re-entering In Progress this way needs an explicit
+    template cue: dispatch-level `attempt` only fires on full worker
+    re-dispatch, so an in-flight rewind inside a single worker run would
+    otherwise have no signal beyond the markdown trail itself.
+    """
+    return (
+        prev_state in _REWIND_DOWNSTREAM_STATES
+        and current_state == _REWIND_TARGET_STATE
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +558,7 @@ class Orchestrator:
                 # both TUI chrome AND artefact docs. Resolution already
                 # honours `SYMPHONY_LANG` (build_service_config call).
                 doc_language = cfg.tui.language
-                first_prompt, _env = build_first_turn_prompt(
+                first_prompt, _ = build_first_turn_prompt(
                     prompt_template=cfg.prompt_template,
                     issue=issue,
                     attempt=attempt,
@@ -547,8 +570,67 @@ class Orchestrator:
                     issue_title=f"{issue.identifier}: {issue.title}",
                 )
 
+                # Track which kanban state the backend is currently
+                # operating on. When the issue moves to a new state mid-run
+                # we tear the backend down and rebuild it so the next phase
+                # starts with a fresh context — shared knowledge flows only
+                # through the markdown artefacts under
+                # `docs/<identifier>/<stage>/` plus the ticket body.
+                prev_phase_state = normalize_state(issue.state)
+
                 while True:
-                    is_continuation = turn_number > 1
+                    current_state = normalize_state(issue.state)
+                    is_phase_transition = (
+                        turn_number > 1 and current_state != prev_phase_state
+                    )
+
+                    if is_phase_transition:
+                        try:
+                            is_rewind = _is_rewind_transition(
+                                prev_phase_state, current_state
+                            )
+                            client, first_prompt = await self._rebuild_backend_for_phase(
+                                issue=issue,
+                                cfg=cfg,
+                                workspace_path=workspace.path,
+                                attempt=attempt,
+                                doc_language=doc_language,
+                                old_client=client,
+                                is_rewind=is_rewind,
+                            )
+                            running_entry = self._running.get(issue.id)
+                            if running_entry is not None:
+                                running_entry.thread_id = None
+                                running_entry.session_id = None
+                                running_entry.turn_id = None
+                                # New backend session reports absolute token
+                                # totals from 0; the high-water marks below
+                                # MUST reset or `_apply_token_totals` computes
+                                # `max(new - old_high, 0) = 0` and silently
+                                # drops every token from the new phase until
+                                # the cumulative count overtakes the old mark.
+                                # Cumulative `codex_*_tokens` are NOT reset —
+                                # those are the per-ticket lifetime totals.
+                                running_entry.last_reported_input_tokens = 0
+                                running_entry.last_reported_output_tokens = 0
+                                running_entry.last_reported_total_tokens = 0
+                            log.info(
+                                "worker_phase_transition",
+                                issue_id=issue.id,
+                                identifier=issue.identifier,
+                                from_state=prev_phase_state,
+                                to_state=current_state,
+                                turn=turn_number,
+                                attempt=attempt,
+                                is_rewind=is_rewind,
+                                workspace=str(workspace.path),
+                            )
+                        except Exception as exc:
+                            outcome = "phase_transition_error"
+                            error = str(exc)
+                            return
+
+                    is_continuation = turn_number > 1 and not is_phase_transition
                     if is_continuation:
                         prompt = build_continuation_prompt(
                             language=doc_language,
@@ -597,6 +679,11 @@ class Orchestrator:
                             total_tokens=running_entry.codex_total_tokens,
                         )
 
+                    # Record the state the backend just operated on so the
+                    # next iteration can detect a phase transition against
+                    # the freshly refreshed state below.
+                    prev_phase_state = current_state
+
                     # Refresh issue state.
                     refreshed = await self._refresh_issue_state(cfg, issue.id)
                     if refreshed is None:
@@ -613,7 +700,20 @@ class Orchestrator:
                         break
                     turn_number += 1
             finally:
-                await client.stop()
+                # Defensive: a phase transition may have left `client`
+                # pointing to a half-initialized backend, or to one whose
+                # earlier `stop()` already failed. Either way, exiting the
+                # worker without after_run_best_effort would leak workspace
+                # state, so swallow stop() errors here too.
+                try:
+                    await client.stop()
+                except Exception as stop_exc:
+                    log.warning(
+                        "worker_final_stop_failed",
+                        issue_id=issue.id,
+                        identifier=issue.identifier,
+                        error=str(stop_exc),
+                    )
                 await self._workspace_manager.after_run_best_effort(workspace.path)
         except SymphonyError as exc:
             outcome = "error"
@@ -624,6 +724,66 @@ class Orchestrator:
             log.error("worker_unhandled_error", issue_id=issue.id, error=str(exc))
         finally:
             await self._on_worker_exit(issue.id, outcome, error)
+
+    async def _rebuild_backend_for_phase(
+        self,
+        *,
+        issue: Issue,
+        cfg: ServiceConfig,
+        workspace_path: Path,
+        attempt: int | None,
+        doc_language: str,
+        old_client: AgentBackend,
+        is_rewind: bool,
+    ) -> tuple[AgentBackend, str]:
+        """Tear down `old_client` and rebuild a fresh-context backend.
+
+        Returns `(new_client, new_first_prompt)` so the worker loop can
+        rebind both. The caller is responsible for resetting bookkeeping
+        on `RunningEntry` (session_id, token high-water marks, etc.) —
+        keeping that here would couple this helper to the running-state
+        dict and hurt testability.
+        """
+        # Defensive: a failing old-stop must not block the transition.
+        # The new client we are about to build replaces the reference, so
+        # any stuck resources in the old backend are someone else's
+        # problem (the listener-side reaper or the OS).
+        try:
+            await old_client.stop()
+        except Exception as stop_exc:
+            log.warning(
+                "phase_transition_old_stop_failed",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                error=str(stop_exc),
+            )
+        tools: list[Any] = []
+        if cfg.tracker.kind == "linear" and cfg.agent.kind == "codex":
+            tools.append(linear_graphql_tool())
+        new_client = build_backend(
+            BackendInit(
+                cfg=cfg,
+                cwd=workspace_path,
+                workspace_root=cfg.workspace_root,
+                on_event=lambda ev: self._on_codex_event(issue.id, ev),
+                client_tools=tools,
+            )
+        )
+        await new_client.start()
+        await new_client.initialize()
+        first_prompt, _ = build_first_turn_prompt(
+            prompt_template=cfg.prompt_template,
+            issue=issue,
+            attempt=attempt,
+            language=doc_language,
+            max_turns=cfg.agent.max_turns,
+            is_rewind=is_rewind,
+        )
+        await new_client.start_session(
+            initial_prompt=first_prompt,
+            issue_title=f"{issue.identifier}: {issue.title}",
+        )
+        return new_client, first_prompt
 
     async def _refresh_issue_state(
         self, cfg: ServiceConfig, issue_id: str

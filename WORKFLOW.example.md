@@ -107,8 +107,13 @@ tui:
 You are picking up issue {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
 {% if attempt %}This is retry attempt {{ attempt }}. Read the previous Linear
-comment thread first and address the root cause from the prior failure, not the
-symptom.{% endif %}
+comment thread first — in particular the most recent Resolution, Blocker,
+QA Failure, or Review Findings comment — and address the root cause from
+the prior failure, not the symptom.{% endif %}{% if is_rewind %}This turn is a rewind from a Review or QA finding. Your only job
+this turn is to address the items in the most recent Review Findings or
+QA Failure comment — read it first, fix exactly those items, and do NOT
+open new scope. The agent context is fresh: anything not written into the
+Linear comment thread or `docs/{{ issue.identifier }}/` is gone.{% endif %}
 
 {% if issue.description %}
 ## Description
@@ -131,10 +136,11 @@ Every issue flows through the same gates. Honour the gate that matches
 
 ```
   Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
-                              \                       \                    ^
-                               +-> Blocked             +-> Blocked          |
-                                                                            |
-                              (QA failure rewinds to In Progress)
+                              ^   \                ^    \                ^
+                              |    +-> Blocked     |     +-> Blocked     |
+                              |                    |                     |
+                              +-- Review CRITICAL/HIGH rewinds here      |
+                              +-- QA failure rewinds here ---------------+
 ```
 
 `llm-wiki/` is the project's domain knowledge base — one Markdown entry per
@@ -180,6 +186,7 @@ line at the end: `_세부: docs/<id>/<stage>/details.md_`.
 | `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text         |
 | Implementation comment  | ≤ 10 lines (PR link + touched files)   | per-file change list, helper names, dataclass shapes |
 | Review comment          | ≤ 6 rows in severity table (1 line each) | full check-list reasoning, fix diffs |
+| Review Findings comment | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
 | QA Evidence comment     | header + commands + 1-line `**판정**` + AC table | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
@@ -232,21 +239,25 @@ You are a domain-knowing researcher walking three lenses in one turn:
 **domain expert** (what does this code mean?), **implementer** (smallest
 sustainable change?), **risk reviewer** (what could go wrong?).
 
-1. Open `llm-wiki/INDEX.md`. Path defaults to ./llm-wiki/ but respects
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/` if
+   it exists (this may be the first stage, in which case it does not).
+   On a re-explore (rare — usually after a Blocked rewind), the prior
+   brief and any Triage comment are your starting point.
+2. Open `llm-wiki/INDEX.md`. Path defaults to ./llm-wiki/ but respects
    $LLM_WIKI_PATH if set. Read every entry whose topic plausibly relates
    to the ticket. Follow links into the entry files. If `llm-wiki/` does
    not exist yet, note that and continue — Learn will seed it later.
-2. Skim git history for prior work in adjacent areas: for each file the
+3. Skim git history for prior work in adjacent areas: for each file the
    ticket likely touches, run `git log --oneline -- <path>` and read the
    one or two most relevant commits in full (`git show <sha>`). Capture
    why prior changes were made, not just what they did.
-3. Read the actual source files end-to-end (not just hunks) so the brief
+4. Read the actual source files end-to-end (not just hunks) so the brief
    reflects current state, not stale memory.
-4. Drop boost material — citations, vendor-doc snippets, candidate helpers,
+5. Drop boost material — citations, vendor-doc snippets, candidate helpers,
    reuse inventory — into `docs/{{ issue.identifier }}/explore/` (e.g.
    `notes.md`, `vendor-docs.md`, `reuse-inventory.md`). The brief sections
    below cite these files.
-5. Apply each lens explicitly and produce one consolidated Explore
+6. Apply each lens explicitly and produce one consolidated Explore
    comment with three sections:
    - `## Domain Brief` — key facts, invariants, and references
      (`path:line`, wiki entry titles, commit SHAs) the implementer must
@@ -257,47 +268,73 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    - `## Recommendation` — the option you choose, the rationale (why
      this lens won), the risks accepted, and the first failing test
      the implementer should write.
-6. Transition state to `In Progress`.
+7. Transition state to `In Progress`.
 
 ### IMPLEMENT  -- when state is `In Progress`
 
-1. Read the Explore Recommendation comment first. Implement the chosen
-   option; do not reopen the plan unless you find a fact the brief got
-   wrong (in which case post a one-line note and proceed).
-2. TDD loop: write the failing test the brief specified, make it pass,
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/explore/`
+   and re-read the most recent Recommendation. If the most recent ticket
+   comment is a QA Failure or Review Findings comment, treat THOSE items
+   as the only scope for this turn — fix exactly what the previous stage
+   flagged, no drive-by changes. The fresh context that started this turn
+   means earlier conversation is gone; the markdown and Linear comments
+   are the contract.
+2. Implement the chosen option from the Explore Recommendation (or, on a
+   rewind, exclusively address the flagged failure items above); do not
+   reopen the plan unless you find a fact the brief got wrong (in which
+   case post a one-line note and proceed).
+3. TDD loop: write the failing test the brief specified, make it pass,
    refactor. No production code without a test exercising it.
-3. Pair the change with user-facing documentation under
+4. Pair the change with user-facing documentation under
    `docs/{{ issue.identifier }}/work/feature.md` (or `bug.md` if this ticket
    carries the `bug` label) — what changed, how a user observes it, any
    knobs/flags. Plain language, no jargon.
-4. Open a draft PR. Post an Implementation comment with the PR link, the
+5. Open a draft PR. Post an Implementation comment with the PR link, the
    touched files, and the commit-style intent of each change.
-5. Transition state to `Review`.
+6. Transition state to `Review`.
 
 ### REVIEW  -- when state is `Review`
 
-1. Read the diff on the PR (`git diff origin/main...HEAD`). Re-read the
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/work/`
+   and re-read the most recent Implementation comment. If a Review Findings
+   comment from a prior pass exists, confirm those specific items are now
+   resolved before opening new findings.
+2. Read the diff on the PR (`git diff origin/main...HEAD`). Re-read the
    touched files end-to-end, not just the hunks.
-2. Apply the checklist: clarity, naming, error handling, security,
+3. Apply the checklist: clarity, naming, error handling, security,
    performance, simplicity, no dead code, no debug prints, no secrets.
-3. Verify with live HTTP proof when the change touches an API. Hit both
+4. Verify with live HTTP proof when the change touches an API. Hit both
    baseline (As-Is) and the new build (To-Be) with curl/httpie/`requests`
    and save under `docs/{{ issue.identifier }}/verify/`:
    `baseline.json`, `pr.json`, `diff.txt`, `curl.log`. Code-only review
    for an API change is not enough.
-4. Fix every CRITICAL and HIGH issue. Post a Review comment with one
-   bullet per finding (`severity | file:line | fix`), referencing any
-   verify artefacts under docs/{{ issue.identifier }}/verify/.
-5. If unfixable / out of scope: transition state to `Blocked`, post a
-   Blocker comment with what is needed and stop.
-6. Otherwise transition state to `QA`.
+5. Classify findings into a severity table: `severity | file:line | fix`.
+   Cap at 6 rows in the comment body; spillover goes to
+   `docs/{{ issue.identifier }}/review/details.md`.
+6. **If any CRITICAL or HIGH finding exists:** transition state back to
+   `In Progress`, post a Review Findings comment with the Plain-Korean
+   header + the severity table (referencing any verify artefacts under
+   `docs/{{ issue.identifier }}/verify/`), and STOP. Do NOT fix the
+   findings inside Review — that is In Progress's job, with a fresh
+   context. Symphony will dispatch a new fix turn automatically.
+7. If the only findings are MEDIUM/LOW (or none): post a Review comment
+   with the Plain-Korean header + the same severity table — flag the
+   deferred items in the same comment so Learn can address them — and
+   transition state to `QA`.
+8. If something is genuinely unfixable / out of scope: transition state to
+   `Blocked`, post a Blocker comment with what is needed and stop.
 
 ### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
 
 A QA pass that only inspects code is a failed QA. Run something and
 capture its output as evidence.
 
-1. Detect the project type and execute the matching real-world check:
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/work/`
+   and the most recent Review / Review Findings comment. Confirm what the
+   change is supposed to deliver before deciding what to execute. The
+   fresh context here has no memory of Implement — the artefacts and
+   prior comments are the brief.
+2. Detect the project type and execute the matching real-world check:
    - **Tests**: run the full suite (`pytest -q`, `npm test`, etc.).
    - **HTTP API**: capture the As-Is response by hitting the baseline
      build and the To-Be response by hitting the new build (curl /
@@ -310,15 +347,15 @@ capture its output as evidence.
    - **CLI / script**: run the command and assert exit code plus
      observable stdout/stderr / file output. Save the run log to
      `docs/{{ issue.identifier }}/qa/cli.log`.
-2. Post a QA Evidence comment listing:
+3. Post a QA Evidence comment listing:
    - the exact commands run,
    - their exit codes,
    - a short excerpt of relevant output (3-10 lines),
    - links to artefacts under `docs/{{ issue.identifier }}/qa/`.
-3. If anything fails: transition state back to `In Progress`, post a QA
+4. If anything fails: transition state back to `In Progress`, post a QA
    Failure comment describing what regressed, and stop. Do NOT silence,
    retry, or skip the failing check.
-4. If everything passes: transition state to `Learn`.
+5. If everything passes: transition state to `Learn`.
 
 ### LEARN  -- when state is `Learn`
 
@@ -326,12 +363,16 @@ The point of Learn is to make the next ticket cheaper. Distill what this
 ticket actually taught the team and write it back into `llm-wiki/` so
 future Explore stages can find it.
 
-1. Compare the Explore brief against reality:
+1. **Read shared context first.** Walk `docs/{{ issue.identifier }}/explore/`,
+   `work/`, `qa/` and the prior Linear comments (Recommendation,
+   Implementation, QA Evidence) end-to-end. Learn's job is to compare
+   brief vs. reality — the markdown and comment trail IS the brief.
+2. Compare the Explore brief against reality:
    - Which assumptions held? Which were wrong? Why?
    - Which constraint, gotcha, or invariant only became visible during
      implementation, review, or QA?
    - Which prior wiki entry (if any) was incomplete or misleading?
-2. For each non-trivial finding, update `llm-wiki/`:
+3. For each non-trivial finding, update `llm-wiki/`:
    - If a relevant entry exists, edit it in place. Append to its
      **Decision log** with a `YYYY-MM-DD | <issue.identifier> | note`
      line and refresh **Last updated**.
@@ -358,14 +399,14 @@ future Explore stages can find it.
    - Add or refresh the matching row in `llm-wiki/INDEX.md`
      (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
      Create `INDEX.md` with a header row if it does not yet exist.
-3. Commit the wiki edits onto the ticket's PR (same branch — wiki updates
+4. Commit the wiki edits onto the ticket's PR (same branch — wiki updates
    are part of the change). Do not push wiki edits in a separate PR.
-4. Post a Learn comment with two sections:
+5. Post a Learn comment with two sections:
    - `## Learnings` — bullets of new facts, constraints, or surprises
      this ticket exposed.
    - `## Wiki Updates` — list of `llm-wiki/<file>.md` paths created or
      modified, one line each with a brief changelog.
-5. Transition state to `Done`. If you found nothing genuinely new, say
+6. Transition state to `Done`. If you found nothing genuinely new, say
    so explicitly in the Learn comment ("no new wiki entries; existing
    coverage was correct") and still transition.
 
@@ -412,3 +453,9 @@ Leave the state as `Done` and stop.
   `qa-artifacts/`, `runs/`, ad-hoc `tests/e2e/<name>/`, or sibling `docs/`
   files. Create the folder yourself (`mkdir -p`). The llm-wiki write-back
   in Learn is the only artefact that lives outside this root.
+- **Backward transitions are explicit, not failures.** `Review → In Progress`
+  (on CRITICAL/HIGH findings) and `QA → In Progress` (on test/spec failure)
+  are part of the pipeline. Each rewind starts the next In Progress turn
+  with a **fresh agent context**; the only carry-over is what you wrote
+  into the Linear comment thread and `docs/{{ issue.identifier }}/`. Treat
+  your own writeups as the contract — what you didn't write down is gone.

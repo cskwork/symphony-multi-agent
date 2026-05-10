@@ -98,8 +98,12 @@ tui:
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
 {% if attempt %}This is retry attempt {{ attempt }}. Read the previous `## Resolution`,
-`## Blocker`, or `## QA Failure` section before acting and address the root cause,
-not the symptom.{% endif %}
+`## Blocker`, `## QA Failure`, or `## Review Findings` section before acting and
+address the root cause, not the symptom.{% endif %}{% if is_rewind %}This turn is a rewind from a Review or QA finding. Your only job
+this turn is to address the items in the most recent `## Review Findings` or
+`## QA Failure` section — read it first, fix exactly those items, and do NOT
+open new scope. The agent context is fresh: anything not written into the
+ticket body or `docs/{{ issue.identifier }}/` is gone.{% endif %}
 
 {% if issue.description %}
 ## Description
@@ -111,10 +115,11 @@ not the symptom.{% endif %}
 
 ```
   Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
-                              \                       \                    ^
-                               +-> Blocked             +-> Blocked          |
-                                                                            |
-                              (QA failure rewinds to In Progress)
+                              ^   \                ^    \                ^
+                              |    +-> Blocked     |     +-> Blocked     |
+                              |                    |                     |
+                              +-- Review CRITICAL/HIGH rewinds here      |
+                              +-- QA failure rewinds here ---------------+
 ```
 
 The ticket file lives at `kanban/{{ issue.identifier }}.md`. Edit the YAML
@@ -154,6 +159,7 @@ link line at the end of the section: `_세부: docs/<id>/<stage>/details.md_`.
 | `## Recommendation`    | ≤ 5 lines               | first-failing-test full text         |
 | `## Implementation`    | ≤ 10 lines              | per-file change list, helper names, dataclass shapes |
 | `## Review`            | ≤ 6 lines (severity table, 1 line each) | full check-list reasoning, fix diffs |
+| `## Review Findings`   | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
 | `## QA Evidence`       | header + commands + 1-line "verdict" + AC table | raw pytest, stdout, smoke logs |
 | `## Learnings`         | ≤ 8 lines (3-4 bullets, 1-2 lines each) | extended rationale, follow-ups |
 | `## Wiki Updates`      | ≤ 4 lines               | n/a (wiki is the source of truth)   |
@@ -188,15 +194,19 @@ link line at the end of the section: `_세부: docs/<id>/<stage>/details.md_`.
 
 ### EXPLORE  -- when state is `Explore`
 
-1. Open `llm-wiki/INDEX.md` and read every entry plausibly related to the
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/` if
+   it exists (this may be the first stage, in which case it does not).
+   On a re-explore (rare — usually after a Blocked rewind), the prior
+   brief and any `## Triage` are your starting point.
+2. Open `llm-wiki/INDEX.md` and read every entry plausibly related to the
    ticket. Follow links into entry files.
-2. Skim git history for prior work in adjacent areas: `git log --oneline -- <path>`
+3. Skim git history for prior work in adjacent areas: `git log --oneline -- <path>`
    then `git show <sha>` on the most relevant commits.
-3. Read the actual source files end-to-end (not just hunks) so the brief
+4. Read the actual source files end-to-end (not just hunks) so the brief
    reflects current state.
-4. Drop boost notes (full citations, file walks, vendor docs) into
+5. Drop boost notes (full citations, file walks, vendor docs) into
    `docs/{{ issue.identifier }}/explore/`.
-5. Append three sections to the ticket. **Each section starts with the
+6. Append three sections to the ticket. **Each section starts with the
    Plain-Korean header** and obeys its body cap; push overflow into
    `docs/{{ issue.identifier }}/explore/details.md` and link it.
    - `## Domain Brief` — top 1-3 facts/invariants only; cite at most three
@@ -205,58 +215,89 @@ link line at the end of the section: `_세부: docs/<id>/<stage>/details.md_`.
      (chosen / not-chosen / why). Detailed diff sketches go to `details.md`.
    - `## Recommendation` — chosen option name, one-line rationale, name of
      the first failing test. No code body.
-6. Set state to `In Progress`.
+7. Set state to `In Progress`.
 
 ### IMPLEMENT  -- when state is `In Progress`
 
-1. Read the `## Recommendation` section first. Implement that option.
-2. TDD loop: failing test, minimal implementation, refactor.
-3. Pair the change with `docs/{{ issue.identifier }}/work/feature.md`
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/explore/`
+   and re-read the most recent `## Recommendation`. If the most recent
+   ticket section is `## QA Failure` or `## Review Findings`, treat THOSE
+   items as the only scope for this turn — fix exactly what the previous
+   stage flagged, no drive-by changes. The fresh context that started
+   this turn means earlier conversation is gone; the markdown is the
+   contract.
+2. Implement the chosen option from `## Recommendation` (or, on a rewind,
+   exclusively address the flagged failure items above).
+3. TDD loop: failing test, minimal implementation, refactor.
+4. Pair the change with `docs/{{ issue.identifier }}/work/feature.md`
    (plain-language: "사용자가 무엇을 다르게 보게 되는가").
-4. Append `## Implementation` with the Plain-Korean header, then the
+5. Append `## Implementation` with the Plain-Korean header, then the
    touched-files list. Cap at 10 lines after the header. Per-file change
    detail (helper names, dataclass shapes, line counts) goes to
    `docs/{{ issue.identifier }}/work/details.md`.
-5. Set state to `Review`.
+6. Set state to `Review`.
 
 ### REVIEW  -- when state is `Review`
 
-1. Read your own diff (`git diff`). Re-read touched files end-to-end.
-2. Apply checklist: clarity, naming, error handling, security, simplicity.
-3. Append `## Review` with the Plain-Korean header, then a severity
-   table — one row per finding, one line each
-   (`severity | file:line | fix`). Cap at 6 rows. Findings beyond that or
-   long fix narratives go to `docs/{{ issue.identifier }}/review/details.md`.
-   Fix every CRITICAL / HIGH issue before moving on.
-4. Set state to `QA`.
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/work/`
+   and re-read the most recent `## Implementation` section. If a
+   `## Review Findings` from a prior pass exists, confirm those specific
+   items are now resolved before opening new findings.
+2. Read your own diff (`git diff origin/main...HEAD` or workspace
+   equivalent). Re-read touched files end-to-end, not just the hunks.
+3. Apply the checklist: clarity, naming, error handling, security,
+   performance, simplicity, no dead code, no debug prints, no secrets.
+4. Classify findings into a severity table: `severity | file:line | fix`.
+   Cap at 6 rows in the body; spillover goes to
+   `docs/{{ issue.identifier }}/review/details.md`.
+5. **If any CRITICAL or HIGH finding exists:** set state back to
+   `In Progress`, append `## Review Findings` with the Plain-Korean header
+   + the severity table, and STOP. Do NOT fix the findings inside Review —
+   that is In Progress's job, with a fresh context. Symphony will dispatch
+   a new fix turn automatically.
+6. If the only findings are MEDIUM/LOW (or none): append `## Review` with
+   the Plain-Korean header + the same severity table — flag the deferred
+   items in the same section so Learn can address them — and set state to
+   `QA`.
+7. If something is genuinely unfixable / out of scope: set state to
+   `Blocked` and append a `## Blocker` (Plain-Korean header required).
 
 ### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
 
-1. Run `.venv/bin/pytest -q` from the workspace root. All must pass.
-2. Run real-CLI smoke for the affected backend per the ticket's
+1. **Read shared context first.** Open `docs/{{ issue.identifier }}/work/`
+   and the most recent `## Review` / `## Review Findings`. Confirm what
+   the change is supposed to deliver before deciding what to execute. The
+   fresh context here has no memory of Implement — the artefacts are the
+   brief.
+2. Run `.venv/bin/pytest -q` from the workspace root. All must pass.
+3. Run real-CLI smoke for the affected backend per the ticket's
    "Verification" section. Capture stdout/stderr to
    `docs/{{ issue.identifier }}/qa/`.
-3. Append `## QA Evidence` with the Plain-Korean header, then:
+4. Append `## QA Evidence` with the Plain-Korean header, then:
    - the exact commands run + exit codes (3-10 line excerpts only;
      full logs stay under `docs/{{ issue.identifier }}/qa/`),
    - a single `**판정**: PASS | FAIL — 한 줄 결론` line right before the
      acceptance-criteria table,
    - an AC mapping table (one row per acceptance criterion: `AC | 결과 | 근거`).
-4. On failure: set state back to `In Progress`, add `## QA Failure` (also
+5. On failure: set state back to `In Progress`, add `## QA Failure` (also
    with the Plain-Korean header — what regressed, why it matters).
-5. On pass: set state to `Learn`.
+6. On pass: set state to `Learn`.
 
 ### LEARN  -- when state is `Learn`
 
-1. Compare the Explore brief against reality.
-2. For each non-trivial finding, update `llm-wiki/`. Edit existing entries
+1. **Read shared context first.** Walk `docs/{{ issue.identifier }}/explore/`,
+   `work/`, `qa/` and the prior ticket sections (`## Recommendation`,
+   `## Implementation`, `## QA Evidence`) end-to-end. Learn's job is to
+   compare brief vs. reality — the markdown IS the brief.
+2. Compare the Explore brief against reality.
+3. For each non-trivial finding, update `llm-wiki/`. Edit existing entries
    in place (append to **Decision log**) or create
    `llm-wiki/<topic-slug>.md` with the standard shape.
-3. Append `## Learnings` (Plain-Korean header + 3-4 bulleted insights,
+4. Append `## Learnings` (Plain-Korean header + 3-4 bulleted insights,
    1-2 lines each) and `## Wiki Updates` (Plain-Korean header + ≤ 4 lines
    listing wiki paths touched). Long rationale per insight goes to
    `docs/{{ issue.identifier }}/learn/details.md`.
-4. Set state to `Done`.
+5. Set state to `Done`.
 
 ### DONE  -- when state is `Done`
 
@@ -277,5 +318,11 @@ recent stage). Stop.
 - Every appended section (except the one-line `## Triage`) starts with
   the Plain-Korean header. A reviewer scrolling the ticket should be able
   to read only the headers and understand the entire ticket.
+- **Backward transitions are explicit, not failures.** `Review → In Progress`
+  (on CRITICAL/HIGH findings) and `QA → In Progress` (on test/spec failure)
+  are part of the pipeline. Each rewind starts the next In Progress turn
+  with a **fresh agent context**; the only carry-over is what you wrote
+  into the ticket body and `docs/{{ issue.identifier }}/`. Treat your own
+  writeups as the contract — what you didn't write down is gone.
 - The shared engineering rules at the top of
   `docs/PRD-telemetry-and-sessions.md` apply to every ticket in this round.

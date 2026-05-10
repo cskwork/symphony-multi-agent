@@ -436,6 +436,7 @@ def build_prompt_env(
     issue_obj: Any,
     attempt: int | None,
     language: str | None = None,
+    is_rewind: bool = False,
 ) -> dict[str, Any]:
     """§12.1 — input variables for prompt rendering.
 
@@ -443,6 +444,14 @@ def build_prompt_env(
     to a supported code: `en` / `ko`, EN fallback) so WORKFLOW.md authors
     can branch on it with `{% if language == 'ko' %}…{% endif %}`. Default
     is English to keep behavior stable for callers that don't pass it.
+
+    `is_rewind` is True when this prompt is being rendered for a phase
+    transition that moves *backwards* in the pipeline (Review→In Progress
+    or QA→In Progress). The orchestrator's `attempt` counter only fires on
+    full worker re-dispatch from the retry path, so an in-flight rewind
+    inside a single worker run otherwise has no signal to give the agent.
+    Always present in the env (default False) so strict templates that
+    reference `{{ is_rewind }}` never fail to render.
     """
     if hasattr(issue_obj, "to_template_dict"):
         issue_dict = issue_obj.to_template_dict()
@@ -454,6 +463,7 @@ def build_prompt_env(
         "issue": issue_dict,
         "attempt": attempt,
         "language": normalize_language(language),
+        "is_rewind": is_rewind,
     }
 
 
@@ -464,6 +474,7 @@ def build_first_turn_prompt(
     attempt: int | None,
     language: str,
     max_turns: int,
+    is_rewind: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
 
@@ -472,13 +483,18 @@ def build_first_turn_prompt(
     body so artefacts come back in the operator-chosen language even if
     the WORKFLOW.md body itself is written in a different one.
 
+    `is_rewind=True` is forwarded to the template env so WORKFLOW.md
+    authors can branch the retry-preamble block on rewind specifically
+    (in-flight `Review→In Progress` / `QA→In Progress` handoffs that
+    don't trip the dispatch-level retry counter).
+
     Returns `(final_prompt, env)` so callers can keep `env` for later
     bookkeeping (e.g. logging, tests).
     """
     from .i18n import doc_language_preamble
 
     preamble = doc_language_preamble(language)
-    env = build_prompt_env(issue, attempt, language=language)
+    env = build_prompt_env(issue, attempt, language=language, is_rewind=is_rewind)
     env["turn_number"] = 1
     env["max_turns"] = max_turns
     body = render(prompt_template, env)
