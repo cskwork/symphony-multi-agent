@@ -316,6 +316,30 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     assert second_run[0][1]["prompt"] == first_prompts[1]
 
 
+def test_phase_transition_stops_new_backend_when_rebuild_initialize_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=5)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    async def _initialize(self_inst: _FakeBackend) -> None:
+        self_inst.calls.append(("initialize", {}))
+        if self_inst.init_id == 1:
+            raise RuntimeError("second backend init failed")
+
+    monkeypatch.setattr(_FakeBackend, "initialize", _initialize)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert len(instances) == 2
+    second_calls = [name for name, _ in instances[1].calls]
+    assert second_calls == ["start", "initialize", "stop"]
+
+
 def test_same_phase_does_not_restart_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
