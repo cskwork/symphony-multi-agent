@@ -556,6 +556,7 @@ class Orchestrator:
         entry = self._running.get(issue_id)
         if entry is None or entry.worker_task is not task:
             return
+        exc_repr: str | None = None
         if task.cancelled():
             reason = "worker_task_cancelled_before_start"
             error = "asyncio task was cancelled before worker cleanup ran"
@@ -565,10 +566,36 @@ class Orchestrator:
             except asyncio.CancelledError:
                 reason = "worker_task_cancelled_before_start"
                 error = "asyncio task was cancelled before worker cleanup ran"
+                exc = None
             else:
                 reason = "worker_task_finished_without_cleanup"
                 error = str(exc) if exc is not None else "worker task completed without exit cleanup"
-        log.error("worker_task_done_without_cleanup", issue_id=issue_id, reason=reason, error=error)
+            if exc is not None:
+                exc_repr = f"{type(exc).__name__}: {exc!r}"
+        # Diagnostic fields for hunting the leftover path that leaves an
+        # entry in `_running` after the worker task is `done`. If this
+        # branch ever fires, these surface (a) which coroutine the task
+        # was running, (b) whether the entry was actually populated, and
+        # (c) how far the worker got — enough to localize the missing
+        # cleanup in a single repro.
+        coro = task.get_coro()
+        log.error(
+            "worker_task_done_without_cleanup",
+            issue_id=issue_id,
+            reason=reason,
+            error=error,
+            task_name=task.get_name(),
+            coro_qualname=getattr(coro, "__qualname__", repr(coro)),
+            task_done=task.done(),
+            task_cancelled=task.cancelled(),
+            exc_repr=exc_repr,
+            entry_started_at=entry.started_at.isoformat(),
+            entry_turn_count=entry.turn_count,
+            entry_workspace=str(entry.workspace_path),
+            entry_cancelled_at=(
+                entry.cancelled_at.isoformat() if entry.cancelled_at else None
+            ),
+        )
         asyncio.create_task(self._on_worker_exit(issue_id, reason, error))
 
     # ------------------------------------------------------------------
@@ -782,6 +809,18 @@ class Orchestrator:
             error = str(exc)
             log.error("worker_unhandled_error", issue_id=running_issue_id, error=str(exc))
         finally:
+            # Diagnostic marker — pairs with `worker_task_done_without_cleanup`
+            # to localize the path that leaves entries in `_running`. If
+            # this line is missing from the log right before that error,
+            # the outer finally never ran (Python contract violation =
+            # interpreter shutdown / OS-level kill). If it IS present,
+            # the bypass is inside `_on_worker_exit` itself.
+            log.info(
+                "worker_finally_entered",
+                issue_id=running_issue_id,
+                outcome=outcome,
+                error=error,
+            )
             await self._on_worker_exit(running_issue_id, outcome, error)
 
     async def _rebuild_backend_for_phase(
@@ -1004,7 +1043,19 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _on_worker_exit(self, issue_id: str, reason: str, error: str | None) -> None:
+        # Trace the pop result. If a `worker_task_done_without_cleanup`
+        # later fires for the same `issue_id`, comparing this line's
+        # `popped` field tells us whether `_running.pop` actually saw the
+        # entry — the alternative is that something else owned the slot
+        # and the outer finally simply released someone else's row.
         entry = self._running.pop(issue_id, None)
+        log.debug(
+            "worker_exit_pop",
+            issue_id=issue_id,
+            reason=reason,
+            popped=entry is not None,
+            running_keys=list(self._running.keys()),
+        )
         if entry is None:
             return
         elapsed = (datetime.now(timezone.utc) - entry.started_at).total_seconds()
