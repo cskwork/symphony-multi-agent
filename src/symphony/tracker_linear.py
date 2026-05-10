@@ -76,6 +76,7 @@ query ByState($projectSlug: String!, $states: [String!], $first: Int!, $after: S
       id
       identifier
       title
+      updatedAt
       state { name }
     }
   }
@@ -95,6 +96,34 @@ query ByIds($ids: [ID!]) {
 }
 """
 
+# Used by `update_state` to translate a state name → state UUID.
+# Linear's `issueUpdate` mutation requires the state's UUID, not its name.
+# We narrow by team via the issue first, then list workflow states for that
+# team and match by case-insensitive name. Cached per-(team, name) on the
+# client so repeated archives don't re-hit this endpoint.
+_ISSUE_TEAM_QUERY = """
+query IssueTeam($id: String!) {
+  issue(id: $id) { id team { id } }
+}
+"""
+
+_WORKFLOW_STATES_QUERY = """
+query WorkflowStates($teamId: ID!) {
+  workflowStates(filter: { team: { id: { eq: $teamId } } }, first: 100) {
+    nodes { id name }
+  }
+}
+"""
+
+_ISSUE_UPDATE_MUTATION = """
+mutation IssueUpdate($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    success
+    issue { id state { name } }
+  }
+}
+"""
+
 
 def _normalize_node(node: dict[str, Any], minimal: bool = False) -> Issue:
     state_obj = node.get("state") or {}
@@ -107,6 +136,7 @@ def _normalize_node(node: dict[str, Any], minimal: bool = False) -> Issue:
             description=None,
             priority=None,
             state=state_name,
+            updated_at=parse_iso_timestamp(node.get("updatedAt")),
         )
     label_nodes = ((node.get("labels") or {}).get("nodes")) or []
     labels = normalize_labels([n.get("name") for n in label_nodes if isinstance(n, dict)])
@@ -160,6 +190,11 @@ class LinearClient:
                 "User-Agent": "symphony-reference/0.1",
             },
         )
+        # (team_id, lower-cased state name) → workflow state UUID.
+        # Avoids re-querying workflow states on every archive call.
+        self._state_id_cache: dict[tuple[str, str], str] = {}
+        # Issue UUID → team UUID. Issue→team is immutable, so cache it.
+        self._issue_team_cache: dict[str, str] = {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -198,6 +233,69 @@ class LinearClient:
         payload = self._post({"query": _BY_IDS_QUERY, "variables": {"ids": id_list}})
         nodes = self._extract_nodes(payload)
         return [_normalize_node(n, minimal=True) for n in nodes]
+
+    def update_state(self, issue: Issue, target_state: str) -> None:
+        """Move `issue` to the workflow state named `target_state`.
+
+        Linear's `issueUpdate` mutation requires the state's UUID, so we
+        first resolve `target_state` (case-insensitive) against the issue's
+        team workflow states. Both lookups are cached on the client.
+        """
+        if not issue.id:
+            raise LinearUnknownPayload("issue.id is empty; cannot update state")
+        team_id = self._team_id_for_issue(issue.id)
+        state_id = self._state_id_for(team_id, target_state)
+        payload = self._post(
+            {
+                "query": _ISSUE_UPDATE_MUTATION,
+                "variables": {"id": issue.id, "stateId": state_id},
+            }
+        )
+        data = payload.get("data") or {}
+        result = data.get("issueUpdate") or {}
+        if not result.get("success"):
+            raise LinearUnknownPayload(
+                "issueUpdate did not report success", payload_preview=str(result)[:200]
+            )
+
+    def _team_id_for_issue(self, issue_id: str) -> str:
+        cached = self._issue_team_cache.get(issue_id)
+        if cached:
+            return cached
+        payload = self._post(
+            {"query": _ISSUE_TEAM_QUERY, "variables": {"id": issue_id}}
+        )
+        node = ((payload.get("data") or {}).get("issue") or {})
+        team_id = ((node.get("team") or {}).get("id"))
+        if not isinstance(team_id, str) or not team_id:
+            raise LinearUnknownPayload(
+                "could not resolve team for issue", issue_id=issue_id
+            )
+        self._issue_team_cache[issue_id] = team_id
+        return team_id
+
+    def _state_id_for(self, team_id: str, state_name: str) -> str:
+        key = (team_id, state_name.lower())
+        cached = self._state_id_cache.get(key)
+        if cached:
+            return cached
+        payload = self._post(
+            {"query": _WORKFLOW_STATES_QUERY, "variables": {"teamId": team_id}}
+        )
+        nodes = (((payload.get("data") or {}).get("workflowStates") or {}).get("nodes") or [])
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = node.get("name")
+            sid = node.get("id")
+            if isinstance(name, str) and isinstance(sid, str) and name.lower() == state_name.lower():
+                self._state_id_cache[key] = sid
+                return sid
+        raise LinearUnknownPayload(
+            "no workflow state matched name",
+            team_id=team_id,
+            state_name=state_name,
+        )
 
     # ------------------------------------------------------------------
 

@@ -21,6 +21,16 @@ class TrackerClient(Protocol):
 
     def fetch_issue_states_by_ids(self, ids: Iterable[str]) -> list[Issue]: ...
 
+    def update_state(self, issue: Issue, target_state: str) -> None:
+        """Mutate the tracker so `issue` lands in `target_state`.
+
+        Adapters pick whichever identifier field they need (Linear takes
+        the UUID `id`, the file tracker takes the human `identifier`).
+        Implementations should raise on transport failure so callers
+        can decide whether to log-and-continue or propagate.
+        """
+        ...
+
     def close(self) -> None: ...
 
 

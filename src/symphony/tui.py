@@ -778,6 +778,7 @@ class KanbanApp(App):
         Binding("d", "toggle_density", "Density"),
         Binding("p", "toggle_detail", "Detail pane"),
         Binding("L", "toggle_language", "Language"),
+        Binding("a", "archive_focused", "Archive"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
     ]
@@ -974,7 +975,7 @@ class KanbanApp(App):
             "q quit · r refresh · enter details · "
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
-            "d density · p detail-pane · L language · / filter · "
+            "d density · p detail-pane · L language · a archive · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -1166,6 +1167,66 @@ class KanbanApp(App):
         ]
         self._refresh_runtime()
         self.notify(f"language: {self._language_override}", timeout=2)
+
+    def action_archive_focused(self) -> None:
+        """Move the focused card to the configured archive state.
+
+        Only fires for cards already in a *terminal* state — auto-archive
+        and the manual hotkey both target Done-ish lanes, so accidentally
+        archiving an in-flight ticket from the TUI shouldn't be possible.
+        """
+        focused = self.focused
+        if not isinstance(focused, IssueCard):
+            self.notify("focus a card first", timeout=2)
+            return
+        cfg = self._ws.current()
+        if cfg is None:
+            return
+        terminal_keys = {normalize_state(s) for s in cfg.tracker.terminal_states}
+        archive_key = normalize_state(cfg.tracker.archive_state)
+        issue = focused.issue
+        state_key = normalize_state(issue.state)
+        if state_key not in terminal_keys:
+            self.notify(
+                f"only terminal states can be archived (state={issue.state})",
+                timeout=3,
+            )
+            return
+        if state_key == archive_key:
+            self.notify("already archived", timeout=2)
+            return
+        # Tracker mutation is blocking httpx / file IO — punt to a worker
+        # so the keystroke stays responsive. After the call lands, kick a
+        # tracker refresh so the lane re-paints.
+        self.run_worker(
+            self._archive_issue(cfg, issue),
+            thread=False,
+            exclusive=False,
+            group="archive",
+        )
+
+    async def _archive_issue(self, cfg: ServiceConfig, issue: Issue) -> None:
+        target = cfg.tracker.archive_state
+        try:
+            await asyncio.to_thread(self._call_update_state, cfg, issue, target)
+        except Exception as exc:
+            log.warning(
+                "tui_archive_failed", identifier=issue.identifier, error=str(exc)
+            )
+            self.notify(f"archive failed: {exc}", timeout=4, severity="error")
+            return
+        self.notify(f"archived {issue.identifier}", timeout=2)
+        self._kick_tracker_refresh()
+
+    @staticmethod
+    def _call_update_state(
+        cfg: ServiceConfig, issue: Issue, target_state: str
+    ) -> None:
+        client = build_tracker_client(cfg)
+        try:
+            client.update_state(issue, target_state)
+        finally:
+            client.close()
 
     # ----- Iter3: detail pane + filter --------------------------------
 

@@ -28,6 +28,7 @@ from .backends import (
     BackendInit,
     build_backend,
 )
+from .archive import select_archivable
 from .backends.codex import linear_graphql_tool
 from .errors import (
     SymphonyError,
@@ -353,7 +354,60 @@ class Orchestrator:
             if self._should_dispatch(issue, cfg):
                 self._dispatch(issue, cfg, attempt=None)
 
+        await self._archive_sweep(cfg)
+
         await self._notify_observers()
+
+    async def _archive_sweep(self, cfg: ServiceConfig) -> None:
+        """Auto-archive terminal-state issues older than `archive_after_days`.
+
+        Runs once per tick. Disabled when `archive_after_days <= 0`. Failures
+        are logged and swallowed — one stale issue should not break the tick.
+        """
+        if cfg.tracker.archive_after_days <= 0:
+            return
+        try:
+            terminal_issues = await asyncio.to_thread(
+                self._tracker_call_terminal_issues, cfg
+            )
+        except Exception as exc:
+            log.warning("archive_sweep_fetch_failed", error=str(exc))
+            return
+        stale = select_archivable(
+            terminal_issues,
+            terminal_states=cfg.tracker.terminal_states,
+            archive_state=cfg.tracker.archive_state,
+            archive_after_days=cfg.tracker.archive_after_days,
+        )
+        for issue in stale:
+            try:
+                await asyncio.to_thread(
+                    self._tracker_call_update_state,
+                    cfg,
+                    issue,
+                    cfg.tracker.archive_state,
+                )
+                log.info(
+                    "archive_sweep_moved",
+                    identifier=issue.identifier,
+                    target=cfg.tracker.archive_state,
+                )
+            except Exception as exc:
+                log.warning(
+                    "archive_sweep_update_failed",
+                    identifier=issue.identifier,
+                    error=str(exc),
+                )
+
+    @staticmethod
+    def _tracker_call_update_state(
+        cfg: ServiceConfig, issue: Issue, target_state: str
+    ) -> None:
+        client = build_tracker_client(cfg)
+        try:
+            client.update_state(issue, target_state)
+        finally:
+            client.close()
 
     # ------------------------------------------------------------------
     # candidate selection (§8.2)

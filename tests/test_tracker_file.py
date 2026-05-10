@@ -172,6 +172,31 @@ def test_create_and_transition_round_trip(tmp_path):
     assert fbt.find_path("X-2") == odd
 
 
+def test_update_state_protocol_hook(tmp_path):
+    """`update_state` is the TrackerClient mutation surface — proxies to transition."""
+    from symphony.issue import Issue
+
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="X-9", title="t", state="Done")
+    issue = issue_from_file(path)
+    assert issue is not None
+    # Pass an Issue object — adapter pulls `identifier` itself.
+    fbt.update_state(
+        Issue(
+            id=issue.id,
+            identifier="X-9",
+            title="t",
+            description=None,
+            priority=None,
+            state="Done",
+        ),
+        "Archive",
+    )
+    after = issue_from_file(path)
+    assert after is not None and after.state == "Archive"
+
+
 def test_serialize_round_trip(tmp_path):
     front = {"id": "X-1", "title": "t", "state": "Todo", "priority": 1}
     body = "hello"

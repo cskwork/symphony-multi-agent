@@ -308,6 +308,10 @@ class FileBoardTracker:
         write_ticket_atomic(path, front, body)
         return path
 
+    def update_state(self, issue: Issue, target_state: str) -> None:
+        """TrackerClient protocol mutation hook (delegates to `transition`)."""
+        self.transition(issue.identifier, target_state)
+
     def create(
         self,
         *,

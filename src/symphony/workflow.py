@@ -28,7 +28,7 @@ LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql"
 LINEAR_API_KEY_ENV = "LINEAR_API_KEY"
 
 DEFAULT_ACTIVE_STATES = ("Todo", "In Progress")
-DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
+DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Archive")
 DEFAULT_BOARD_ROOT_NAME = "board"
 DEFAULT_POLL_INTERVAL_MS = 30_000
 DEFAULT_HOOK_TIMEOUT_MS = 60_000
@@ -176,6 +176,13 @@ class TrackerConfig:
     # active_states / terminal_states); values are short human-readable
     # explanations of what work happens in that lane.
     state_descriptions: dict[str, str] = field(default_factory=dict)
+    # Auto-archive sweep — every poll tick, terminal-state issues whose
+    # `updated_at` is older than `archive_after_days` get moved to the
+    # `archive_state` lane. Set `archive_after_days` to 0 to disable
+    # sweep entirely (the manual TUI hotkey still works). The `archive_state`
+    # name must also appear in `terminal_states` so the lane renders.
+    archive_state: str = "Archive"
+    archive_after_days: int = 30
 
 
 @dataclass(frozen=True)
@@ -420,6 +427,31 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     else:
         board_path = (base_dir / DEFAULT_BOARD_ROOT_NAME).resolve() if tracker_kind == "file" else None
 
+    archive_after_raw = tracker_raw.get("archive_after_days")
+    if archive_after_raw is None:
+        archive_after_days = 30
+    elif isinstance(archive_after_raw, bool) or not isinstance(archive_after_raw, int):
+        # Reject bools (which `int` accepts) and non-int types up front so
+        # `archive_after_days: true` doesn't silently mean 1 day.
+        raise ConfigValidationError(
+            "tracker.archive_after_days must be a non-negative integer",
+            value=archive_after_raw,
+        )
+    elif archive_after_raw < 0:
+        raise ConfigValidationError(
+            "tracker.archive_after_days must be a non-negative integer",
+            value=archive_after_raw,
+        )
+    else:
+        archive_after_days = archive_after_raw
+
+    archive_state_raw = tracker_raw.get("archive_state")
+    archive_state = (
+        archive_state_raw.strip()
+        if isinstance(archive_state_raw, str) and archive_state_raw.strip()
+        else "Archive"
+    )
+
     tracker = TrackerConfig(
         kind=tracker_kind,
         endpoint=tracker_endpoint,
@@ -433,6 +465,8 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         state_descriptions=_normalize_state_description_map(
             tracker_raw.get("state_descriptions")
         ),
+        archive_state=archive_state,
+        archive_after_days=archive_after_days,
     )
 
     polling_raw = cfg.get("polling") or {}

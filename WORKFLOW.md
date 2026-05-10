@@ -3,7 +3,14 @@ tracker:
   kind: file
   board_root: ./kanban
   active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
-  terminal_states: [Done, Cancelled, Blocked]
+  terminal_states: [Done, Cancelled, Blocked, Archive]
+  # Auto-archive sweep: terminal-state issues whose `updated_at` is older
+  # than `archive_after_days` move to `archive_state` on the next poll.
+  # Set `archive_after_days: 0` to disable the sweep (manual `a` hotkey
+  # in the TUI still works). 30 days is a safe default — rerunning a
+  # ticket or adding a comment resets the clock.
+  archive_state: Archive
+  archive_after_days: 30
   state_descriptions:
     Todo: "Triage; route to Explore"
     Explore: "Brief from llm-wiki + git + code"
@@ -12,6 +19,7 @@ tracker:
     QA: "pytest -q + real-CLI smoke"
     Learn: "Distill learnings, update llm-wiki"
     Done: "As-Is -> To-Be report"
+    Archive: "Auto-archived after 30 days idle"
 
 polling:
   interval_ms: 30000
