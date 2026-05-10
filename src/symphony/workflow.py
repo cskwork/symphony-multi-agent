@@ -264,6 +264,14 @@ class TuiConfig:
     # user data and are never translated. Defaults to "en".
     language: str = "en"
 
+    # How many Kanban lanes show simultaneously in the board. The remaining
+    # lanes are paged off-screen — `t` cycles to the next window of lanes,
+    # `shift+t` to the previous, `+`/`-` grow/shrink the window at runtime.
+    # Default 5 keeps each card column wide enough to read on a 120-col
+    # terminal even with the default detail pane visible. The TUI clamps
+    # values <1 up to 1 so a malformed config doesn't blank the board.
+    visible_lanes: int = 5
+
 
 @dataclass(frozen=True)
 class ServiceConfig:
@@ -583,7 +591,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     from .i18n import resolve_language
     # SYMPHONY_LANG env var takes precedence over WORKFLOW.md so a single
     # operator can flip without editing the shared workflow file.
-    tui = TuiConfig(language=resolve_language(tui_raw.get("language")))
+    # `_as_int(..., allow_zero=False)` rejects 0/negative as invalid → falls
+    # back to default 5. Belt-and-suspenders `max(1, ...)` covers the case
+    # where a user sets `visible_lanes: 0` deliberately and the helper still
+    # returns it through the allow_zero path elsewhere.
+    visible_lanes = max(1, _as_int(tui_raw.get("visible_lanes"), 5, allow_zero=False))
+    tui = TuiConfig(
+        language=resolve_language(tui_raw.get("language")),
+        visible_lanes=visible_lanes,
+    )
 
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
 

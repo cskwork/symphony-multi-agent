@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Static
@@ -231,19 +231,37 @@ class IssueCard(Static):
         height: auto;
         min-height: 3;
     }
+    IssueCard.-compact {
+        margin-bottom: 0;
+        min-height: 1;
+        padding: 0 1;
+        border: none;
+    }
     IssueCard:focus { border: round $accent; background: $boost; }
+    IssueCard.-compact:focus { background: $boost; border: none; }
     IssueCard.-running { border: round green; }
     IssueCard.-retrying { border: round yellow; }
     IssueCard.-completed { border: round $success-darken-1; color: $text-muted; }
+    IssueCard.-compact.-running { color: green; border: none; }
+    IssueCard.-compact.-retrying { color: yellow; border: none; }
+    IssueCard.-compact.-completed { color: $text-muted; border: none; }
     """
 
     can_focus = True
 
-    def __init__(self, issue: Issue, status: _CardStatus, language: str) -> None:
+    def __init__(
+        self,
+        issue: Issue,
+        status: _CardStatus,
+        language: str,
+        *,
+        density: str = DENSITY_RICH,
+    ) -> None:
         super().__init__("")
         self._issue = issue
         self._status = status
         self._language = language
+        self._density = density
         self.id = f"card-{_safe_id(issue.id)}"
         self._refresh_body()
 
@@ -255,17 +273,59 @@ class IssueCard(Static):
     def status(self) -> _CardStatus:
         return self._status
 
+    @property
+    def density(self) -> str:
+        return self._density
+
     def update_status(self, status: _CardStatus) -> None:
         self._status = status
         self._refresh_body()
 
+    def set_density(self, density: str) -> None:
+        if density == self._density:
+            return
+        self._density = density
+        self._refresh_body()
+
     def _refresh_body(self) -> None:
         self.set_classes("")  # reset variant classes
+        if self._density == DENSITY_COMPACT:
+            self.add_class("-compact")
         if self._status.runtime in ("running", "retrying", "completed"):
             self.add_class(f"-{self._status.runtime}")
         self.update(self._render_body())
 
     def _render_body(self) -> Text:
+        if self._density == DENSITY_COMPACT:
+            return self._render_compact()
+        return self._render_rich()
+
+    def _render_compact(self) -> Text:
+        """One-line summary for dense boards: ID • badge • title • tokens."""
+        issue = self._issue
+        status = self._status
+        color = STATE_COLOR.get(normalize_state(issue.state), "white")
+        line = Text()
+        line.append(issue.identifier, style=f"bold {color}")
+        if status.runtime == "running":
+            line.append(" ●", style="bold green")
+        elif status.runtime == "retrying":
+            line.append(" ↻", style="bold yellow")
+        elif status.runtime == "completed":
+            line.append(" ✓", style="bold green")
+        if issue.priority:
+            line.append(f" P{issue.priority}", style="bright_red bold")
+        line.append("  ")
+        line.append(_truncate(issue.title or "", 60), style="white")
+        if status.runtime == "running":
+            silent_s = _silent_seconds(status.last_event_at)
+            if silent_s is not None and silent_s >= SILENT_THRESHOLD_S:
+                line.append(f"  silent {int(silent_s)}s", style="bold yellow")
+        if status.tokens:
+            line.append(f"  {status.tokens:,}t", style="dim cyan")
+        return line
+
+    def _render_rich(self) -> Text:
         issue = self._issue
         status = self._status
         language = self._language
@@ -351,6 +411,9 @@ class Lane(Vertical):
         padding: 0 1;
     }
     Lane.-active { border: round $accent; }
+    Lane.-empty { border: round $surface-darken-1; color: $text-muted; }
+    Lane.-zoomed { border: round $accent; }
+    Lane.-terminal { border: round $surface-darken-1; }
     Lane > .lane-title { height: 1; text-style: bold; }
     Lane > .lane-legend { height: auto; color: $text-muted; text-style: italic; }
     Lane > VerticalScroll { height: 1fr; }
@@ -368,10 +431,19 @@ class Lane(Vertical):
         self._scroll = VerticalScroll()
         self.id = f"lane-{_safe_id(state_label)}"
         self.border_title = state_label
+        self._card_count = 0
 
     @property
     def state_label(self) -> str:
         return self._state_label
+
+    @property
+    def card_count(self) -> int:
+        return self._card_count
+
+    @property
+    def is_empty(self) -> bool:
+        return self._card_count == 0
 
     def compose(self) -> ComposeResult:
         yield self._title
@@ -380,6 +452,7 @@ class Lane(Vertical):
         yield self._scroll
 
     def set_count(self, count: int) -> None:
+        self._card_count = count
         self._title.update(Text(f"{self._state_label} ({count})", style=f"bold {self._color}"))
         self.border_title = f"{self._state_label} ({count})"
 
@@ -388,6 +461,8 @@ class Lane(Vertical):
         cards: list[tuple[Issue, _CardStatus]],
         empty_text: str,
         language: str,
+        *,
+        density: str = DENSITY_RICH,
     ) -> None:
         # Diff against existing widgets so we never tear down a card the user
         # is interacting with (focus / scroll position). `remove_children()`
@@ -410,8 +485,9 @@ class Lane(Vertical):
             existing_card = existing.pop(card_id, None)
             if existing_card is not None:
                 existing_card.update_status(status)
+                existing_card.set_density(density)
                 continue
-            self._scroll.mount(IssueCard(issue, status, language))
+            self._scroll.mount(IssueCard(issue, status, language, density=density))
         # Stale cards (issue moved to another lane / closed) get removed.
         for stale_id, stale_card in existing.items():
             if stale_id not in wanted_ids:
@@ -456,6 +532,128 @@ class StatsBar(Static):
             line.append(f"  │  {t('footer.rate_limits', lang)}", style="dim")
             line.append(_compact_rate_limits(rl), style="yellow")
         self.update(line)
+
+
+# ---------------------------------------------------------------------------
+# Inline detail pane + filter bar
+# ---------------------------------------------------------------------------
+
+
+class DetailPane(Vertical):
+    """Right-side pane mirroring the focused IssueCard.
+
+    Lives next to `#board` inside `#main`. Toggled with `p`. Width collapses to
+    `0` (display: none) when hidden so it does not steal lane width — this is
+    the cheap operator-mode that lets cards stay one-line in `#board` while
+    the full description / last_message / token block lives over here.
+    """
+
+    DEFAULT_CSS = """
+    DetailPane {
+        width: 0;
+        display: none;
+        border: round $accent;
+        padding: 0 1;
+    }
+    DetailPane.-visible {
+        width: 60;
+        display: block;
+    }
+    DetailPane > #detail-title { height: auto; text-style: bold; }
+    DetailPane > #detail-meta { height: auto; color: $text-muted; margin-bottom: 1; }
+    DetailPane > VerticalScroll { height: 1fr; }
+    """
+
+    def __init__(self) -> None:
+        super().__init__(id="detail-pane")
+        self._title = Static("", id="detail-title")
+        self._meta = Static("", id="detail-meta")
+        self._body = Static("", id="detail-body")
+        self._scroll = VerticalScroll()
+
+    def compose(self) -> ComposeResult:
+        yield self._title
+        yield self._meta
+        with self._scroll:
+            yield self._body
+
+    def set_visible(self, visible: bool) -> None:
+        if visible:
+            self.add_class("-visible")
+        else:
+            self.remove_class("-visible")
+
+    @property
+    def is_open(self) -> bool:
+        return self.has_class("-visible")
+
+    def show_for(self, issue: Issue, status: _CardStatus) -> None:
+        color = STATE_COLOR.get(normalize_state(issue.state), "white")
+        title = Text(issue.identifier, style=f"bold {color}")
+        if issue.title:
+            title.append(f"  {issue.title}", style="white")
+        self._title.update(title)
+
+        meta = Text()
+        meta.append(f"state={issue.state}", style="dim")
+        if issue.priority:
+            meta.append(f"  P{issue.priority}", style="bright_red bold")
+        if issue.labels:
+            meta.append("  " + " ".join(f"#{l}" for l in issue.labels), style="dim")
+        if status.runtime != "idle":
+            meta.append(f"\nruntime={status.runtime}", style="green")
+            if status.turn:
+                meta.append(f"  turn={status.turn}", style="dim")
+            if status.attempt:
+                meta.append(f"  retry#{status.attempt}", style="yellow")
+            if status.error:
+                meta.append(f"\nerror: {status.error}", style="red")
+        if status.tokens or status.input_tokens or status.output_tokens:
+            meta.append("\n")
+            _append_token_meta(meta, status, dim=False)
+        self._meta.update(meta)
+
+        body = issue.description or "(no description)"
+        if status.last_message:
+            body = f"{body}\n\n— last message —\n{status.last_message}"
+        self._body.update(body)
+
+    def show_placeholder(self) -> None:
+        self._title.update(Text("(no card focused)", style="dim italic"))
+        self._meta.update("")
+        self._body.update("Press p to hide this pane, or focus a card.")
+
+
+class FilterBar(Container):
+    """One-line filter prompt above the footer. Hidden until `/` is pressed."""
+
+    DEFAULT_CSS = """
+    FilterBar {
+        height: 0;
+        display: none;
+    }
+    FilterBar.-visible { height: 3; display: block; }
+    FilterBar > Input { height: 3; }
+    """
+
+    def __init__(self) -> None:
+        super().__init__(id="filter-bar")
+
+    def compose(self) -> ComposeResult:
+        yield Input(
+            placeholder="filter: type to match identifier/title/labels — esc to clear",
+            id="filter-input",
+        )
+
+    def set_visible(self, visible: bool) -> None:
+        if visible:
+            self.add_class("-visible")
+        else:
+            self.remove_class("-visible")
+
+    @property
+    def is_open(self) -> bool:
+        return self.has_class("-visible")
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +732,8 @@ class KanbanApp(App):
 
     CSS = """
     Screen { background: $background; }
-    #board { layout: horizontal; height: 1fr; padding: 0 1; }
+    #main { layout: horizontal; height: 1fr; padding: 0 1; }
+    #board { layout: horizontal; height: 1fr; width: 1fr; }
     """
 
     BINDINGS = [
@@ -550,6 +749,28 @@ class KanbanApp(App):
         Binding("space,pagedown", "page_down", "Page down", show=False),
         Binding("b,pageup", "page_up", "Page up", show=False),
         Binding("enter", "open_details", "Details"),
+        # Iter1: Focus zoom — digits 1..9 zoom that lane to 3fr (others 0.4fr).
+        # `0` resets. Escape also resets a zoom (and closes filter if open).
+        Binding("1", "zoom_lane(0)", show=False),
+        Binding("2", "zoom_lane(1)", show=False),
+        Binding("3", "zoom_lane(2)", show=False),
+        Binding("4", "zoom_lane(3)", show=False),
+        Binding("5", "zoom_lane(4)", show=False),
+        Binding("6", "zoom_lane(5)", show=False),
+        Binding("7", "zoom_lane(6)", show=False),
+        Binding("8", "zoom_lane(7)", show=False),
+        Binding("9", "zoom_lane(8)", show=False),
+        Binding("0", "reset_zoom", "Reset zoom", show=False),
+        # Lane window pagination — show N lanes at a time, page through the rest.
+        # `t` advances; `T` (shift+t) goes back. `+` / `-` resize the window.
+        Binding("t", "next_page", "Next lanes"),
+        Binding("T", "prev_page", "Prev lanes", show=False),
+        Binding("plus,equals_sign", "grow_window", "Wider", show=False),
+        Binding("minus", "shrink_window", "Narrower", show=False),
+        Binding("d", "toggle_density", "Density"),
+        Binding("p", "toggle_detail", "Detail pane"),
+        Binding("slash", "open_filter", "Filter"),
+        Binding("escape", "escape", "Close filter / zoom", show=False),
     ]
 
     def __init__(
@@ -563,7 +784,31 @@ class KanbanApp(App):
         self._candidates: list[Issue] = []
         self._terminal_issues: list[Issue] = []
         self._lanes: dict[str, Lane] = {}
+        # Lane keys in the order they were composed. Used by digit zoom — index
+        # `i` lights up `_lane_order[i]`.
+        self._lane_order: list[str] = []
+        # Set of normalized terminal state keys (Done, Closed, Cancelled, ...).
+        self._terminal_keys: set[str] = set()
         self._tracker_lock = asyncio.Lock()
+        # UX state.
+        self._zoomed_lane: str | None = None
+        # Compact density default — one-line cards keep many lanes scannable
+        # at once. Press `d` to flip to the multi-line rich layout.
+        self._density: str = DENSITY_COMPACT
+        # Detail pane is default-on so the focused card always has a place
+        # to spread out — keeps each lane card terse without losing detail.
+        self._detail_visible: bool = True
+        self._filter_query: str = ""
+        # Lane window pagination — show `_window_size` consecutive lanes
+        # starting at index `_window_start`. `t` advances by a full page,
+        # `+`/`-` adjust the window size at runtime. Initial size comes from
+        # `tui.visible_lanes` in WORKFLOW.md (default 5).
+        cfg = self._ws.current()
+        self._window_size: int = cfg.tui.visible_lanes if cfg else 5
+        self._window_start: int = 0
+        # Cache the last-rendered focused card so we don't re-render the
+        # detail pane every 0.5 s heartbeat unless focus actually moved.
+        self._last_focused_card_id: str | None = None
 
     # ----- composition -------------------------------------------------
 
@@ -571,15 +816,26 @@ class KanbanApp(App):
         yield Header(show_clock=True)
         yield StatsBar(id="stats")
         cfg = self._ws.current()
-        with Container(id="board"):
-            ordered = _ordered_column_states(cfg) if cfg else []
-            descriptions = cfg.tracker.state_descriptions if cfg else {}
-            for state_label in ordered:
-                key = normalize_state(state_label)
-                color = STATE_COLOR.get(key, "white")
-                lane = Lane(state_label, color, descriptions.get(key))
-                self._lanes[key] = lane
-                yield lane
+        terminal_states = set(cfg.tracker.terminal_states) if cfg else set()
+        self._terminal_keys = {normalize_state(s) for s in terminal_states}
+        with Container(id="main"):
+            with Container(id="board"):
+                ordered = _ordered_column_states(cfg) if cfg else []
+                descriptions = cfg.tracker.state_descriptions if cfg else {}
+                for state_label in ordered:
+                    key = normalize_state(state_label)
+                    color = STATE_COLOR.get(key, "white")
+                    lane = Lane(state_label, color, descriptions.get(key))
+                    if key in self._terminal_keys:
+                        lane.add_class("-terminal")
+                    self._lanes[key] = lane
+                    self._lane_order.append(key)
+                    yield lane
+            pane = DetailPane()
+            # Detail pane is on by default — toggle with `p`.
+            pane.set_visible(self._detail_visible)
+            yield pane
+        yield FilterBar()
         yield Footer()
 
     # ----- lifecycle ---------------------------------------------------
@@ -649,6 +905,14 @@ class KanbanApp(App):
             key = normalize_state(issue.state)
             if key in issues_by_state:
                 issues_by_state[key].append(issue)
+        # Apply substring filter — empty query is a no-op so the hot path stays
+        # identical to the unfiltered branch.
+        if self._filter_query:
+            q = self._filter_query
+            for key in list(issues_by_state.keys()):
+                issues_by_state[key] = [
+                    i for i in issues_by_state[key] if _matches_filter(i, q)
+                ]
         empty_text = t("column.empty", cfg.tui.language)
         for key, lane in self._lanes.items():
             issues = sorted(issues_by_state.get(key, []), key=_card_sort_key)
@@ -657,7 +921,13 @@ class KanbanApp(App):
                 (issue, runtime_index.get(issue.id, _CardStatus()))
                 for issue in issues
             ]
-            lane.render_cards(cards, empty_text, cfg.tui.language)
+            lane.render_cards(
+                cards, empty_text, cfg.tui.language, density=self._density
+            )
+        # Lane widths depend on counts (empty → dim) and on user state
+        # (zoom / show_terminals), so re-apply after counts settle.
+        self._apply_lane_widths()
+        self._refresh_detail_pane()
 
     def _all_known_issues(self) -> Iterable[Issue]:
         seen: set[str] = set()
@@ -682,17 +952,267 @@ class KanbanApp(App):
     def action_help(self) -> None:
         cfg = self._ws.current()
         lang = cfg.tui.language if cfg else "en"
+        page = self._current_page_index() + 1
+        total_pages = self._page_count()
         msg = (
             "q quit · r refresh · enter details · "
-            "tab/shift-tab focus · j/k or ↑/↓ scroll · g/G top/bottom · "
+            "1-9 zoom lane · 0/esc reset · "
+            f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
+            "d density · p detail-pane · / filter · "
+            "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
-        self.notify(msg, timeout=6)
+        self.notify(msg, timeout=8)
 
     def action_open_details(self) -> None:
         focused = self.focused
         if isinstance(focused, IssueCard):
             focused.open_details()
+
+    # ----- Iter1: focus zoom + empty lane collapse ---------------------
+
+    def action_zoom_lane(self, idx: int) -> None:
+        # `idx` is 0-based within the *current* window — pressing `1` always
+        # zooms the leftmost visible lane regardless of pagination.
+        window = sorted(self._window_indices())
+        if idx < 0 or idx >= len(window):
+            return
+        target = self._lane_order[window[idx]]
+        if self._zoomed_lane == target:
+            self._zoomed_lane = None
+        else:
+            self._zoomed_lane = target
+        self._apply_lane_widths()
+
+    def action_reset_zoom(self) -> None:
+        if self._zoomed_lane is None:
+            return
+        self._zoomed_lane = None
+        self._apply_lane_widths()
+
+    def _apply_lane_widths(self) -> None:
+        """Single source of truth for lane sizing + visibility.
+
+        Priority order (top wins):
+            1. Outside the current window → `display: none` (paged off-screen).
+            2. Zoom — the zoomed lane gets `LANE_WIDTH_ZOOMED`, others dim.
+            3. Empty lane — narrow + `.-empty` class for muted styling.
+            4. Terminal lane — narrow (Done/Closed are reference, not workspace).
+            5. Default — `LANE_WIDTH_NORMAL`.
+        """
+        window = self._window_indices()
+        for idx, lane_key in enumerate(self._lane_order):
+            lane = self._lanes[lane_key]
+            is_terminal = lane_key in self._terminal_keys
+            lane.remove_class("-zoomed")
+            lane.remove_class("-empty")
+
+            if idx not in window:
+                # Paged off-screen — hide entirely so visible lanes get the
+                # full width allocation.
+                lane.display = False
+                continue
+            lane.display = True
+
+            if self._zoomed_lane is not None:
+                if lane_key == self._zoomed_lane:
+                    lane.styles.width = LANE_WIDTH_ZOOMED
+                    lane.add_class("-zoomed")
+                else:
+                    lane.styles.width = LANE_WIDTH_DIM
+                continue
+
+            if lane.is_empty:
+                lane.styles.width = LANE_WIDTH_DIM
+                lane.add_class("-empty")
+            elif is_terminal:
+                lane.styles.width = LANE_WIDTH_DIM
+            else:
+                lane.styles.width = LANE_WIDTH_NORMAL
+
+    def _window_indices(self) -> set[int]:
+        """Indices of lanes currently visible in the lane window.
+
+        Honors partial trailing pages — if `total=8, size=5`, page 1 shows
+        indices {5, 6, 7} (3 lanes), not {3, 4, 5, 6, 7}. Snapping back to
+        a full window would force the user to re-see lanes they already saw.
+        """
+        total = len(self._lane_order)
+        if total == 0:
+            return set()
+        size = max(1, self._window_size)
+        if self._window_start < 0 or self._window_start >= total:
+            # Wrapped or invalidated → reset to the start.
+            self._window_start = 0
+        end = min(total, self._window_start + size)
+        return set(range(self._window_start, end))
+
+    def _page_count(self) -> int:
+        total = len(self._lane_order)
+        if total == 0:
+            return 1
+        size = max(1, self._window_size)
+        # Ceil division — a partial last page still counts as a page.
+        return (total + size - 1) // size
+
+    def _current_page_index(self) -> int:
+        size = max(1, self._window_size)
+        return self._window_start // size
+
+    # ----- lane window pagination -------------------------------------
+
+    def action_next_page(self) -> None:
+        """Slide the lane window forward one full page (wraps to 0)."""
+        total = len(self._lane_order)
+        if total == 0:
+            return
+        size = max(1, self._window_size)
+        next_start = self._window_start + size
+        if next_start >= total:
+            next_start = 0
+        self._window_start = next_start
+        # Zoom is bound to a specific lane; if that lane just paged off,
+        # clear zoom so we don't show "lane is zoomed but invisible" state.
+        if self._zoomed_lane is not None and self._lanes[self._zoomed_lane].display is False:
+            self._zoomed_lane = None
+        self._apply_lane_widths()
+        self._notify_page()
+
+    def action_prev_page(self) -> None:
+        total = len(self._lane_order)
+        if total == 0:
+            return
+        size = max(1, self._window_size)
+        if self._window_start == 0:
+            # Wrap to the last page on a page-aligned boundary.
+            last_page_start = ((total - 1) // size) * size
+            self._window_start = max(0, last_page_start)
+        else:
+            self._window_start = max(0, self._window_start - size)
+        if self._zoomed_lane is not None and self._lanes[self._zoomed_lane].display is False:
+            self._zoomed_lane = None
+        self._apply_lane_widths()
+        self._notify_page()
+
+    def action_grow_window(self) -> None:
+        if self._window_size >= len(self._lane_order):
+            return
+        self._window_size += 1
+        self._apply_lane_widths()
+        self._notify_page(prefix="window")
+
+    def action_shrink_window(self) -> None:
+        if self._window_size <= 1:
+            return
+        self._window_size -= 1
+        self._apply_lane_widths()
+        self._notify_page(prefix="window")
+
+    def _notify_page(self, *, prefix: str = "page") -> None:
+        page = self._current_page_index() + 1
+        total_pages = self._page_count()
+        size = self._window_size
+        self.notify(
+            f"{prefix} {page}/{total_pages}  ({size} lanes/page)",
+            timeout=2,
+        )
+
+    # ----- card density -----------------------------------------------
+
+    def action_toggle_density(self) -> None:
+        self._density = (
+            DENSITY_COMPACT if self._density == DENSITY_RICH else DENSITY_RICH
+        )
+        # Cards re-render through the next _refresh_runtime tick; trigger one
+        # immediately so the keystroke feels instant.
+        self._refresh_runtime()
+        self.notify(f"density: {self._density}", timeout=2)
+
+    # ----- Iter3: detail pane + filter --------------------------------
+
+    def action_toggle_detail(self) -> None:
+        self._detail_visible = not self._detail_visible
+        pane = self.query_one(DetailPane)
+        pane.set_visible(self._detail_visible)
+        self._last_focused_card_id = None  # force a refresh
+        self._refresh_detail_pane()
+
+    def _refresh_detail_pane(self) -> None:
+        if not self._detail_visible:
+            return
+        try:
+            pane = self.query_one(DetailPane)
+        except Exception:
+            return
+        focused = self.focused
+        if isinstance(focused, IssueCard):
+            if focused.id == self._last_focused_card_id:
+                # Still update content so live runtime fields (turn count,
+                # tokens, last_message) stay current as the orchestrator ticks.
+                pass
+            self._last_focused_card_id = focused.id
+            pane.show_for(focused.issue, focused.status)
+        else:
+            if self._last_focused_card_id is not None:
+                self._last_focused_card_id = None
+                pane.show_placeholder()
+
+    def action_open_filter(self) -> None:
+        bar = self.query_one(FilterBar)
+        bar.set_visible(True)
+        try:
+            inp = bar.query_one("#filter-input", Input)
+        except Exception:
+            return
+        inp.focus()
+
+    def action_escape(self) -> None:
+        # Esc cascades — if filter is open, close it; else if zoomed, unzoom.
+        bar = self.query_one(FilterBar)
+        if bar.is_open:
+            self._close_filter()
+            return
+        if self._zoomed_lane is not None:
+            self._zoomed_lane = None
+            self._apply_lane_widths()
+
+    def _close_filter(self) -> None:
+        bar = self.query_one(FilterBar)
+        try:
+            inp = bar.query_one("#filter-input", Input)
+            inp.value = ""
+        except Exception:
+            pass
+        bar.set_visible(False)
+        self._filter_query = ""
+        self._refresh_runtime()
+        # Move focus back to the first non-empty visible lane so j/k still work.
+        for lane in self._lanes.values():
+            if lane.display and not lane.is_empty:
+                lane.focus()
+                break
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if getattr(event.input, "id", "") != "filter-input":
+            return
+        self._filter_query = (event.value or "").strip().lower()
+        self._refresh_runtime()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if getattr(event.input, "id", "") != "filter-input":
+            return
+        # Enter: keep filter active, but move focus back to the board so
+        # arrow keys / digits work again.
+        for lane in self._lanes.values():
+            if lane.display and not lane.is_empty:
+                lane.focus()
+                break
+
+    def on_descendant_focus(self, event: Any) -> None:
+        # Whenever focus lands on a different IssueCard, update the detail
+        # pane. Cheaper than polling self.focused on every heartbeat tick.
+        del event
+        self._refresh_detail_pane()
 
     def action_scroll_down(self) -> None:
         self._scroll_focused(1)
@@ -799,3 +1319,21 @@ def _safe_id(value: str) -> str:
     """Coerce arbitrary tracker IDs into Textual-safe widget IDs."""
     out = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in value)
     return out or "unnamed"
+
+
+def _matches_filter(issue: Issue, query: str) -> bool:
+    """Case-insensitive substring match against identifier / title / labels.
+
+    `query` must already be lowercased by the caller — saving the .lower() per
+    candidate keeps the per-tick filter cheap when the board has many cards.
+    """
+    if not query:
+        return True
+    if query in (issue.identifier or "").lower():
+        return True
+    if query in (issue.title or "").lower():
+        return True
+    for label in issue.labels or ():
+        if query in (label or "").lower():
+            return True
+    return False

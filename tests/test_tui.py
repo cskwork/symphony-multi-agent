@@ -24,9 +24,16 @@ import pytest
 
 from symphony.issue import Issue
 from symphony.tui import (
+    DENSITY_COMPACT,
+    DENSITY_RICH,
+    LANE_WIDTH_DIM,
+    LANE_WIDTH_NORMAL,
+    LANE_WIDTH_ZOOMED,
     SILENT_THRESHOLD_S,
     AGENT_COLOR,
     STATE_COLOR,
+    DetailPane,
+    FilterBar,
     IssueCard,
     KanbanApp,
     KanbanTUI,
@@ -38,6 +45,7 @@ from symphony.tui import (
     _card_sort_key,
     _compact_rate_limits,
     _first_meaningful_line,
+    _matches_filter,
     _ordered_column_states,
     _parse_iso,
     _silent_seconds,
@@ -103,6 +111,7 @@ def _make_config(
     terminal_states: tuple[str, ...] = ("Done",),
     state_descriptions: dict[str, str] | None = None,
     language: str = "en",
+    visible_lanes: int = 5,
 ) -> ServiceConfig:
     return ServiceConfig(
         workflow_path=Path("/tmp/WORKFLOW.md"),
@@ -155,7 +164,7 @@ def _make_config(
             resume_across_turns=True,
         ),
         server=ServerConfig(port=None),
-        tui=TuiConfig(language=language),
+        tui=TuiConfig(language=language, visible_lanes=visible_lanes),
         prompt_template="hi",
     )
 
@@ -432,3 +441,261 @@ def test_kanban_tui_wrapper_constructs() -> None:
     tui = KanbanTUI(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
     assert tui._app is None  # noqa: SLF001
     tui.request_stop()  # no-op before run() — must not raise
+
+
+# ---------------------------------------------------------------------------
+# Iter1 — focus zoom + empty lane collapse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_lanes_auto_dim(monkeypatch: Any) -> None:
+    """Empty lanes get LANE_WIDTH_DIM + .-empty class without any keystroke."""
+    cfg = _make_config(active_states=("Todo", "In Progress"), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1", state="Todo")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        lanes = {lane.state_label: lane for lane in app.query(Lane)}
+        # In Progress has no cards → dim class + dim width.
+        assert lanes["In Progress"].has_class("-empty")
+        assert lanes["In Progress"].styles.width is not None
+        assert str(lanes["In Progress"].styles.width) == LANE_WIDTH_DIM
+        # Todo has a card → normal width, no .-empty class.
+        assert not lanes["Todo"].has_class("-empty")
+        assert str(lanes["Todo"].styles.width) == LANE_WIDTH_NORMAL
+
+
+@pytest.mark.asyncio
+async def test_digit_zooms_lane_and_zero_resets(monkeypatch: Any) -> None:
+    cfg = _make_config(active_states=("Todo", "In Progress"), terminal_states=("Done",))
+    _stub_tracker(
+        monkeypatch,
+        [_issue("SMA-1"), _issue("SMA-2", state="In Progress")],
+        [_issue("SMA-9", state="Done")],
+    )
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        await pilot.press("2")  # zoom lane index 1 = "In Progress"
+        await pilot.pause()
+        lanes = {lane.state_label: lane for lane in app.query(Lane)}
+        assert lanes["In Progress"].has_class("-zoomed")
+        assert str(lanes["In Progress"].styles.width) == LANE_WIDTH_ZOOMED
+        assert str(lanes["Todo"].styles.width) == LANE_WIDTH_DIM
+        await pilot.press("0")
+        await pilot.pause()
+        assert not lanes["In Progress"].has_class("-zoomed")
+        assert str(lanes["In Progress"].styles.width) == LANE_WIDTH_NORMAL
+
+
+# ---------------------------------------------------------------------------
+# Iter2 — lane window pagination + density toggle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_default_window_shows_first_n_lanes(monkeypatch: Any) -> None:
+    """Boards larger than the window should page later lanes off-screen."""
+    cfg = _make_config(
+        active_states=("S1", "S2", "S3", "S4", "S5", "S6", "S7"),
+        terminal_states=("Done",),
+        visible_lanes=5,
+    )
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        lanes = {lane.state_label: lane for lane in app.query(Lane)}
+        # First 5 visible.
+        assert lanes["S1"].display is True
+        assert lanes["S5"].display is True
+        # Lanes 6+ paged off.
+        assert lanes["S6"].display is False
+        assert lanes["S7"].display is False
+        assert lanes["Done"].display is False
+
+
+@pytest.mark.asyncio
+async def test_t_pages_through_lane_windows(monkeypatch: Any) -> None:
+    cfg = _make_config(
+        active_states=("S1", "S2", "S3", "S4", "S5", "S6", "S7"),
+        terminal_states=("Done",),
+        visible_lanes=5,
+    )
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        lanes = {lane.state_label: lane for lane in app.query(Lane)}
+        await pilot.press("t")
+        await pilot.pause()
+        # Window slid forward by 5 → S6, S7, Done are now visible (3 of 5).
+        assert lanes["S1"].display is False
+        assert lanes["S5"].display is False
+        assert lanes["S6"].display is True
+        assert lanes["S7"].display is True
+        assert lanes["Done"].display is True
+        # Wrap on next press.
+        await pilot.press("t")
+        await pilot.pause()
+        assert lanes["S1"].display is True
+        assert lanes["S6"].display is False
+
+
+@pytest.mark.asyncio
+async def test_plus_minus_resize_window(monkeypatch: Any) -> None:
+    cfg = _make_config(
+        active_states=("S1", "S2", "S3", "S4", "S5", "S6", "S7"),
+        terminal_states=(),
+        visible_lanes=3,
+    )
+    _stub_tracker(monkeypatch, [], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        lanes = {lane.state_label: lane for lane in app.query(Lane)}
+        # 3 visible to start.
+        assert sum(1 for lane in lanes.values() if lane.display is True) == 3
+        await pilot.press("plus")
+        await pilot.press("plus")
+        await pilot.pause()
+        assert sum(1 for lane in lanes.values() if lane.display is True) == 5
+        await pilot.press("minus")
+        await pilot.pause()
+        assert sum(1 for lane in lanes.values() if lane.display is True) == 4
+
+
+@pytest.mark.asyncio
+async def test_visible_lanes_config_clamps_to_positive() -> None:
+    """Negative or zero `tui.visible_lanes` should clamp to 1, not blank the board."""
+    from symphony.workflow import _as_int
+
+    assert max(1, _as_int(0, 5, allow_zero=False)) == 5
+    assert max(1, _as_int(-3, 5, allow_zero=False)) == 5
+    assert max(1, _as_int("nope", 5, allow_zero=False)) == 5
+    assert max(1, _as_int(7, 5, allow_zero=False)) == 7
+
+
+@pytest.mark.asyncio
+async def test_d_toggles_card_density(monkeypatch: Any) -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1", description="full body")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards
+        # Compact is the new default — first `d` press flips to rich.
+        assert all(c.density == DENSITY_COMPACT for c in cards)
+        assert any(c.has_class("-compact") for c in cards)
+        await pilot.press("d")
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert all(c.density == DENSITY_RICH for c in cards)
+        assert not any(c.has_class("-compact") for c in cards)
+
+
+# ---------------------------------------------------------------------------
+# Iter3 — detail pane + filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detail_pane_visible_by_default(monkeypatch: Any) -> None:
+    """The detail pane is on from the first frame so the focused card always
+    has a place to spread out."""
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1", description="hello")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        pane = app.query_one(DetailPane)
+        assert pane.is_open
+
+
+@pytest.mark.asyncio
+async def test_p_toggles_detail_pane(monkeypatch: Any) -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1", description="hello")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        pane = app.query_one(DetailPane)
+        # Default-on; first `p` closes, second re-opens.
+        assert pane.is_open
+        await pilot.press("p")
+        await pilot.pause()
+        assert not pane.is_open
+        await pilot.press("p")
+        await pilot.pause()
+        assert pane.is_open
+
+
+@pytest.mark.asyncio
+async def test_slash_opens_filter_and_filters_cards(monkeypatch: Any) -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(
+        monkeypatch,
+        [
+            _issue("SMA-1", title="alpha login bug"),
+            _issue("SMA-2", title="beta cache fix"),
+            _issue("SMA-3", title="gamma timeout"),
+        ],
+        [],
+    )
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        bar = app.query_one(FilterBar)
+        assert not bar.is_open
+        await pilot.press("slash")
+        await pilot.pause()
+        assert bar.is_open
+        # Type "cache" — only SMA-2 should remain in the lane.
+        for ch in "cache":
+            await pilot.press(ch)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert {c.issue.identifier for c in cards} == {"SMA-2"}
+        # Esc clears + closes.
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not bar.is_open
+        cards = list(app.query(IssueCard))
+        assert {c.issue.identifier for c in cards} == {"SMA-1", "SMA-2", "SMA-3"}
+
+
+def test_matches_filter_substring_on_id_title_labels() -> None:
+    issue = Issue(
+        id="x",
+        identifier="SMA-42",
+        title="Add gemini fallback",
+        description=None,
+        priority=None,
+        state="Todo",
+        labels=("backend", "ai"),
+    )
+    assert _matches_filter(issue, "")
+    assert _matches_filter(issue, "sma")
+    assert _matches_filter(issue, "gemini")
+    assert _matches_filter(issue, "backend")
+    assert not _matches_filter(issue, "frontend")
