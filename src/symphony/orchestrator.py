@@ -150,7 +150,7 @@ class Orchestrator:
             if err is not None or cfg is None:
                 raise err or SymphonyError("workflow not loaded")
         validate_for_dispatch(cfg)
-        self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks)
+        self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -322,7 +322,7 @@ class Orchestrator:
         # Apply hot-reloadable settings.
         if self._workspace_manager is not None and self._workspace_manager.root != cfg.workspace_root.resolve():
             log.info("workspace_root_changed", new=str(cfg.workspace_root))
-            self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks)
+            self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
         elif self._workspace_manager is not None:
             self._workspace_manager.update_hooks(cfg.hooks)
 

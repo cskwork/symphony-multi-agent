@@ -22,7 +22,15 @@ workspace:
 
 hooks:
   after_create: |
+    set -euo pipefail
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
     git clone --depth=1 git@github.com:my-org/my-repo.git .
+    # Symlink tracker-managed directories back to host so agent state
+    # transitions are visible to Symphony's FileBoardTracker.
+    for dir in kanban docs llm-wiki; do
+      rm -rf "$dir"
+      ln -s "$HOST_REPO/$dir" "$dir"
+    done
   before_run: |
     git fetch origin main
     git reset --hard origin/main
@@ -67,6 +75,7 @@ server:
 tui:
   language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
   max_cards_per_column: 6    # cap each column at N cards; rest collapses to "+M more"
+  lane_wrap_width: 200       # below N terminal columns, lay lanes across two rows; 0 disables
 ---
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.

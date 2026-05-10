@@ -67,9 +67,10 @@ class Workspace:
 class WorkspaceManager:
     """§9.1, §9.2 — sanitized per-issue workspace directories."""
 
-    def __init__(self, root: Path, hooks: HooksConfig) -> None:
+    def __init__(self, root: Path, hooks: HooksConfig, *, workflow_dir: Path | None = None) -> None:
         self._root = root.resolve()
         self._hooks = hooks
+        self._workflow_dir = workflow_dir
         self._root.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -170,7 +171,10 @@ class WorkspaceManager:
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
+            env={
+                **os.environ,
+                "SYMPHONY_WORKFLOW_DIR": str(self._workflow_dir) if self._workflow_dir else "",
+            },
         )
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)

@@ -119,3 +119,17 @@ def test_validate_agent_cwd_accepts_inside(tmp_path):
     inside = root / "MT-1"
     inside.mkdir()
     validate_agent_cwd(inside, root)
+
+
+@pytest.mark.asyncio
+async def test_workflow_dir_env_exported(tmp_path):
+    wf_dir = tmp_path / "host"
+    wf_dir.mkdir()
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        _hooks(after_create='echo "$SYMPHONY_WORKFLOW_DIR" > wfdir'),
+        workflow_dir=wf_dir,
+    )
+    ws = await mgr.create_or_reuse("MT-ENV")
+    content = (ws.path / "wfdir").read_text().strip()
+    assert content == str(wf_dir)

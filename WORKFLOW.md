@@ -30,7 +30,7 @@ hooks:
   after_create: |
     set -euo pipefail
     ISSUE_ID="$(basename "$PWD")"
-    HOST_REPO="/Users/danny/Documents/PARA/Resource/symphony-multi-agent"
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
     git clone --no-hardlinks "$HOST_REPO" .
     git checkout -b "symphony/${ISSUE_ID}"
     # Symlink shared directories back to host so agent edits are visible
