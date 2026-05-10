@@ -585,6 +585,13 @@ class DetailPane(Vertical):
         with self._scroll:
             yield self._body
 
+    @property
+    def scroll(self) -> VerticalScroll:
+        # Exposed so the App can `.focus()` the inner scroll directly — once
+        # focus lives there, `_focused_scroll` walks straight up to it and
+        # arrow / j / k / pgup / pgdn target the description body.
+        return self._scroll
+
     def set_visible(self, visible: bool) -> None:
         if visible:
             self.add_class("-visible")
@@ -777,6 +784,10 @@ class KanbanApp(App):
         Binding("minus", "shrink_window", "Narrower", show=False),
         Binding("d", "toggle_density", "Density"),
         Binding("p", "toggle_detail", "Detail pane"),
+        # `]` parks focus inside the detail pane so arrow / j / k / pgup / pgdn
+        # scroll the description body. `[` returns focus to the board.
+        Binding("right_square_bracket", "focus_detail", "Detail focus", show=False),
+        Binding("left_square_bracket", "focus_board", "Board focus", show=False),
         Binding("L", "toggle_language", "Language"),
         Binding("a", "archive_focused", "Archive"),
         Binding("slash", "open_filter", "Filter"),
@@ -975,7 +986,8 @@ class KanbanApp(App):
             "q quit · r refresh · enter details · "
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
-            "d density · p detail-pane · L language · a archive · / filter · "
+            "d density · p detail-pane · ]/[ focus detail/board · "
+            "L language · a archive · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -1246,16 +1258,65 @@ class KanbanApp(App):
             return
         focused = self.focused
         if isinstance(focused, IssueCard):
-            if focused.id == self._last_focused_card_id:
-                # Still update content so live runtime fields (turn count,
-                # tokens, last_message) stay current as the orchestrator ticks.
-                pass
+            # Live runtime fields (turn count, tokens, last_message) keep
+            # changing each tick, so we re-render even when the same card
+            # is still focused.
             self._last_focused_card_id = focused.id
             pane.show_for(focused.issue, focused.status)
-        else:
-            if self._last_focused_card_id is not None:
-                self._last_focused_card_id = None
-                pane.show_placeholder()
+            return
+        # Focus may have shifted INTO the pane itself (user pressed `]` to
+        # scroll the description). Keep showing the previously focused card
+        # — otherwise the pane would blank out the moment the user sat down
+        # in it. Live runtime fields still update by re-resolving the card.
+        if (
+            focused is not None
+            and self._last_focused_card_id is not None
+            and self._is_within_detail_pane(focused)
+        ):
+            card = self._find_card_by_id(self._last_focused_card_id)
+            if card is not None:
+                pane.show_for(card.issue, card.status)
+            return
+        if self._last_focused_card_id is not None:
+            self._last_focused_card_id = None
+            pane.show_placeholder()
+
+    @staticmethod
+    def _is_within_detail_pane(node: Any) -> bool:
+        cur: Any = node
+        while cur is not None:
+            if isinstance(cur, DetailPane):
+                return True
+            cur = getattr(cur, "parent", None)
+        return False
+
+    def _find_card_by_id(self, card_id: str) -> IssueCard | None:
+        try:
+            return self.query_one(f"#{card_id}", IssueCard)
+        except Exception:
+            return None
+
+    def action_focus_detail(self) -> None:
+        """Park focus inside the detail pane so arrow keys scroll its body."""
+        if not self._detail_visible:
+            self.notify("detail pane is hidden — press p to show", timeout=2)
+            return
+        try:
+            pane = self.query_one(DetailPane)
+        except Exception:
+            return
+        pane.scroll.focus()
+
+    def action_focus_board(self) -> None:
+        """Return focus to the first card in the first non-empty visible lane."""
+        for lane in self._lanes.values():
+            if not lane.display or lane.is_empty:
+                continue
+            for card in lane.query(IssueCard):
+                card.focus()
+                return
+            lane.focus()
+            return
 
     def action_open_filter(self) -> None:
         bar = self.query_one(FilterBar)
