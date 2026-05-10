@@ -831,20 +831,32 @@ class Orchestrator:
                 client_tools=tools,
             )
         )
-        await new_client.start()
-        await new_client.initialize()
-        first_prompt, _ = build_first_turn_prompt(
-            prompt_template=cfg.prompt_template,
-            issue=issue,
-            attempt=attempt,
-            language=doc_language,
-            max_turns=cfg.agent.max_turns,
-            is_rewind=is_rewind,
-        )
-        await new_client.start_session(
-            initial_prompt=first_prompt,
-            issue_title=f"{issue.identifier}: {issue.title}",
-        )
+        try:
+            await new_client.start()
+            await new_client.initialize()
+            first_prompt, _ = build_first_turn_prompt(
+                prompt_template=cfg.prompt_template,
+                issue=issue,
+                attempt=attempt,
+                language=doc_language,
+                max_turns=cfg.agent.max_turns,
+                is_rewind=is_rewind,
+            )
+            await new_client.start_session(
+                initial_prompt=first_prompt,
+                issue_title=f"{issue.identifier}: {issue.title}",
+            )
+        except BaseException:
+            try:
+                await new_client.stop()
+            except Exception as stop_exc:
+                log.warning(
+                    "phase_transition_new_stop_failed",
+                    issue_id=issue.id,
+                    identifier=issue.identifier,
+                    error=str(stop_exc),
+                )
+            raise
         return new_client, first_prompt
 
     async def _refresh_issue_state(
