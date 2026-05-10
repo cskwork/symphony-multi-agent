@@ -7,3 +7,4 @@ Learn writes back to them after QA passes.
 | topic-slug | summary | last touched |
 |------------|---------|--------------|
 | production-pipeline | Seven-stage pipeline + docs/<id>/<stage>/ artefact convention + WORKFLOW/PIPELINE sync invariant | 2026-05-09 (this ticket) |
+| agent-observability | Headless event log signal set + stall signatures + cross-refs to orchestrator/doctor/workspace | 2026-05-10 |

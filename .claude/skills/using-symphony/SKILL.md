@@ -1,12 +1,12 @@
 ---
 name: using-symphony
-description: Use when the user wants to dispatch coding agents (Codex / Claude Code / Gemini) against a Kanban board via this `symphony-multi-agent` repo — adding/listing/transitioning tickets, launching the TUI, inspecting orchestrator state, customizing the workflow (lanes, per-state prompts), delegating sub-tasks to free up context, or diagnosing dispatch failures. Triggers on phrases like "add a symphony task", "run symphony", "dispatch this ticket", "symphony board", "WORKFLOW.md", "symphony tui won't start", "ticket failed with worker_exit", "customize kanban states", "deploy pipeline workflow", "delegate to symphony".
+description: Use when the user wants to dispatch coding agents (Codex / Claude Code / Gemini / Pi) against a Kanban board via this `symphony-multi-agent` repo — adding/listing/transitioning tickets, launching the TUI, inspecting orchestrator state, customizing the workflow (lanes, per-state prompts), delegating sub-tasks to free up context, or diagnosing dispatch failures. Triggers on phrases like "add a symphony task", "run symphony", "dispatch this ticket", "symphony board", "WORKFLOW.md", "symphony tui won't start", "ticket failed with worker_exit", "customize kanban states", "deploy pipeline workflow", "delegate to symphony", "agent.kind: pi", "agent silent for N seconds".
 ---
 
 # Using Symphony
 
 Symphony is a polling orchestrator that takes Kanban tickets and runs a
-coding-agent CLI (Codex, Claude Code, or Gemini) against each one in an
+coding-agent CLI (Codex, Claude Code, Gemini, or Pi) against each one in an
 isolated per-ticket workspace. This skill covers the operator's day-to-day:
 authoring tickets, launching the orchestrator, and triaging failures.
 
@@ -20,7 +20,8 @@ authoring tickets, launching the orchestrator, and triaging failures.
 WORKFLOW.md  ─▶  Orchestrator  ─poll─▶  kanban/*.md  ─dispatch─▶  AgentBackend
    (config)                  (every                                (codex |
                               polling.                              claude |
-                              interval_ms)                          gemini)
+                              interval_ms)                          gemini |
+                                                                    pi)
                                                                         │
                                                                         ▼
                                                             workspace.root/<ID>
@@ -49,10 +50,29 @@ Key invariants:
 symphony doctor ./WORKFLOW.md
 ```
 
-Catches port collision, missing agent CLI on `$PATH`, the shipped
-placeholder clone URL, unwritable workspace, and missing board directory in
-one pass. Exit 0 if green; otherwise read FAIL lines and fix before
-launching.
+Catches port collision, missing agent CLI on `$PATH`, missing pi auth
+(`~/.pi/agent/auth.json` when `agent.kind: pi`), the shipped placeholder
+clone URL, unwritable workspace, and missing board directory in one pass.
+Exit 0 if green; otherwise read FAIL lines and fix before launching.
+
+## Headless visibility — what to grep for in `log/symphony.log`
+
+When running without the TUI, these INFO/WARN lines tell you the run is
+actually progressing (vs. hung):
+
+| Log message                           | Means                                                |
+|---------------------------------------|------------------------------------------------------|
+| `dispatch issue_id=...`               | Orchestrator picked up a ticket                      |
+| `hook_completed hook=after_create`    | Workspace seeded; per-ticket cwd is ready            |
+| `agent_session_started session_id=`   | Agent CLI booted and minted a session id             |
+| `agent_turn_completed turn=N total_tokens=...` | Turn finished; tokens accumulated; live preview snippet attached |
+| `agent_turn_failed reason=...`        | Backend reported a turn-level failure                |
+| `reconcile_terminate_terminal state=` | Ticket reached a terminal state — worker about to exit |
+| `worker_exit reason=normal`           | Successful end-to-end run                            |
+
+If you see `dispatch` but no `agent_session_started` within a minute, the
+backend is stuck before its first event — inspect `pi`/`claude`/`codex`
+stdin and auth (see troubleshooting reference).
 
 ## Top three recipes
 

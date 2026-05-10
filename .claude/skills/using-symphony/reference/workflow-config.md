@@ -50,13 +50,14 @@ You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 ## Picking the agent
 
 Set `agent.kind`:
-- **`codex`** — Codex `app-server`. Best for multi-turn JSON-RPC sessions; most mature backend.
-- **`claude`** — Claude Code. Fresh subprocess per turn with `--resume <session-id>` from turn 2 onward.
+- **`codex`** — Codex `app-server`. Best for multi-turn JSON-RPC sessions; most mature backend. Long-running stdio JSON-RPC connection; one process for the whole run.
+- **`claude`** — Claude Code. Fresh subprocess per turn with `--resume <session-id>` from turn 2 onward. NDJSON event stream.
 - **`gemini`** — Gemini CLI. One-shot per turn, no session continuity (each turn is independent).
+- **`pi`** — Pi coding-agent (`pi --mode json -p ""`). Per-turn subprocess with `--session <id>` resume from turn 2 onward; JSONL events. Multiplexes Anthropic / OpenAI / Gemini / Bedrock backends behind one CLI — useful when you want to swap LLM providers without changing Symphony config. Auth: sign in once with `pi` → `/login` (OAuth); credentials cached at `~/.pi/agent/auth.json` and inherited by every subprocess Symphony spawns. `symphony doctor` warns if the auth file is missing.
 
-Each backend reads its own block (`codex`, `claude`, `gemini`); the others
-are ignored. The `codex.linear_graphql` client tool is only advertised when
-`agent.kind: codex`.
+Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); the
+others are ignored. The `codex.linear_graphql` client tool is only
+advertised when `agent.kind: codex`.
 
 ## Hooks
 

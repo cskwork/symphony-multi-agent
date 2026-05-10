@@ -29,6 +29,7 @@ tail -F log/symphony.log
 | `worker_exit reason=error`               | Worker terminated abnormally                             | Read the preceding `hook_failed` event or backend stderr for the actual cause       |
 | `outcome=turn_error`                     | Turn ended in error (timeout, agent crash, tool failure) | Inspect backend stderr; for timeouts, raise `<kind>.turn_timeout_ms`                |
 | `hook_timeout`                           | Hook exceeded its time budget                            | Shorten the hook or remove blocking commands                                        |
+| `hook_after_run_skipped_missing_cwd`     | Workspace was deleted before `after_run` could run       | INFO-level only; usually means the agent or a hook removed its own workspace. Not a bug — ignore unless you depend on `after_run`                                                                 |
 | `OSError [Errno 48]` on startup          | Port already in use                                      | `lsof -ti :9999 \| xargs -r kill`                                                   |
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
@@ -100,3 +101,49 @@ full list of related gotchas (CRLF, absolute paths, `set -e`, etc.).
 - `tracker.project_slug` matches the Linear project's URL slug?
 - Linear API rate-limited you? Check `rate_limits` in
   `/api/v1/state` — it's mirrored from upstream headers.
+
+### Pi backend: "first turn fails immediately, no useful error"
+
+Most common cause: `~/.pi/agent/auth.json` is missing or stale. Without it,
+`pi --mode json` exits before emitting any events; Symphony surfaces this
+as a generic `turn_error` and retries with the same identical failure.
+
+```bash
+symphony doctor ./WORKFLOW.md             # WARNs when the auth file is absent
+ls -la ~/.pi/agent/auth.json              # confirm presence + recency
+pi                                        # then `/login` to refresh OAuth credentials
+```
+
+The cached credentials are inherited automatically by every subprocess
+Symphony spawns — you do *not* need to put `PI_API_KEY` (or any provider
+env var) into `WORKFLOW.md` or the `pi:` block.
+
+### Pi backend: "agent silent for N seconds, no events in log"
+
+If `agent_session_started` fired but no `agent_turn_completed` follows for
+5+ minutes, pi may be stuck on a long tool call (e.g. a slow fetch, or an
+agent-spawned subprocess waiting on stdin). The per-turn budget is
+`pi.turn_timeout_ms` (default ~1h). Lower it if you want stuck turns to
+fail fast and bounce through retry instead of hanging:
+
+```yaml
+pi:
+  command: 'pi --mode json -p ""'
+  resume_across_turns: true
+  turn_timeout_ms: 600000        # 10 min instead of the default 1h
+```
+
+### Pi backend: "token totals look 2–4× higher than Claude on the same task"
+
+Not a bug. Pi makes one LLM API call per assistant message within a turn,
+and each call's prompt is re-billed (cache reads count at a discount but
+still count). A 4-call turn with a 30k-token system prompt reports ~120k
+`input_tokens`; the same work on Claude reports ~30k because Claude
+aggregates per-turn at the `result` event. Both totals are honest — they
+just count at different granularities. Verify with the JSON probe:
+
+```bash
+echo "<prompt>" | pi --mode json -p "" 2>/dev/null \
+  | jq -c 'select(.type=="message_end") | .message.usage'
+# one usage block per LLM call
+```
