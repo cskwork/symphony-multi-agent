@@ -435,6 +435,56 @@ async def test_stats_bar_reports_counts_and_tokens(monkeypatch: Any) -> None:
         assert "total=3,000" in body
 
 
+@pytest.mark.asyncio
+async def test_stats_bar_shows_running_ticket_ids(monkeypatch: Any) -> None:
+    """The header must surface in-progress ticket IDs (e.g. OLV-002), not just a count."""
+    cfg = _make_config()
+    _stub_tracker(monkeypatch, [], [])
+    snap = {
+        "counts": {"running": 2, "retrying": 0},
+        "codex_totals": {},
+        "running": [
+            {"issue_id": "OLV-002", "turn_count": 1},
+            {"issue_id": "OLV-007", "turn_count": 3},
+        ],
+        "retrying": [],
+        "generated_at": "now",
+    }
+    app = KanbanApp(_StubOrchestrator(snapshot=snap), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(200, 30)) as pilot:
+        await pilot.pause()
+        bar = app.query_one(StatsBar)
+        rendered = bar.render()
+        body = getattr(rendered, "plain", None) or str(rendered)
+        assert "OLV-002" in body
+        assert "OLV-007" in body
+
+
+@pytest.mark.asyncio
+async def test_stats_bar_truncates_many_running_ids(monkeypatch: Any) -> None:
+    """Header stays one line — beyond the visible cap, extras collapse to +N."""
+    cfg = _make_config()
+    _stub_tracker(monkeypatch, [], [])
+    snap = {
+        "counts": {"running": 7, "retrying": 0},
+        "codex_totals": {},
+        "running": [
+            {"issue_id": f"OLV-{i:03d}", "turn_count": 1} for i in range(1, 8)
+        ],
+        "retrying": [],
+        "generated_at": "now",
+    }
+    app = KanbanApp(_StubOrchestrator(snapshot=snap), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(200, 30)) as pilot:
+        await pilot.pause()
+        bar = app.query_one(StatsBar)
+        rendered = bar.render()
+        body = getattr(rendered, "plain", None) or str(rendered)
+        assert "OLV-001" in body
+        assert "+2" in body  # 7 running, 5 visible → +2 more
+        assert "OLV-007" not in body
+
+
 def test_kanban_tui_wrapper_constructs() -> None:
     """The compat wrapper must accept `console` for cli.py / legacy callers."""
     cfg = _make_config()

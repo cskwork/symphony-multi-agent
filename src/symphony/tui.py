@@ -81,6 +81,12 @@ LANE_WIDTH_DIM = "0.4fr"
 LANE_WIDTH_ZOOMED = "3fr"
 
 
+# Header bar must stay one line; cap the in-progress IDs we render and roll the
+# rest into a `+N` suffix. Five fits comfortably on an 80-col terminal alongside
+# agent / tracker / lang / counts; reduce if those grow.
+_RUNNING_IDS_MAX = 5
+
+
 @dataclass
 class _CardStatus:
     """Per-issue runtime overlay for a kanban card."""
@@ -528,7 +534,22 @@ class StatsBar(Static):
         line.append(f"  {t('header.workflow', lang)}{cfg.workflow_path.name}", style="dim")
         line.append(f"  {t('header.lang', lang)}{lang}", style="bright_magenta")
         line.append("    ")
-        line.append(f"{t('header.running', lang)}{counts.get('running', 0)}  ", style="green")
+        line.append(f"{t('header.running', lang)}{counts.get('running', 0)}", style="green")
+        running_rows = snap.get("running") or []
+        if running_rows:
+            visible_ids = [
+                str(row.get("issue_id") or "")
+                for row in running_rows[:_RUNNING_IDS_MAX]
+            ]
+            visible_ids = [vid for vid in visible_ids if vid]
+            if visible_ids:
+                line.append(" [", style="green")
+                line.append(", ".join(visible_ids), style="bold green")
+                overflow = len(running_rows) - len(visible_ids)
+                if overflow > 0:
+                    line.append(f" +{overflow}", style="dim green")
+                line.append("]", style="green")
+        line.append("  ")
         line.append(f"{t('header.retrying', lang)}{counts.get('retrying', 0)}  ", style="yellow")
         line.append("│  ", style="dim")
         line.append(f"{t('footer.tokens', lang)} ", style="dim")
