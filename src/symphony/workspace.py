@@ -77,9 +77,13 @@ class WorkspaceManager:
     def root(self) -> Path:
         return self._root
 
-    def update_hooks(self, hooks: HooksConfig) -> None:
+    def update_hooks(
+        self, hooks: HooksConfig, *, workflow_dir: Path | None = None
+    ) -> None:
         # §6.2 — apply reloaded hooks to future executions.
         self._hooks = hooks
+        if workflow_dir is not None:
+            self._workflow_dir = workflow_dir
 
     def path_for(self, identifier: str) -> Path:
         key = workspace_key(identifier)
