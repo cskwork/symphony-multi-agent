@@ -415,3 +415,113 @@ def test_available_slots_counts_retry_pending_against_budget():
                 retry.timer_handle.cancel()
 
     asyncio.run(_run())
+
+
+def test_reconcile_stalls_on_progress_timestamp_not_codex_timestamp():
+    """A worker still receiving meta events but no real progress must stall.
+
+    Reproduces OLV-002 (2026-05-10): claude API kept emitting tool_result
+    echoes / stream pings as `EVENT_OTHER_MESSAGE`, which previously bumped
+    `last_codex_timestamp` and indefinitely deferred the 5-min stall. The
+    fix splits stall-detection time from UI-activity time: stall reads
+    `last_progress_timestamp`, which only advances on real model output.
+    """
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            now = datetime.now(timezone.utc)
+            entry = RunningEntry(
+                issue=issue,
+                started_at=now - timedelta(hours=1),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                # UI-side timestamp is fresh — meta event arrived 1s ago.
+                last_codex_timestamp=now - timedelta(seconds=1),
+                # Stall-side timestamp is far past the 300_000 ms threshold.
+                last_progress_timestamp=now - timedelta(minutes=10),
+            )
+            orch._running[issue.id] = entry
+
+            await orch._reconcile_running(cfg)
+
+            assert (
+                orch._running[issue.id].cancelled_at is not None
+            ), "stall must trigger on stale last_progress_timestamp even if last_codex_timestamp is fresh"
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_on_codex_event_user_role_other_message_does_not_advance_progress():
+    """Tool_result echoes from claude_code (kind='user') must NOT count as progress.
+
+    These are the events that fooled the old stall detector. They still
+    update `last_codex_timestamp` for UI freshness, but `last_progress_timestamp`
+    must stay pinned at the prior progress event.
+    """
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        baseline = datetime.now(timezone.utc) - timedelta(minutes=10)
+        entry = RunningEntry(
+            issue=issue,
+            started_at=baseline,
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+            last_codex_timestamp=baseline,
+            last_progress_timestamp=baseline,
+        )
+        orch._running[issue.id] = entry
+
+        # User-role passthrough — what claude_code emits for tool_result.
+        # No tokens, no lifecycle, type='user'.
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"type": "user", "message": {"content": []}},
+                "usage": {},
+                "rate_limits": None,
+            },
+        )
+
+        # last_codex_timestamp moves forward (UI stays "alive"), but
+        # last_progress_timestamp must NOT advance.
+        assert entry.last_codex_timestamp is not None
+        assert entry.last_codex_timestamp > baseline
+        assert entry.last_progress_timestamp == baseline
+
+        # Now the assistant message variant — this DOES count as progress.
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"type": "assistant", "message": {"content": []}},
+                "usage": {},
+                "rate_limits": None,
+            },
+        )
+
+        assert entry.last_progress_timestamp is not None
+        assert entry.last_progress_timestamp > baseline
+
+    asyncio.run(_run())

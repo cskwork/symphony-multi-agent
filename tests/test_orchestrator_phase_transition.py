@@ -603,6 +603,41 @@ def test_run_agent_attempt_handles_orphaned_running_entry(
     assert issue.id not in o._running
 
 
+def test_dispatch_registers_running_entry_before_eager_worker_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Python 3.12 eager tasks may run the worker before `_dispatch` returns."""
+
+    eager_factory = getattr(asyncio, "eager_task_factory", None)
+    if eager_factory is None:
+        pytest.skip("asyncio.eager_task_factory requires Python 3.12+")
+
+    cfg = _make_config(max_turns=1)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Done"])
+
+    loop = asyncio.new_event_loop()
+    loop.set_task_factory(eager_factory)
+    o._loop = loop
+    try:
+        async def _drive_dispatch() -> None:
+            o._dispatch(issue, cfg, attempt=None)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        loop.run_until_complete(_drive_dispatch())
+    finally:
+        for retry in list(o._retry.values()):
+            retry.timer_handle.cancel()
+        loop.close()
+
+    assert issue.id not in o._running
+    assert issue.id in o._retry
+    assert o._retry[issue.id].error is None
+
+
 def test_done_callback_ignores_stale_task_for_replaced_running_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -682,3 +717,60 @@ def test_done_callback_ignores_stale_task_for_replaced_running_entry(
         for retry in list(o._retry.values()):
             retry.timer_handle.cancel()
         loop.close()
+
+
+def test_done_callback_ignores_task_already_in_exit_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker finishing while its `finally` cleanup is already underway must
+    not be reclassified as `worker_task_finished_without_cleanup`.
+
+    Cancellation can land on `_run_agent_attempt` while it is awaiting exit
+    cleanup. The cleanup path is legitimate; the done callback is only a
+    fallback for tasks whose coroutine never reached that path at all.
+    """
+
+    o = _orch(tmp_path)
+    issue = _make_issue(state="Review")
+
+    exit_calls: list[tuple[str, str, str | None]] = []
+
+    async def _track_exit(self_inst, issue_id, reason, error):  # noqa: ANN001
+        del self_inst
+        exit_calls.append((issue_id, reason, error))
+
+    monkeypatch.setattr(Orchestrator, "_on_worker_exit", _track_exit)
+
+    loop = asyncio.new_event_loop()
+    o._loop = loop
+    try:
+        async def _ok() -> None:
+            return None
+
+        task = loop.create_task(_ok())
+        loop.run_until_complete(task)
+        assert task.done() and not task.cancelled() and task.exception() is None
+
+        entry = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=1,
+            worker_task=task,
+            workspace_path=tmp_path,
+        )
+        entry.exit_started_at = datetime.now(timezone.utc)
+        o._running[issue.id] = entry
+
+        async def _drive_callback() -> None:
+            o._on_worker_task_done(issue.id, task)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        loop.run_until_complete(_drive_callback())
+    finally:
+        for retry in list(o._retry.values()):
+            retry.timer_handle.cancel()
+        loop.close()
+
+    assert o._running.get(issue.id) is entry
+    assert exit_calls == []

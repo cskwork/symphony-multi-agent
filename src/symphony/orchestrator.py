@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable
 from .backends import (
     EVENT_AGENT_RETRY,
     EVENT_COMPACTION,
+    EVENT_OTHER_MESSAGE,
     EVENT_TURN_FAILED,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -97,7 +98,7 @@ class RunningEntry:
     issue: Issue
     started_at: datetime
     retry_attempt: int | None
-    worker_task: asyncio.Task[None]
+    worker_task: asyncio.Task[None] | None
     workspace_path: Path
     session_id: str | None = None
     thread_id: str | None = None
@@ -106,6 +107,12 @@ class RunningEntry:
     last_codex_event: str | None = None
     last_codex_message: str = ""
     last_codex_timestamp: datetime | None = None
+    # Updated only on events that signify the agent is actually advancing
+    # the turn (model output, lifecycle events, token deltas) — NOT on
+    # passthrough EVENT_OTHER_MESSAGE for tool_result echoes or stream
+    # keepalive. Stall detection reads this; UI keeps last_codex_timestamp
+    # to show "any activity at all". See _on_codex_event for the predicate.
+    last_progress_timestamp: datetime | None = None
     codex_input_tokens: int = 0
     codex_output_tokens: int = 0
     codex_total_tokens: int = 0
@@ -118,6 +125,9 @@ class RunningEntry:
     # by the next reconcile tick to escalate from "cancel sent" to "force
     # eject" if the worker is stuck on a non-cancellable await.
     cancelled_at: datetime | None = None
+    # Set when the worker's own `finally` starts exit cleanup. The task done
+    # callback is only a fallback for workers that never reached this point.
+    exit_started_at: datetime | None = None
 
 
 @dataclass
@@ -199,10 +209,13 @@ class Orchestrator:
             except (asyncio.CancelledError, Exception):
                 pass
         for entry in list(self._running.values()):
-            entry.worker_task.cancel()
+            if entry.worker_task is not None:
+                entry.worker_task.cancel()
         for entry in list(self._retry.values()):
             entry.timer_handle.cancel()
         for entry in list(self._running.values()):
+            if entry.worker_task is None:
+                continue
             try:
                 await entry.worker_task
             except (asyncio.CancelledError, Exception):
@@ -511,24 +524,30 @@ class Orchestrator:
         if existing_retry is not None:
             existing_retry.timer_handle.cancel()
 
-        worker_task = asyncio.create_task(
-            self._run_agent_attempt(issue, attempt, cfg),
-            name=f"symphony-worker-{issue.identifier}",
-        )
-        worker_task.add_done_callback(
-            lambda task, issue_id=issue.id: self._on_worker_task_done(issue_id, task)
-        )
         entry = RunningEntry(
             issue=issue,
             started_at=datetime.now(timezone.utc),
             retry_attempt=attempt,
-            worker_task=worker_task,
+            worker_task=None,
             workspace_path=self._workspace_manager.path_for(issue.identifier)
             if self._workspace_manager
             else Path("/"),
         )
         self._running[issue.id] = entry
         self._claimed.add(issue.id)
+        try:
+            worker_task = asyncio.create_task(
+                self._run_agent_attempt(issue, attempt, cfg),
+                name=f"symphony-worker-{issue.identifier}",
+            )
+        except Exception:
+            self._running.pop(issue.id, None)
+            self._claimed.discard(issue.id)
+            raise
+        entry.worker_task = worker_task
+        worker_task.add_done_callback(
+            lambda task, issue_id=issue.id: self._on_worker_task_done(issue_id, task)
+        )
         debug = self._issue_debug.setdefault(issue.id, _IssueDebug())
         if attempt is not None:
             debug.restart_count += 1
@@ -556,6 +575,14 @@ class Orchestrator:
         """
         entry = self._running.get(issue_id)
         if entry is None or entry.worker_task is not task:
+            return
+        if entry.exit_started_at is not None:
+            log.info(
+                "worker_task_done_after_exit_started",
+                issue_id=issue_id,
+                task_name=task.get_name(),
+                exit_started_at=entry.exit_started_at.isoformat(),
+            )
             return
         exc_repr: str | None = None
         if task.cancelled():
@@ -863,7 +890,12 @@ class Orchestrator:
                 outcome=outcome,
                 error=error,
             )
-            await self._on_worker_exit(running_issue_id, outcome, error)
+            entry = self._running.get(running_issue_id)
+            if entry is not None:
+                entry.exit_started_at = datetime.now(timezone.utc)
+            await asyncio.shield(
+                self._on_worker_exit(running_issue_id, outcome, error)
+            )
 
     async def _rebuild_backend_for_phase(
         self,
@@ -973,8 +1005,26 @@ class Orchestrator:
                 entry.last_codex_message = msg[:400]
         # Token deltas (§13.5).
         usage = event.get("usage") or {}
+        delta_total = 0
         if isinstance(usage, dict):
-            self._apply_token_totals(entry, usage)
+            delta_total = self._apply_token_totals(entry, usage)
+        # Progress predicate — see RunningEntry.last_progress_timestamp.
+        # `EVENT_OTHER_MESSAGE` is a catch-all that the claude backend fires
+        # for both `assistant` (real model output) and `user` (tool_result
+        # echo) stream-json messages. Treating every one as progress lets
+        # the 5-min stall threshold get reset by tool_result echoes alone,
+        # so a turn that produces no model output for 18 min still looks
+        # alive. Filter: lifecycle events count, token movement counts, and
+        # `EVENT_OTHER_MESSAGE` counts only when the payload's `type` is
+        # `assistant` (matches claude_code stream-json shape; harmless for
+        # other backends that don't set `type`).
+        is_progress = ev_name != EVENT_OTHER_MESSAGE
+        if not is_progress and isinstance(payload, dict):
+            is_progress = payload.get("type") == "assistant"
+        if delta_total > 0:
+            is_progress = True
+        if is_progress:
+            entry.last_progress_timestamp = entry.last_codex_timestamp
         # Rate limits.
         rl = event.get("rate_limits")
         if isinstance(rl, dict):
@@ -1062,7 +1112,7 @@ class Orchestrator:
         if len(debug.recent_events) > 50:
             debug.recent_events = debug.recent_events[-50:]
 
-    def _apply_token_totals(self, entry: RunningEntry, totals: dict[str, Any]) -> None:
+    def _apply_token_totals(self, entry: RunningEntry, totals: dict[str, Any]) -> int:
         in_tok = int(totals.get("input_tokens") or 0)
         out_tok = int(totals.get("output_tokens") or 0)
         tot_tok = int(totals.get("total_tokens") or (in_tok + out_tok))
@@ -1079,6 +1129,7 @@ class Orchestrator:
         self._totals.input_tokens += delta_in
         self._totals.output_tokens += delta_out
         self._totals.total_tokens += delta_total
+        return delta_total
 
     # ------------------------------------------------------------------
     # worker exit handling (§16.6)
@@ -1277,7 +1328,16 @@ class Orchestrator:
                         )
                         self._force_eject_zombie(issue_id, entry, cfg)
                     continue
-                seen = entry.last_codex_timestamp or entry.started_at
+                # Use last_progress_timestamp (real model/lifecycle activity)
+                # rather than last_codex_timestamp (any byte from the backend),
+                # so claude API tool_result echoes / stream keepalive don't
+                # keep resetting the stall clock. Falls back to last_codex_*
+                # then started_at when no progress has been recorded yet.
+                seen = (
+                    entry.last_progress_timestamp
+                    or entry.last_codex_timestamp
+                    or entry.started_at
+                )
                 elapsed_ms = (now - seen).total_seconds() * 1000
                 if elapsed_ms > stall_timeout_ms:
                     log.warning(
@@ -1286,7 +1346,8 @@ class Orchestrator:
                         identifier=entry.issue.identifier,
                         elapsed_ms=int(elapsed_ms),
                     )
-                    entry.worker_task.cancel()
+                    if entry.worker_task is not None:
+                        entry.worker_task.cancel()
                     entry.cancelled_at = now
         # Part B: tracker state refresh.
         running_ids = list(self._running.keys())
@@ -1336,7 +1397,8 @@ class Orchestrator:
                     state=issue.state,
                     last_event_age_s=round(age, 1) if age is not None else None,
                 )
-                entry.worker_task.cancel()
+                if entry.worker_task is not None:
+                    entry.worker_task.cancel()
                 if self._workspace_manager is not None:
                     await self._workspace_manager.remove(entry.workspace_path)
             elif state in active:
@@ -1362,7 +1424,8 @@ class Orchestrator:
                     identifier=issue.identifier,
                     state=issue.state,
                 )
-                entry.worker_task.cancel()
+                if entry.worker_task is not None:
+                    entry.worker_task.cancel()
 
     # ------------------------------------------------------------------
     # tracker access
