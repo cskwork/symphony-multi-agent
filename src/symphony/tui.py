@@ -30,7 +30,7 @@ from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Static
 
-from .i18n import t
+from .i18n import SUPPORTED_LANGUAGES, t
 from .issue import Issue, normalize_state
 from .logging import get_logger
 from .orchestrator import Orchestrator
@@ -506,8 +506,16 @@ class StatsBar(Static):
     StatsBar { height: 1; padding: 0 1; background: $boost; color: $text; }
     """
 
-    def update_from(self, cfg: ServiceConfig, snap: dict[str, Any]) -> None:
-        lang = cfg.tui.language
+    def update_from(
+        self,
+        cfg: ServiceConfig,
+        snap: dict[str, Any],
+        language: str | None = None,
+    ) -> None:
+        # `language` lets the App pass the in-session override (`L` toggle).
+        # Falls back to `cfg.tui.language` so existing callers / tests that
+        # don't know about the override still work.
+        lang = language if language is not None else cfg.tui.language
         agent_kind = cfg.agent.kind
         agent_color = AGENT_COLOR.get(agent_kind, "white")
         counts = snap.get("counts", {})
@@ -769,6 +777,7 @@ class KanbanApp(App):
         Binding("minus", "shrink_window", "Narrower", show=False),
         Binding("d", "toggle_density", "Density"),
         Binding("p", "toggle_detail", "Detail pane"),
+        Binding("L", "toggle_language", "Language"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
     ]
@@ -809,6 +818,11 @@ class KanbanApp(App):
         # Cache the last-rendered focused card so we don't re-render the
         # detail pane every 0.5 s heartbeat unless focus actually moved.
         self._last_focused_card_id: str | None = None
+        # In-session language override. None = follow `tui.language` from the
+        # WORKFLOW.md config; set by `L` to flip chrome locale without
+        # restarting the TUI. Reset on relaunch — persistence belongs in
+        # WORKFLOW.md / SYMPHONY_LANG, not in TUI state.
+        self._language_override: str | None = None
 
     # ----- composition -------------------------------------------------
 
@@ -898,7 +912,9 @@ class KanbanApp(App):
         if cfg is None:
             return
         snapshot = self._orch.snapshot()
-        self.query_one(StatsBar).update_from(cfg, snapshot)
+        self.query_one(StatsBar).update_from(
+            cfg, snapshot, language=self._effective_language()
+        )
         runtime_index = _build_runtime_index(snapshot)
         issues_by_state: dict[str, list[Issue]] = {k: [] for k in self._lanes}
         for issue in self._all_known_issues():
@@ -913,7 +929,8 @@ class KanbanApp(App):
                 issues_by_state[key] = [
                     i for i in issues_by_state[key] if _matches_filter(i, q)
                 ]
-        empty_text = t("column.empty", cfg.tui.language)
+        language = self._effective_language()
+        empty_text = t("column.empty", language)
         for key, lane in self._lanes.items():
             issues = sorted(issues_by_state.get(key, []), key=_card_sort_key)
             lane.set_count(len(issues))
@@ -922,7 +939,7 @@ class KanbanApp(App):
                 for issue in issues
             ]
             lane.render_cards(
-                cards, empty_text, cfg.tui.language, density=self._density
+                cards, empty_text, language, density=self._density
             )
         # Lane widths depend on counts (empty → dim) and on user state
         # (zoom / show_terminals), so re-apply after counts settle.
@@ -950,15 +967,14 @@ class KanbanApp(App):
         self.notify("refreshed")
 
     def action_help(self) -> None:
-        cfg = self._ws.current()
-        lang = cfg.tui.language if cfg else "en"
+        lang = self._effective_language()
         page = self._current_page_index() + 1
         total_pages = self._page_count()
         msg = (
             "q quit · r refresh · enter details · "
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
-            "d density · p detail-pane · / filter · "
+            "d density · p detail-pane · L language · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -1127,6 +1143,29 @@ class KanbanApp(App):
         # immediately so the keystroke feels instant.
         self._refresh_runtime()
         self.notify(f"density: {self._density}", timeout=2)
+
+    def _effective_language(self) -> str:
+        """Resolve the language used for chrome rendering this frame.
+
+        In-session override (`L`) wins over `tui.language` from WORKFLOW.md
+        so the toggle feels instant without rewriting config.
+        """
+        if self._language_override is not None:
+            return self._language_override
+        cfg = self._ws.current()
+        return cfg.tui.language if cfg else "en"
+
+    def action_toggle_language(self) -> None:
+        current = self._effective_language()
+        try:
+            idx = SUPPORTED_LANGUAGES.index(current)
+        except ValueError:
+            idx = -1
+        self._language_override = SUPPORTED_LANGUAGES[
+            (idx + 1) % len(SUPPORTED_LANGUAGES)
+        ]
+        self._refresh_runtime()
+        self.notify(f"language: {self._language_override}", timeout=2)
 
     # ----- Iter3: detail pane + filter --------------------------------
 
