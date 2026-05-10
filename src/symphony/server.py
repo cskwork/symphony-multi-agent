@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from aiohttp import web
@@ -73,10 +74,33 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
     async def handle_method_not_allowed(request: web.Request) -> web.Response:
         return _error_response(405, "method_not_allowed", request.method)
 
+    async def handle_debug_tasks(_request: web.Request) -> web.Response:
+        # Dump every live asyncio task with its suspended coroutine stack.
+        # `Task.get_stack()` returns the deepest frame the task is parked
+        # at — exactly what py-spy can't show us across the await boundary.
+        out = []
+        for t in asyncio.all_tasks():
+            stack_frames = []
+            for frame in t.get_stack():
+                stack_frames.append(
+                    f"{frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
+                )
+            out.append(
+                {
+                    "name": t.get_name(),
+                    "done": t.done(),
+                    "cancelled": t.cancelled() if t.done() else False,
+                    "coro_repr": repr(t.get_coro()),
+                    "stack": stack_frames,
+                }
+            )
+        return web.json_response({"tasks": out})
+
     app.router.add_get("/", handle_root)
     app.router.add_get("/api/v1/state", handle_state)
     app.router.add_get("/api/v1/refresh", handle_method_not_allowed)
     app.router.add_post("/api/v1/refresh", handle_refresh)
+    app.router.add_get("/api/v1/_debug/tasks", handle_debug_tasks)
     app.router.add_get("/api/v1/{identifier}", handle_issue)
 
     return app

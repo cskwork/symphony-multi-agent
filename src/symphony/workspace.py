@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -164,44 +165,57 @@ class WorkspaceManager:
         timeout_s = max(self._hooks.timeout_ms, 0) / 1000.0
         log.info("hook_start", hook=name, cwd=str(cwd))
         # §9.4 — run script via `bash -lc` with workspace cwd.
-        process = await asyncio.create_subprocess_exec(
-            resolve_bash(),
-            "-lc",
-            script,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={
-                **os.environ,
-                "SYMPHONY_WORKFLOW_DIR": str(self._workflow_dir) if self._workflow_dir else "",
-            },
-        )
+        #
+        # We deliberately route through a worker thread + blocking
+        # `subprocess.run` instead of `asyncio.create_subprocess_exec`. The
+        # asyncio child-watcher is fragile under Textual on macOS (Python
+        # 3.12): subprocesses spawn fine, exit fine, but `await proc.wait()`
+        # never resolves because the watcher never observes the SIGCHLD
+        # / waitpid event. The symptom is a zombie `<defunct>` child and a
+        # worker stuck forever inside the timeout-cleanup `await
+        # process.wait()`. Using `subprocess.run` in a thread bypasses the
+        # watcher entirely — `os.waitpid` runs in the worker thread and
+        # returns deterministically.
+        env = {
+            **os.environ,
+            "SYMPHONY_WORKFLOW_DIR": str(self._workflow_dir)
+            if self._workflow_dir
+            else "",
+        }
+
+        def _do_run() -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [resolve_bash(), "-lc", script],
+                cwd=str(cwd),
+                capture_output=True,
+                timeout=timeout_s if timeout_s > 0 else None,
+                env=env,
+                check=False,
+            )
+
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
+            result = await asyncio.to_thread(_do_run)
+        except subprocess.TimeoutExpired:
             log.error("hook_timeout", hook=name, cwd=str(cwd))
             raise SymphonyError(f"hook {name} timed out", hook=name)
 
-        rc = process.returncode or 0
+        rc = result.returncode or 0
+        stderr_bytes = result.stderr or b""
+        stdout_bytes = result.stdout or b""
         if rc != 0:
             log.error(
                 "hook_failed",
                 hook=name,
                 cwd=str(cwd),
                 returncode=rc,
-                stderr=_truncate(stderr.decode("utf-8", errors="replace")),
+                stderr=_truncate(stderr_bytes.decode("utf-8", errors="replace")),
             )
             raise SymphonyError(f"hook {name} exited {rc}", hook=name, returncode=rc)
         log.info(
             "hook_completed",
             hook=name,
             cwd=str(cwd),
-            stdout=_truncate(stdout.decode("utf-8", errors="replace")),
+            stdout=_truncate(stdout_bytes.decode("utf-8", errors="replace")),
         )
 
 

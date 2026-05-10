@@ -25,7 +25,7 @@ import time
 import uuid
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     PortExit,
     ResponseError,
@@ -84,14 +84,13 @@ class GeminiBackend:
                 proc.terminate()
             except ProcessLookupError:
                 pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            rc = await safe_proc_wait(proc, timeout=2.0)
+            if rc is None and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
-                await proc.wait()
+                await safe_proc_wait(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -158,16 +157,26 @@ class GeminiBackend:
                 raise PortExit("gemini stdin closed", error=str(exc)) from exc
 
             timeout_s = self._gemini.turn_timeout_ms / 1000.0
+            assert proc.stdout is not None and proc.stderr is not None
+            stdout_task = asyncio.create_task(proc.stdout.read())
+            stderr_task = asyncio.create_task(proc.stderr.read())
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=timeout_s
+                stdout, stderr, safe_rc = await asyncio.wait_for(
+                    asyncio.gather(
+                        stdout_task,
+                        stderr_task,
+                        safe_proc_wait(proc),
+                    ),
+                    timeout=timeout_s,
                 )
             except asyncio.TimeoutError as exc:
+                stdout_task.cancel()
+                stderr_task.cancel()
                 await self._reap(proc)
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("gemini turn timed out") from exc
 
-            rc = proc.returncode
+            rc = safe_rc if safe_rc is not None else (proc.returncode or 0)
             if rc != 0:
                 err_msg = (stderr or b"").decode("utf-8", errors="replace").strip()[:400]
                 # Standardize on `stderr_tail` (list[str]) so orchestrator /
@@ -210,14 +219,13 @@ class GeminiBackend:
             proc.terminate()
         except ProcessLookupError:
             return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        rc = await safe_proc_wait(proc, timeout=2.0)
+        if rc is None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            await proc.wait()
+            await safe_proc_wait(proc)
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         try:

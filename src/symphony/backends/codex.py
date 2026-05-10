@@ -23,7 +23,7 @@ import os
 import time
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     CodexNotFound,
     PortExit,
@@ -190,14 +190,13 @@ class CodexAppServerBackend:
                     self._process.terminate()
                 except ProcessLookupError:
                     pass
-                try:
-                    await asyncio.wait_for(self._process.wait(), timeout=2.0)
-                except asyncio.TimeoutError:
+                rc = await safe_proc_wait(self._process, timeout=2.0)
+                if rc is None and self._process.returncode is None:
                     try:
                         self._process.kill()
                     except ProcessLookupError:
                         pass
-                    await self._process.wait()
+                    await safe_proc_wait(self._process)
         for task in (self._reader_task, self._stderr_task):
             if task is not None:
                 task.cancel()

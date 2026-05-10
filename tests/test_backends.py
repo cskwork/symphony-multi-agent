@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+import symphony.backends.codex as codex_module
+import symphony.backends.gemini as gemini_module
+import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_COMPLETED,
@@ -111,6 +114,26 @@ def _noop_event(_: dict) -> "asyncio.Future[None]":
     return fut
 
 
+class _FakeProcess:
+    """Process double that fails if raw ``proc.wait()`` is used."""
+
+    pid = 123456
+    returncode = None
+
+    def __init__(self) -> None:
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        raise AssertionError("raw proc.wait() should not be used")
+
+
 def test_factory_returns_codex_backend(tmp_path: Path) -> None:
     cfg = _make_cfg("codex", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
@@ -182,6 +205,93 @@ def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_codex_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._process = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(codex_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
+@pytest.mark.asyncio
+async def test_gemini_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gemini shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._active_proc = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(gemini_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
+@pytest.mark.asyncio
+async def test_pi_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pi shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._active_proc = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(pi_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
 def test_codex_event_name_normalization() -> None:
     assert _normalize_event_name("thread/turn/completed") == EVENT_TURN_COMPLETED
     assert _normalize_event_name("thread/turn/failed") == EVENT_TURN_FAILED
@@ -235,7 +345,7 @@ def test_gemini_session_id_synthesized(tmp_path: Path) -> None:
     backend = GeminiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         backend.start_session(initial_prompt="hi", issue_title="Fix login")
     )
     sid = backend.session_id
@@ -683,7 +793,7 @@ def test_pi_consume_stream_surfaces_compaction_events(tmp_path: Path) -> None:
             self.stderr = None
             self.returncode = 0
 
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         backend._consume_stream(_FakeProc())
     )
     kinds = [c["event"] for c in captured]

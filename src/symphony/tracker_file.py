@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -278,7 +279,7 @@ class FileBoardTracker:
                 continue
             if issue is not None:
                 out.append(issue)
-        return out
+        return _hydrate_blocker_states(out)
 
     # ------------------------------------------------------------------
     # convenience helpers used by board CLI / agent tool
@@ -338,3 +339,24 @@ class FileBoardTracker:
         }
         write_ticket_atomic(path, front, description)
         return path
+
+
+def _hydrate_blocker_states(issues: list[Issue]) -> list[Issue]:
+    current_state_by_id = {issue.identifier: issue.state for issue in issues}
+    hydrated: list[Issue] = []
+    for issue in issues:
+        blockers: list[BlockerRef] = []
+        changed = False
+        for blocker in issue.blocked_by:
+            key = blocker.identifier or blocker.id
+            current_state = current_state_by_id.get(key or "")
+            if current_state is not None and current_state != blocker.state:
+                blockers.append(replace(blocker, state=current_state))
+                changed = True
+            else:
+                blockers.append(blocker)
+        if changed:
+            hydrated.append(replace(issue, blocked_by=tuple(blockers)))
+        else:
+            hydrated.append(issue)
+    return hydrated

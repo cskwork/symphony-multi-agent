@@ -342,6 +342,52 @@ def test_same_phase_does_not_restart_backend(
     assert len(stops) == 1
 
 
+def test_worker_cleanup_uses_registered_running_issue_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup must pop the original running slot even if a refreshed issue
+    object carries a different tracker id.
+
+    The TUI symptom is a card stuck in retrying with
+    `worker_task_finished_without_cleanup`: the worker task completed, but
+    `_on_worker_exit` was called with a key that did not match `_running`.
+    """
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    o._loop = asyncio.new_event_loop()
+    try:
+        _seed_running_entry(o, issue, tmp_path)
+        _install_fake_backend(monkeypatch)
+
+        async def _refresh_with_different_id(self, cfg, issue_id):  # noqa: ANN001
+            del self, cfg, issue_id
+            return Issue(
+                id="tracker-id-after-refresh",
+                identifier="MT-1",
+                title="phase transition fixture",
+                description=None,
+                priority=2,
+                state="Done",
+                blocked_by=(),
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+
+        monkeypatch.setattr(
+            Orchestrator, "_refresh_issue_state", _refresh_with_different_id
+        )
+
+        o._loop.run_until_complete(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+    finally:
+        for retry in list(o._retry.values()):
+            retry.timer_handle.cancel()
+        o._loop.close()
+
+    assert issue.id not in o._running
+    assert issue.id in o._retry
+    assert o._retry[issue.id].error is None
+
+
 def test_phase_transition_resets_session_id_on_running_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -528,3 +574,84 @@ def test_forward_transition_does_not_set_is_rewind(
     assert len(first_prompts) == 2
     assert "rewind=False" in first_prompts[0]
     assert "rewind=False" in first_prompts[1]
+
+
+def test_done_callback_ignores_stale_task_for_replaced_running_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `worker_task.add_done_callback` from a previously-finished worker
+    must not pop a freshly-dispatched entry that happens to share the same
+    issue id.
+
+    Why: `_on_worker_exit` yields once at `await self._notify_observers()`.
+    The continuation retry timer is only 1s away (`CONTINUATION_RETRY_DELAY_MS`),
+    so a race exists where a new `_dispatch` installs a fresh entry under
+    the same key BEFORE the original worker's task object reaches `done`.
+    When that stale task's callback finally fires, it must verify the
+    registered entry still belongs to it. Symptom is `state=Review,
+    runtime=retrying, error=worker_task_finished_without_cleanup` because
+    the stale callback ejects the live entry.
+    """
+
+    o = _orch(tmp_path)
+    issue = _make_issue(state="Review")
+
+    exit_calls: list[tuple[str, str, str | None]] = []
+
+    async def _track_exit(self_inst, issue_id, reason, error):  # noqa: ANN001
+        del self_inst
+        exit_calls.append((issue_id, reason, error))
+
+    monkeypatch.setattr(Orchestrator, "_on_worker_exit", _track_exit)
+
+    loop = asyncio.new_event_loop()
+    o._loop = loop
+    try:
+        # Build a real done-but-not-cancelled task to mimic a worker that
+        # ran its `finally` cleanly. Its entry was already popped by the
+        # legitimate cleanup path.
+        async def _ok() -> None:
+            return None
+
+        task1 = loop.create_task(_ok())
+        loop.run_until_complete(task1)
+        assert task1.done() and not task1.cancelled() and task1.exception() is None
+
+        # Race: a fresh dispatch installs entry2 under the same key. We use
+        # a never-running placeholder task so we control its lifecycle.
+        async def _pending() -> None:
+            await asyncio.sleep(3600)
+
+        async def _race_window() -> None:
+            entry2 = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=1,
+                worker_task=loop.create_task(_pending()),
+                workspace_path=tmp_path,
+            )
+            o._running[issue.id] = entry2
+            try:
+                # Stale callback for the already-finished task1 fires from
+                # inside a running loop, exactly mirroring the production
+                # `add_done_callback` invocation context.
+                o._on_worker_task_done(issue.id, task1)
+                # Drain any task the callback may have queued so a buggy
+                # implementation has a chance to clobber `_running`.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+
+                assert o._running.get(issue.id) is entry2
+                assert exit_calls == [], (
+                    "stale done-callback wrongly fired _on_worker_exit: "
+                    f"{exit_calls!r}"
+                )
+            finally:
+                entry2.worker_task.cancel()
+                await asyncio.gather(entry2.worker_task, return_exceptions=True)
+
+        loop.run_until_complete(_race_window())
+    finally:
+        for retry in list(o._retry.values()):
+            retry.timer_handle.cancel()
+        loop.close()
