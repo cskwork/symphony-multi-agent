@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -807,7 +808,13 @@ class Orchestrator:
         except Exception as exc:
             outcome = "error"
             error = str(exc)
-            log.error("worker_unhandled_error", issue_id=running_issue_id, error=str(exc))
+            log.error(
+                "worker_unhandled_error",
+                issue_id=running_issue_id,
+                error=str(exc),
+                exc_type=type(exc).__name__,
+                traceback=traceback.format_exc(),
+            )
         finally:
             # Diagnostic marker — pairs with `worker_task_done_without_cleanup`
             # to localize the path that leaves entries in `_running`. If
@@ -1043,18 +1050,23 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _on_worker_exit(self, issue_id: str, reason: str, error: str | None) -> None:
-        # Trace the pop result. If a `worker_task_done_without_cleanup`
-        # later fires for the same `issue_id`, comparing this line's
-        # `popped` field tells us whether `_running.pop` actually saw the
-        # entry — the alternative is that something else owned the slot
-        # and the outer finally simply released someone else's row.
+        # INFO-level entry marker — pairs with `worker_finally_entered`.
+        # If `worker_finally_entered` is in the log but this is missing,
+        # the outer finally's `await self._on_worker_exit(...)` was
+        # cancelled before the coroutine body started executing.
+        log.info(
+            "worker_exit_entered",
+            issue_id=issue_id,
+            reason=reason,
+            running_keys_before_pop=list(self._running.keys()),
+        )
         entry = self._running.pop(issue_id, None)
-        log.debug(
+        log.info(
             "worker_exit_pop",
             issue_id=issue_id,
             reason=reason,
             popped=entry is not None,
-            running_keys=list(self._running.keys()),
+            running_keys_after_pop=list(self._running.keys()),
         )
         if entry is None:
             return
