@@ -432,10 +432,77 @@ def _render_nodes(nodes: Iterable[Any], env: dict[str, Any]) -> str:
     return "".join(out)
 
 
-def build_prompt_env(issue_obj: Any, attempt: int | None) -> dict[str, Any]:
-    """§12.1 — input variables for prompt rendering."""
+def build_prompt_env(
+    issue_obj: Any,
+    attempt: int | None,
+    language: str | None = None,
+) -> dict[str, Any]:
+    """§12.1 — input variables for prompt rendering.
+
+    `language` is exposed to the template as `{{ language }}` (normalized
+    to a supported code: `en` / `ko`, EN fallback) so WORKFLOW.md authors
+    can branch on it with `{% if language == 'ko' %}…{% endif %}`. Default
+    is English to keep behavior stable for callers that don't pass it.
+    """
     if hasattr(issue_obj, "to_template_dict"):
         issue_dict = issue_obj.to_template_dict()
     else:
         issue_dict = dict(issue_obj)
-    return {"issue": issue_dict, "attempt": attempt}
+    from .i18n import normalize_language
+
+    return {
+        "issue": issue_dict,
+        "attempt": attempt,
+        "language": normalize_language(language),
+    }
+
+
+def build_first_turn_prompt(
+    *,
+    prompt_template: str,
+    issue: Any,
+    attempt: int | None,
+    language: str,
+    max_turns: int,
+) -> tuple[str, dict[str, Any]]:
+    """Construct the first-turn prompt sent to a worker.
+
+    Prepends a one-line doc-language directive (resolved from `language`
+    via `i18n.doc_language_preamble`) before the rendered WORKFLOW.md
+    body so artefacts come back in the operator-chosen language even if
+    the WORKFLOW.md body itself is written in a different one.
+
+    Returns `(final_prompt, env)` so callers can keep `env` for later
+    bookkeeping (e.g. logging, tests).
+    """
+    from .i18n import doc_language_preamble
+
+    preamble = doc_language_preamble(language)
+    env = build_prompt_env(issue, attempt, language=language)
+    env["turn_number"] = 1
+    env["max_turns"] = max_turns
+    body = render(prompt_template, env)
+    return preamble + "\n\n" + body, env
+
+
+def build_continuation_prompt(
+    *,
+    language: str,
+    turn_number: int,
+    max_turns: int,
+) -> str:
+    """Construct the prompt for turn 2+ of a multi-turn run.
+
+    The continuation message is a small fixed string (no WORKFLOW.md body
+    is re-rendered). The doc-language directive is re-prepended every turn
+    because long runs drift back toward the model's default locale once
+    the first turn rotates out of the active context window.
+    """
+    from .i18n import doc_language_preamble
+
+    preamble = doc_language_preamble(language)
+    body = (
+        "Continue working on the issue. Re-check the tracker if needed. "
+        f"This is turn {turn_number} of up to {max_turns}."
+    )
+    return preamble + "\n\n" + body

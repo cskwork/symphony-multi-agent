@@ -9,6 +9,10 @@ dist/
 htmlcov/
 /tmp_workspaces/
 
+# Local secrets — `.env.example` is the committed template
+/.env
+/.env.local
+
 # Local user workflow + tracker state — examples are shipped instead
 /WORKFLOW.md
 /kanban/

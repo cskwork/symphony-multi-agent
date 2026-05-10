@@ -81,6 +81,11 @@ server:
 
 tui:
   language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
+                             # Also drives artefact language: every prompt is
+                             # prefixed with a one-line directive so kanban
+                             # comments and docs/<id>/<stage>/*.md come back in
+                             # the chosen language. `{{ language }}` is also
+                             # exposed to this template for `{% if %}` branches.
 ---
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.

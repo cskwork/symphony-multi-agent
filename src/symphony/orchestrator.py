@@ -39,7 +39,7 @@ from .errors import (
 )
 from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
-from .prompt import build_prompt_env, render
+from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .tracker import build_tracker_client
 from .workflow import (
     ServiceConfig,
@@ -531,10 +531,17 @@ class Orchestrator:
                 await client.initialize()
 
                 turn_number = 1
-                env = build_prompt_env(issue, attempt)
-                env["turn_number"] = turn_number
-                env["max_turns"] = cfg.agent.max_turns
-                first_prompt = render(cfg.prompt_template, env)
+                # `cfg.tui.language` is the operator-chosen language for
+                # both TUI chrome AND artefact docs. Resolution already
+                # honours `SYMPHONY_LANG` (build_service_config call).
+                doc_language = cfg.tui.language
+                first_prompt, _env = build_first_turn_prompt(
+                    prompt_template=cfg.prompt_template,
+                    issue=issue,
+                    attempt=attempt,
+                    language=doc_language,
+                    max_turns=cfg.agent.max_turns,
+                )
                 await client.start_session(
                     initial_prompt=first_prompt,
                     issue_title=f"{issue.identifier}: {issue.title}",
@@ -543,15 +550,10 @@ class Orchestrator:
                 while True:
                     is_continuation = turn_number > 1
                     if is_continuation:
-                        env = {
-                            "issue": issue.to_template_dict(),
-                            "attempt": attempt,
-                            "turn_number": turn_number,
-                            "max_turns": cfg.agent.max_turns,
-                        }
-                        prompt = (
-                            "Continue working on the issue. Re-check the tracker if needed. "
-                            f"This is turn {turn_number} of up to {cfg.agent.max_turns}."
+                        prompt = build_continuation_prompt(
+                            language=doc_language,
+                            turn_number=turn_number,
+                            max_turns=cfg.agent.max_turns,
                         )
                     else:
                         prompt = first_prompt

@@ -6,7 +6,13 @@ import pytest
 
 from symphony.errors import TemplateRenderError, TemplateParseError
 from symphony.issue import BlockerRef, Issue
-from symphony.prompt import build_prompt_env, render
+from symphony.i18n import doc_language_preamble
+from symphony.prompt import (
+    build_continuation_prompt,
+    build_first_turn_prompt,
+    build_prompt_env,
+    render,
+)
 
 
 def _issue() -> Issue:
@@ -73,3 +79,109 @@ def test_template_parse_error_on_unclosed_tag():
     env = build_prompt_env(_issue(), attempt=None)
     with pytest.raises(TemplateParseError):
         render("{% if attempt %}forever", env)
+
+
+def test_build_prompt_env_default_language_is_english():
+    """Callers that pass no language get the safe EN default — preserves
+    behavior for any existing test/code that calls build_prompt_env(...)
+    with the original two-argument signature."""
+    env = build_prompt_env(_issue(), attempt=None)
+    assert env["language"] == "en"
+
+
+def test_build_prompt_env_explicit_korean():
+    env = build_prompt_env(_issue(), attempt=None, language="ko")
+    assert env["language"] == "ko"
+
+
+def test_build_prompt_env_unknown_language_falls_back_to_english():
+    """A misconfigured `tui.language: fr` must NOT crash worker dispatch —
+    silently coerce to EN so the agent still gets a coherent prompt."""
+    env = build_prompt_env(_issue(), attempt=None, language="fr")
+    assert env["language"] == "en"
+
+
+def test_build_prompt_env_alias_korean():
+    # Aliases (Korean / KO_KR / kr) all collapse to the canonical 'ko'.
+    env = build_prompt_env(_issue(), attempt=None, language="Korean")
+    assert env["language"] == "ko"
+
+
+def test_render_can_branch_on_language():
+    """WORKFLOW.md authors can write {% if language == 'ko' %}…{% endif %}
+    to keep one bilingual file instead of forking the prompt template."""
+    template = "{% if language == 'ko' %}안녕{% else %}hi{% endif %}"
+    env_en = build_prompt_env(_issue(), attempt=None, language="en")
+    env_ko = build_prompt_env(_issue(), attempt=None, language="ko")
+    assert render(template, env_en) == "hi"
+    assert render(template, env_ko) == "안녕"
+
+
+# ---------------------------------------------------------------------------
+# build_first_turn_prompt / build_continuation_prompt — wired by orchestrator
+# ---------------------------------------------------------------------------
+
+
+def test_first_turn_prompt_prepends_english_preamble_by_default():
+    body = "Body for {{ issue.identifier }}, turn {{ turn_number }}/{{ max_turns }}."
+    prompt, env = build_first_turn_prompt(
+        prompt_template=body,
+        issue=_issue(),
+        attempt=None,
+        language="en",
+        max_turns=20,
+    )
+    assert prompt.startswith(doc_language_preamble("en"))
+    # Two newlines visually separate preamble from rendered body.
+    assert "\n\n" in prompt
+    assert "Body for MT-649, turn 1/20." in prompt
+    assert env["language"] == "en"
+    assert env["turn_number"] == 1
+    assert env["max_turns"] == 20
+
+
+def test_first_turn_prompt_prepends_korean_preamble():
+    body = "본문 {{ issue.identifier }}"
+    prompt, env = build_first_turn_prompt(
+        prompt_template=body,
+        issue=_issue(),
+        attempt=None,
+        language="ko",
+        max_turns=10,
+    )
+    # Korean preamble is concrete enough to spot-check without coupling
+    # the test to the full sentence.
+    assert prompt.startswith(doc_language_preamble("ko"))
+    assert "한국어" in prompt
+    assert "본문 MT-649" in prompt
+    assert env["language"] == "ko"
+
+
+def test_first_turn_prompt_unknown_language_falls_back_to_english():
+    """A misconfigured `tui.language: fr` must NOT halt dispatch — agent
+    still gets a coherent EN preamble + rendered body."""
+    prompt, env = build_first_turn_prompt(
+        prompt_template="Hi",
+        issue=_issue(),
+        attempt=None,
+        language="fr",
+        max_turns=5,
+    )
+    assert prompt.startswith(doc_language_preamble("en"))
+    assert env["language"] == "en"
+
+
+def test_continuation_prompt_prepends_preamble_and_includes_turn_count():
+    out = build_continuation_prompt(language="ko", turn_number=3, max_turns=20)
+    assert out.startswith(doc_language_preamble("ko"))
+    assert "turn 3 of up to 20" in out
+    assert "Continue working on the issue" in out
+
+
+def test_continuation_prompt_default_english_path():
+    out = build_continuation_prompt(language="en", turn_number=2, max_turns=20)
+    assert out.startswith(doc_language_preamble("en"))
+    # Continuation body itself stays English regardless of operator
+    # language — this is the orchestrator's own glue text, not the
+    # WORKFLOW.md body. Only artefact language is operator-controlled.
+    assert "turn 2 of up to 20" in out

@@ -7,8 +7,10 @@ from pathlib import Path
 
 from symphony.i18n import (
     DEFAULT_LANGUAGE,
+    DOC_LANG_PREAMBLE,
     LANGUAGE_ENV_VAR,
     STRINGS,
+    doc_language_preamble,
     normalize_language,
     resolve_language,
     t,
@@ -176,6 +178,46 @@ def test_workflow_env_override_wins_over_config(tmp_path, monkeypatch):
 def test_column_more_format_string():
     assert t("column.more").format(n=3) == "+3 more"
     assert t("column.more", "ko").format(n=3) == "+3개 더"
+
+
+def test_doc_language_preamble_english_default():
+    """Default and unknown codes both resolve to the English preamble —
+    operators with `tui.language: fr` still get a coherent prompt."""
+    en = doc_language_preamble("en")
+    assert "English" in en
+    assert "kanban" in en.lower()
+    assert doc_language_preamble(None) == en
+    assert doc_language_preamble("") == en
+    assert doc_language_preamble("fr") == en
+
+
+def test_doc_language_preamble_korean():
+    ko = doc_language_preamble("ko")
+    assert "한국어" in ko
+    # Stage headers and code identifiers must be called out as untouched —
+    # the orchestrator's reconcile reads `## Triage`, `## QA Evidence`
+    # etc. by exact string match, so a translated header silently halts
+    # the pipeline.
+    assert "## Triage" in ko or "헤더" in ko
+
+
+def test_doc_language_preamble_alias_korean():
+    # Aliases that `normalize_language` already handles must flow through
+    # cleanly here too (so SYMPHONY_LANG=Korean / kr / KO_KR all work).
+    assert doc_language_preamble("Korean") == doc_language_preamble("ko")
+    assert doc_language_preamble("kr") == doc_language_preamble("ko")
+
+
+def test_doc_language_preamble_supported_set_matches_strings():
+    """Every TUI language with chrome strings should also have a doc
+    preamble — otherwise `tui.language: <new_lang>` would silently
+    downgrade prompts to English while the chrome looks correctly localized.
+    """
+    chrome_langs = set(STRINGS.keys())
+    preamble_langs = set(DOC_LANG_PREAMBLE.keys())
+    assert preamble_langs == chrome_langs, (
+        f"chrome={chrome_langs} but preambles={preamble_langs}"
+    )
 
 
 def test_workflow_alias_korean(tmp_path, monkeypatch):
