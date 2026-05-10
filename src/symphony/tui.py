@@ -25,10 +25,10 @@ from rich.console import Console
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Static
+from textual.widgets import Footer, Header, Input, Static
 
 from .i18n import t
 from .issue import Issue, normalize_state
@@ -66,6 +66,19 @@ AGENT_COLOR = {
 # Tuned to be just past the longest expected pi/claude turn warm-up
 # (≈30 s for opus-4 cold start) so the indicator never fires on healthy runs.
 SILENT_THRESHOLD_S = 30.0
+
+
+# Card render densities. Compact = one-line summary; Rich = current 3–6 line layout.
+DENSITY_RICH = "rich"
+DENSITY_COMPACT = "compact"
+
+
+# Lane fr widths used by `_apply_lane_widths`. Pulled out as constants so the
+# layout is tweakable in one place and so unit tests can assert against the
+# named widths instead of magic strings scattered across the file.
+LANE_WIDTH_NORMAL = "1fr"
+LANE_WIDTH_DIM = "0.4fr"
+LANE_WIDTH_ZOOMED = "3fr"
 
 
 @dataclass

@@ -1,101 +1,127 @@
-# TUI rendering — display invariants and config knobs
+# TUI rendering — Textual app structure and invariants
 
-**Summary:** `src/symphony/tui.py` is the operator-facing Kanban view. It
-reads the orchestrator's JSON snapshot, *not* the tracker, so its data
-horizon is whatever the orchestrator currently holds. Three display-time
-knobs live under `tui.*` in `WORKFLOW.md`: `language`,
-`max_cards_per_column`, `lane_wrap_width`. Two non-trivial display
-constraints recur often enough to surface here:
+**Summary:** `src/symphony/tui.py` is the operator-facing Kanban view, built
+on the [Textual](https://textual.textualize.io) framework. It composes a
+`KanbanApp(App)` with a header, a stats bar, one `Lane` widget per tracker
+state, and a `Footer` that auto-renders the app's `BINDINGS`. Data comes
+from two sources every tick: `Orchestrator.snapshot()` for live runtime
+overlays (tokens, last event, retry posture) and the tracker client (Linear
+or file) for the candidate / terminal issue lists. Layout, scroll, focus,
+and mouse handling are entirely the framework's job — no manual layout
+math lives in this module.
 
-1. The orchestrator drops `RunningEntry` (and therefore per-issue token
-   totals) the moment a worker exits. The snapshot has no historical
-   per-issue token field, only `codex_totals` (workspace-wide running
-   totals). Card-level token rendering is therefore live-only by
-   construction, with one exception: there is a brief window between
-   the agent transitioning a ticket to a terminal state and the worker
-   exiting where the snapshot still has `running[].tokens` for a card
-   whose `state == "Done"`. The TUI must keep showing the meta line
-   during that window or the cost trail vanishes mid-flight.
-2. `rich.columns.Columns` is one row only. Multi-row "wrap" layouts
-   are built by emitting two `Columns(...)` groups inside a single
-   `Group(...)`. Rich's natural fallback when panels don't fit
-   horizontally is to flow them into multiple visual rows *within
-   each Columns group* — that's not a wrap; it's Columns' natural
-   behaviour. Use `lane_wrap_width` to force structural splits when
-   the operator's terminal is too narrow for the full lane count.
+The compatibility wrapper `KanbanTUI(orchestrator, workflow_state).run()`
+is the only public entry point; cli.py and the launcher scripts call it.
+Internally it delegates to `KanbanApp.run_async()`.
 
-## Invariants & Constraints
+## Widget tree
 
-- The TUI never raises on missing data. `_render` returns
-  `Group(Panel("workflow not loaded", border_style="red"))` when
-  `WorkflowState.current()` is `None` — never blanks the screen and
-  never crashes the live loop.
-- Render is gated on `_render_signal` (orchestrator tick observer +
-  2 Hz heartbeat). New display knobs must therefore be safe to read
-  on every tick, not just at startup.
-- `_build_runtime_index` returns only entries for issues currently in
-  `snap["running"]` or `snap["retrying"]`. Cards rendered for issues
-  outside that set get the default `_CardStatus(runtime="idle",
-  tokens=0, ...)`. Display logic that wants to differentiate
-  "running with tokens" from "anywhere else with tokens" must gate on
-  `tokens > 0`, not on `runtime == "running"`.
-- Per-card visual layout reserves five potential lines (top-down):
-  title (`identifier + glyph`), body (`title + Pn`), description preview,
-  meta (`turn N / silent / last_event`, retry, blockers, or labels),
-  tokens (when `tokens > 0`), last_message. Adding a new line costs
-  density at the column-cap boundary — see SMA-22 review notes on the
-  inline-vs-separate token-line refinement.
-- `lane_wrap_width: 0` is the documented "always one row" sentinel.
-  Negative / non-numeric / bool values raise `ConfigValidationError`
-  via `_validated_non_negative_or_default` — sibling of the strict
-  positive-int validator that allows zero specifically as a sentinel
-  (round-4 doctor-friendly invariant).
-- The footer hint (`footer.controls` i18n key) lists only bindings
-  the TUI actually wires up. There is no `r` (refresh) or `?` (help)
-  binding; surfacing them would mislead operators. If a binding is
-  added, update both EN and KO entries.
+```
+KanbanApp(App)
+├── Header(show_clock=True)
+├── StatsBar (#stats)                  ← agent / tracker / counts / tokens
+├── Container(#board, layout=horizontal)
+│   ├── Lane (one per state in active+terminal order)
+│   │   ├── Static.lane-title          ← "Todo (3)"
+│   │   ├── Static.lane-legend         ← state_descriptions[state]
+│   │   └── VerticalScroll
+│   │       └── IssueCard×N            ← focusable, opens TicketDetailScreen
+│   ├── Lane …
+└── Footer()                           ← auto-shows BINDINGS
+```
+
+Modal: `TicketDetailScreen(ModalScreen[None])` — pushed on `enter` from a
+focused `IssueCard`, dismissed on `esc` / `q`.
+
+## Refresh model
+
+- `set_interval(0.5, self._refresh_runtime)` — heartbeat that re-reads
+  `Orchestrator.snapshot()` and updates lane card counts + token totals.
+  Necessary so the "silent N s" badge ticks over even when no orchestrator
+  event fires.
+- `set_interval(poll_s, self._kick_tracker_refresh)` — periodic tracker
+  fetch in a worker (`run_worker(..., exclusive=True, group="tracker")`)
+  so a slow Linear API never stalls the UI.
+- `Orchestrator.add_observer(self._on_orchestrator_tick)` — observer fires
+  on every orchestrator tick; bounces through `self.post_message(_RefreshNow())`
+  so widget updates stay on the Textual event loop.
+
+## Card diff (DuplicateIds avoidance)
+
+`Lane.render_cards()` does NOT call `remove_children()` followed by
+`mount_all()`. `remove_children()` is asynchronous — the framework only
+schedules the removal — so a fast second tick (heartbeat racing with the
+prime poll) would re-mount cards while the prior generation is still in
+the node list, and the per-card `id="card-<safe-issue-id>"` would collide
+with `DuplicateIds`. Instead the lane:
+
+1. Builds a dict of `{card_id → existing IssueCard}`.
+2. For each desired card, either calls `existing.update_status(...)`
+   (in place — preserves focus / scroll position) or `mount(IssueCard(...))`
+   (only when the issue is new to this lane).
+3. Removes any leftover cards (issue moved to another lane / closed).
+4. Mounts the empty-state placeholder only when the lane is empty AND no
+   placeholder is already present.
+
+This also means a user's focus stays on the card they were inspecting
+across redraws — important because focus drives the `enter`-opens-detail
+binding.
+
+## Invariants
+
+- **No raise on missing data.** `_refresh_runtime` returns early when
+  `WorkflowState.current()` is `None`. The compose tree always renders.
+- **Pure helpers are exported.** `_parse_iso`, `_silent_seconds`,
+  `_truncate`, `_first_meaningful_line`, `_card_sort_key`,
+  `_compact_rate_limits`, `_ordered_column_states`, `_build_runtime_index`
+  are tested as pure functions in `tests/test_tui.py` so card-rendering
+  logic stays unit-testable without booting the app.
+- **Snapshot drop is intentional.** `Orchestrator` drops `RunningEntry`
+  when a worker exits, so per-issue token totals only live in
+  `snap["running"][i].tokens` while the worker is active. Idle / completed
+  cards fall back to the workspace-wide `codex_totals` shown in the stats
+  bar; non-running cards still surface their last known per-issue tokens
+  in dim cyan when present (forward-compatible with future per-issue
+  persistence).
+- **Silence threshold:** `SILENT_THRESHOLD_S = 30.0` — past this, a running
+  card grows a yellow `silent Ns` badge. Sized to outlive the longest
+  expected agent warm-up (Opus-4 cold start ≈30 s) so healthy runs never
+  trip it.
 
 ## Files of interest
 
-- `src/symphony/tui.py:_render` — `Group(header, *_lane_rows(panels,
-  cfg.tui.lane_wrap_width), footer)`. Returns one or two `Columns`
-  groups via `_lane_rows()` (split point is `math.ceil(n/2)`).
-- `src/symphony/tui.py:_render_card` — per-card layout. Token meta is
-  inline within the running branch; non-running cards get a separate
-  `tokens_line` whenever `status.tokens > 0` (forward infrastructure
-  — currently unreachable because the snapshot doesn't carry tokens
-  for non-running rows, but lives there for the future when
-  per-issue completed tokens may be persisted).
-- `src/symphony/tui.py:_append_token_meta` — paints the
-  `in / out / total` triple in either loud or dim cyan. Single source
-  of truth for the token palette; both code paths call it.
-- `src/symphony/tui.py:_build_footer` — wraps the totals line and the
-  controls hint in `Group(...)` inside a `Panel`.
-- `src/symphony/i18n.py` — `header.controls`, `footer.controls`,
-  `card.turn`, `card.retry`, `card.blocked_by`, `column.empty`,
-  `column.more`, `column.more_above`, language fallbacks.
-- `src/symphony/workflow.py:TuiConfig` — `language`,
-  `max_cards_per_column`, `lane_wrap_width`. New fields with
-  sentinel-zero semantics should reuse
-  `_validated_non_negative_or_default`.
-- `tests/test_tui.py` — `_StubOrchestrator` / `_StaticWorkflowState`
-  fixtures + `_columns_in()` walker make the render path testable
-  without a live `rich.live.Live`.
+- `src/symphony/tui.py:KanbanApp` — App subclass, BINDINGS, compose, refresh
+  intervals, action methods.
+- `src/symphony/tui.py:Lane` — per-state widget; `render_cards()` is the
+  diff-and-mount path described above.
+- `src/symphony/tui.py:IssueCard` — focusable Static; `update_status()` is
+  the in-place refresh path.
+- `src/symphony/tui.py:StatsBar` — top-row Static; rebuilds the rich `Text`
+  on each `update_from(cfg, snap)` call.
+- `src/symphony/tui.py:TicketDetailScreen` — ModalScreen with the full
+  description in a VerticalScroll.
+- `src/symphony/tui.py:KanbanTUI` — async wrapper preserving the old
+  `tui.run()` signature; new code should not depend on the wrapper.
+- `tests/test_tui.py` — pure-helper unit tests + Textual `Pilot` smoke
+  tests (boot the app, render, press keys, assert widget state).
 
 ## Decision log
 
-- 2026-05-09 | SMA-?? | Added `SILENT_THRESHOLD_S` badge for stalled
-  running cards. Threshold sized at 30 s to outlive Opus-4 cold start
-  so healthy runs never trip it.
-- 2026-05-09 | SMA-?? | Introduced `tui.max_cards_per_column` to cap
-  long columns and surface `+N more` indicators (silent overflow in
-  `rich.live.Live(screen=True)` was the original footgun).
-- 2026-05-10 | SMA-22 | Added `tui.lane_wrap_width` (default 200,
-  `0` = off-sentinel) for narrow-terminal split. Persisted per-card
-  token meta past the running runtime by gating on `tokens > 0` and
-  styling dim for non-running. Footer gained a localised `[j/k]
-  scroll   [q] quit` hint (omits unbound `r` and `?` per spec).
-  Added `_validated_non_negative_or_default` so future
-  sentinel-zero TuiConfig fields can reuse the strict-but-zero shape.
+- 2026-05-09 | SMA-?? | Added `SILENT_THRESHOLD_S` badge for stalled running
+  cards.
+- 2026-05-09 | SMA-?? | Original Rich `Live` implementation introduced
+  `tui.max_cards_per_column` to bound visible card counts (silent overflow
+  in `rich.live.Live(screen=True)` was the original footgun).
+- 2026-05-10 | SMA-22 | Added `tui.lane_wrap_width` for narrow-terminal
+  splits; persisted per-card token meta past worker exit.
+- 2026-05-10 | post-SMA-22 | **Migrated TUI from `rich.live.Live` to
+  Textual.** Lanes/cards/modal became real widgets so focus, mouse wheel,
+  and detail drill-down are framework-handled. `_keyboard.py` (250 LOC of
+  raw-mode + SGR mouse parsing) and the manual lane-row / page math were
+  removed. `TuiConfig.max_cards_per_column` and `lane_wrap_width` were
+  dropped — Textual's `VerticalScroll` and horizontal `Container` make
+  them no-ops. The legacy keys are silently ignored if still set in an
+  operator's `WORKFLOW.md` (no breaking change). Public API
+  `KanbanTUI(orch, state).run()` was preserved so cli.py kept working.
 
-**Last updated:** 2026-05-10 by SMA-22.
+**Last updated:** 2026-05-10 by the Textual migration follow-up.

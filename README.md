@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests: 164 passing](https://img.shields.io/badge/tests-164%20passing-brightgreen.svg)](#tests)
+[![Tests: 205 passing](https://img.shields.io/badge/tests-205%20passing-brightgreen.svg)](#tests)
 
 > Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
 > orchestrator, with a Jira-style Kanban board rendered straight in your
@@ -60,9 +60,11 @@ adds:
    - **Pi** — `pi --mode json -p ""` (JSONL events, per-turn subprocess with
      `--session` resume; supports Anthropic / OpenAI / Gemini / Bedrock backends
      under one CLI — see [pi.dev](https://pi.dev))
-2. A **Jira-style CLI Kanban TUI** built on `rich` that replaces the upstream
-   server-rendered HTML dashboard. Columns are tracker states; cards show the
-   active agent, turn count, last event, and accumulated tokens.
+2. A **Jira-style CLI Kanban TUI** built on [Textual](https://textual.textualize.io)
+   that replaces the upstream server-rendered HTML dashboard. Columns are
+   tracker states; cards show the active agent, turn count, last event, and
+   accumulated tokens. Cards are focusable, the mouse wheel scrolls each lane,
+   and pressing `enter` on a card opens a full-detail modal.
 
 The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
 and prompt renderer are unchanged from upstream — this fork is a thin layer
@@ -369,7 +371,40 @@ runtime indicator:
 - **↻ yellow** — in retry queue, shows `retry #N` and the last error
 - **✓ green** — completed in this session
 
-Quit with `Ctrl-C` (clean shutdown drains active workers).
+Key bindings (also auto-listed in the footer):
+
+| Key                | Action                                       |
+|--------------------|----------------------------------------------|
+| `q`                | Quit (drains active workers cleanly)         |
+| `r`                | Force a refresh + re-poll the tracker        |
+| `?`                | Show all key bindings as a notification      |
+| `tab` / `shift+tab`| Move focus to next / previous card or lane   |
+| `j` / `↓`          | Scroll focused lane down one row             |
+| `k` / `↑`          | Scroll focused lane up one row               |
+| `space` / `pgdn`   | Page down                                    |
+| `b` / `pgup`       | Page up                                      |
+| `g` / `home`       | Jump to top                                  |
+| `G` / `end`        | Jump to bottom                               |
+| `enter`            | Open the focused card's full-detail modal    |
+| `esc` / `q`        | Close the modal (when one is open)           |
+
+Mouse: clicking a card focuses it, the wheel scrolls its lane.
+
+#### One-shot launchers
+
+For developers who don't want to remember the full `symphony tui` invocation,
+the repo ships two launcher scripts that prefer `.venv/bin/symphony` over
+`PATH`, run `symphony doctor` first, then open the TUI in a new terminal
+window:
+
+```bash
+./tui-open.sh                     # macOS / Linux — uses iTerm or Terminal.app
+./tui-open.sh path/to/WORKFLOW.md # explicit workflow path
+tui-open.bat                      # Windows — uses cmd /k
+```
+
+Both scripts abort the launch if `doctor` reports a FAIL so you do not paint
+the alt-screen on top of unreadable preflight output.
 
 ### File-based Kanban tracker
 
@@ -401,9 +436,11 @@ src/symphony/
   agent.py             back-compat shim re-exporting backends.* symbols
   workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini/Pi configs
   orchestrator.py      unchanged scheduler; uses build_backend() factory
-  tui.py               rich Kanban TUI (replaces server.py dashboard)
+  tui.py               Textual Kanban TUI (replaces server.py dashboard)
   server.py            JSON API only (HTML root removed)
   cli.py               adds `tui` subcommand / `--tui` flag
+tui-open.sh            cross-platform launcher (macOS / Linux): doctor preflight + open TUI in a new terminal window
+tui-open.bat           Windows equivalent
   ...
 ```
 
@@ -413,9 +450,10 @@ src/symphony/
 pytest -q
 ```
 
-164 tests pass: the upstream conformance suite plus the backend unit tests
-covering the factory, event normalization, Claude / Pi usage accumulation,
-Gemini session synthesis, and Pi failure-reason detection. Subprocess-driven
+205 tests pass (2 skipped): the upstream conformance suite plus the backend
+unit tests covering the factory, event normalization, Claude / Pi usage
+accumulation, Gemini session synthesis, and Pi failure-reason detection,
+plus Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
 integration tests against real CLIs are intentionally not in CI — run them
 locally.
 
@@ -447,14 +485,26 @@ The `AgentBackend` Protocol hides these differences. The orchestrator only
 sees normalized events (`session_started`, `turn_completed`, `turn_failed`,
 …) and the latest usage / rate-limit snapshots.
 
-### What the TUI deliberately does not do
+### What the TUI does and does not do
 
-- No mouse interaction, no card drag-drop. It is a read-only board.
-- No drill-down view — use `/api/v1/<identifier>` for raw issue debug.
-- No log tailing — agent output goes to stderr/log files, not the TUI.
+The board is observer-only: cards move when the agent rewrites the underlying
+ticket file (file tracker) or transitions the issue (Linear), never as a
+direct UI action. That matches the upstream design philosophy — the
+orchestrator is the source of truth and the UI is a thin reflection.
 
-This matches the upstream design philosophy: the orchestrator is the source
-of truth, the UI is a thin observer.
+What you *can* do interactively:
+
+- Focus any card with `tab` / `shift+tab` or by clicking it.
+- Scroll a lane with the mouse wheel, `j` / `k`, or page keys.
+- Open a focused card's full description in a modal with `enter`.
+
+What is intentionally out of scope:
+
+- **No card drag-drop.** Move tickets via `symphony board mv ID State`
+  (file tracker) or in your tracker UI directly.
+- **No agent-output log pane.** Agent stdout/stderr goes to the structured
+  log; tail it with `tail -F log/symphony.log` in a side terminal.
+- **No write actions to the tracker** beyond what the agent does itself.
 
 ## What is *not* implemented
 
@@ -506,8 +556,9 @@ upstream Apache-2.0 licensed work provides the orchestrator, the scheduler,
 and the workspace lifecycle that make this fork possible. See `NOTICE` for
 attribution details.
 
-The TUI uses Will McGugan's [rich](https://github.com/Textualize/rich)
-library for terminal rendering.
+The TUI is built on Will McGugan's [Textual](https://textual.textualize.io)
+framework, with [rich](https://github.com/Textualize/rich) used directly for
+text styling inside cards.
 
 Pipeline stage rules adapt the evidence-first ideas of [cskwork/backend-dev-skills](https://github.com/cskwork/backend-dev-skills) (MIT).
 

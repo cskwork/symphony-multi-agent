@@ -1,14 +1,17 @@
 @echo off
-REM tui-open.bat - launch Symphony's TUI in a new console window (Windows).
+REM tui-open.bat - launch Symphony's Textual Kanban TUI in a new console window.
 REM
 REM Usage:
 REM   tui-open.bat [path\to\WORKFLOW.md]
 REM
 REM - Defaults to .\WORKFLOW.md.
 REM - Prefers .venv\Scripts\symphony.exe; falls back to PATH.
+REM   `pip install -e .` pulls textual automatically as a runtime dep — if
+REM   you see ModuleNotFoundError: textual, re-run pip install -e . inside .venv.
 REM - Runs `symphony --tui WORKFLOW.md` (single process: orchestrator + TUI).
 REM - Spawns a NEW console window via `start "title" cmd /k ...` so this
 REM   script returns control to the caller immediately.
+REM - Quit the TUI with `q` from inside the app (drains workers cleanly).
 
 setlocal ENABLEDELAYEDEXPANSION
 

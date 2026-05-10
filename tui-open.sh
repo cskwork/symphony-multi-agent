@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# tui-open.sh — launch Symphony's TUI in a new terminal window.
+# tui-open.sh — launch Symphony's Textual Kanban TUI in a new terminal window.
 #
 # Usage:
 #   ./tui-open.sh [path/to/WORKFLOW.md]
 #
 # - Defaults to ./WORKFLOW.md in the script's directory.
 # - Prefers the project venv at .venv/bin/symphony; falls back to PATH.
+#   `pip install -e .` pulls textual automatically as a runtime dep — if
+#   the launcher errors with `ModuleNotFoundError: textual`, your active
+#   environment is stale; re-run `pip install -e .` inside .venv.
 # - Runs `symphony --tui WORKFLOW.md`, which starts both the orchestrator
 #   AND the TUI in a single process (the server port from WORKFLOW.md's
 #   `server.port` is also exposed).
+# - Quit the TUI with `q` from inside the app (drains workers cleanly) or
+#   close the spawned terminal window. Ctrl-C also works.
 #
 # Platform behaviour:
-#   macOS                   -> opens a new Terminal.app window via osascript
+#   macOS                   -> opens a new iTerm.app window if installed,
+#                              otherwise Terminal.app, via a .command launcher
 #   Linux + $TERMINAL set   -> spawns $TERMINAL -e ...
 #   Linux + DISPLAY         -> tries gnome-terminal, konsole, xterm in order
 #   anywhere else           -> runs in current shell (foreground)
