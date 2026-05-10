@@ -120,6 +120,33 @@ def test_fetch_candidate_filters_by_active(tmp_path):
     assert ids == ["A", "C"]
 
 
+def test_fetch_candidate_resolves_blocker_state_from_current_board(tmp_path):
+    """Stale blocker state embedded in a ticket must not make it eligible."""
+    root = tmp_path / "board"
+    _write(root, "A.md", "---\nid: A\ntitle: blocker\nstate: Review\n---\n")
+    _write(
+        root,
+        "B.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: B
+            title: dependent
+            state: Todo
+            blocked_by:
+              - identifier: A
+                state: Done
+            ---
+            """
+        ),
+    )
+
+    fbt = FileBoardTracker(_tracker(root, active=("Todo", "Review")))
+    issues = {i.identifier: i for i in fbt.fetch_candidate_issues()}
+
+    assert issues["B"].blocked_by[0].state == "Review"
+
+
 def test_fetch_issues_by_states(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Done\n---\n")

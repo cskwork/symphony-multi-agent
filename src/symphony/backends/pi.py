@@ -41,7 +41,7 @@ import time
 from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     PortExit,
     ResponseError,
@@ -111,14 +111,13 @@ class PiBackend:
                 proc.terminate()
             except ProcessLookupError:
                 pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            rc = await safe_proc_wait(proc, timeout=2.0)
+            if rc is None and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
-                await proc.wait()
+                await safe_proc_wait(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -204,11 +203,12 @@ class PiBackend:
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("pi turn timed out") from exc
 
-            await proc.wait()
+            safe_rc = await safe_proc_wait(proc)
             if terminal is None:
                 stderr_blob = self._stderr_blob()
+                rc = safe_rc if safe_rc is not None else proc.returncode
                 err_msg = (
-                    f"pi exited with no agent_end event (rc={proc.returncode})"
+                    f"pi exited with no agent_end event (rc={rc})"
                     + (f"; stderr: {stderr_blob}" if stderr_blob else "")
                 )
                 await self._emit(
@@ -395,14 +395,13 @@ class PiBackend:
             proc.terminate()
         except ProcessLookupError:
             return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        rc = await safe_proc_wait(proc, timeout=2.0)
+        if rc is None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            await proc.wait()
+            await safe_proc_wait(proc)
 
     def _update_usage(self, usage: dict[str, Any]) -> None:
         """Accumulate Pi's per-message Usage into the running totals."""

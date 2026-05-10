@@ -28,7 +28,7 @@ import time
 from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     PortExit,
     ResponseError,
@@ -96,14 +96,13 @@ class ClaudeCodeBackend:
                 proc.terminate()
             except ProcessLookupError:
                 pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            rc = await safe_proc_wait(proc, timeout=2.0)
+            if rc is None and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
-                await proc.wait()
+                await safe_proc_wait(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -186,7 +185,7 @@ class ClaudeCodeBackend:
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("claude turn timed out") from exc
 
-            await proc.wait()
+            await safe_proc_wait(proc)
             if terminal is None:
                 # Stream ended without a `result` event — treat as failure.
                 stderr_blob = self._stderr_blob()
@@ -317,14 +316,13 @@ class ClaudeCodeBackend:
             proc.terminate()
         except ProcessLookupError:
             return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        rc = await safe_proc_wait(proc, timeout=2.0)
+        if rc is None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            await proc.wait()
+            await safe_proc_wait(proc)
 
     def _update_usage_absolute(self, usage: dict[str, Any]) -> None:
         # Each `result` event reports usage for that one turn — accumulate.

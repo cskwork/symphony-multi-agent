@@ -56,6 +56,13 @@ log = get_logger()
 CONTINUATION_RETRY_DELAY_MS = 1_000  # §7.1
 RETRY_BASE_MS = 10_000  # §8.4
 
+# Grace window after `worker_task.cancel()` before we forcibly remove the
+# entry from `_running`. A worker stuck on a non-cancellable await (e.g. a
+# fork that never returns, a DNS lookup, a misbehaving subprocess) would
+# otherwise hold its concurrency slot forever and starve the rest of the
+# board. The cancel is still issued; this just stops the slot from leaking.
+STALL_FORCE_EJECT_GRACE_S = 30.0
+
 
 # States that, when re-entered from a downstream stage, count as a rewind.
 # `normalize_state` lowercases its input, so compare in lowercase.
@@ -106,6 +113,10 @@ class RunningEntry:
     last_reported_total_tokens: int = 0
     codex_app_server_pid: int | None = None
     last_error: str | None = None
+    # Set to `now` the first time stall detection cancels this worker. Used
+    # by the next reconcile tick to escalate from "cancel sent" to "force
+    # eject" if the worker is stuck on a non-cancellable await.
+    cancelled_at: datetime | None = None
 
 
 @dataclass
@@ -308,6 +319,7 @@ class Orchestrator:
                 "output_tokens": entry.codex_output_tokens,
                 "total_tokens": entry.codex_total_tokens,
             },
+            "worker_task": _task_debug(entry.worker_task),
         }
 
     @staticmethod
@@ -371,7 +383,7 @@ class Orchestrator:
             await self._notify_observers()
             return
 
-        for issue in sort_for_dispatch(candidates):
+        for issue in _sort_for_dispatch_fifo(candidates, cfg):
             if self._available_slots(cfg) <= 0:
                 break
             if self._should_dispatch(issue, cfg):
@@ -495,6 +507,9 @@ class Orchestrator:
             self._run_agent_attempt(issue, attempt, cfg),
             name=f"symphony-worker-{issue.identifier}",
         )
+        worker_task.add_done_callback(
+            lambda task, issue_id=issue.id: self._on_worker_task_done(issue_id, task)
+        )
         entry = RunningEntry(
             issue=issue,
             started_at=datetime.now(timezone.utc),
@@ -516,6 +531,39 @@ class Orchestrator:
             attempt=attempt,
         )
 
+    def _on_worker_task_done(self, issue_id: str, task: asyncio.Task[None]) -> None:
+        """Clean a registered worker whose coroutine never ran its cleanup.
+
+        If a task is cancelled before its first scheduling slice, Python never
+        enters the coroutine body, which means `_run_agent_attempt`'s `finally`
+        cannot call `_on_worker_exit`. The usual path pops `_running` before
+        this callback fires; a remaining entry means the slot would otherwise
+        leak forever.
+
+        The registered entry MUST belong to `task` itself. `_on_worker_exit`
+        yields once at `_notify_observers`, and the 1s continuation retry
+        timer can fire inside that yield to install a fresh entry under the
+        same key. A stale callback that pops it would log a phantom
+        `worker_task_finished_without_cleanup` and eject the live worker.
+        """
+        entry = self._running.get(issue_id)
+        if entry is None or entry.worker_task is not task:
+            return
+        if task.cancelled():
+            reason = "worker_task_cancelled_before_start"
+            error = "asyncio task was cancelled before worker cleanup ran"
+        else:
+            try:
+                exc = task.exception()
+            except asyncio.CancelledError:
+                reason = "worker_task_cancelled_before_start"
+                error = "asyncio task was cancelled before worker cleanup ran"
+            else:
+                reason = "worker_task_finished_without_cleanup"
+                error = str(exc) if exc is not None else "worker task completed without exit cleanup"
+        log.error("worker_task_done_without_cleanup", issue_id=issue_id, reason=reason, error=error)
+        asyncio.create_task(self._on_worker_exit(issue_id, reason, error))
+
     # ------------------------------------------------------------------
     # worker (§16.5)
     # ------------------------------------------------------------------
@@ -523,12 +571,13 @@ class Orchestrator:
     async def _run_agent_attempt(
         self, issue: Issue, attempt: int | None, cfg: ServiceConfig
     ) -> None:
+        running_issue_id = issue.id
         outcome: str = "normal"
         error: str | None = None
         try:
             assert self._workspace_manager is not None
             workspace = await self._workspace_manager.create_or_reuse(issue.identifier)
-            self._running[issue.id].workspace_path = workspace.path
+            self._running[running_issue_id].workspace_path = workspace.path
             try:
                 await self._workspace_manager.before_run(workspace.path)
             except Exception as exc:
@@ -545,7 +594,9 @@ class Orchestrator:
                     cfg=cfg,
                     cwd=workspace.path,
                     workspace_root=cfg.workspace_root,
-                    on_event=lambda ev: self._on_codex_event(issue.id, ev),
+                    on_event=lambda ev, issue_id=running_issue_id: self._on_codex_event(
+                        issue_id, ev
+                    ),
                     client_tools=tools,
                 )
             )
@@ -591,6 +642,7 @@ class Orchestrator:
                             )
                             client, first_prompt = await self._rebuild_backend_for_phase(
                                 issue=issue,
+                                running_issue_id=running_issue_id,
                                 cfg=cfg,
                                 workspace_path=workspace.path,
                                 attempt=attempt,
@@ -598,7 +650,7 @@ class Orchestrator:
                                 old_client=client,
                                 is_rewind=is_rewind,
                             )
-                            running_entry = self._running.get(issue.id)
+                            running_entry = self._running.get(running_issue_id)
                             if running_entry is not None:
                                 running_entry.thread_id = None
                                 running_entry.session_id = None
@@ -640,15 +692,15 @@ class Orchestrator:
                     else:
                         prompt = first_prompt
 
-                    self._running[issue.id].turn_count = turn_number
+                    self._running[running_issue_id].turn_count = turn_number
                     # Symmetry with worker_turn_completed — a single line per
                     # turn-start so multi-turn runs (especially slow ones
                     # like gemini -p where a single turn can take 60-90s)
                     # don't look stuck between turns.
                     log.info(
                         "worker_turn_started",
-                        issue_id=issue.id,
-                        identifier=self._running[issue.id].issue.identifier,
+                        issue_id=running_issue_id,
+                        identifier=self._running[running_issue_id].issue.identifier,
                         turn=turn_number,
                         max_turns=cfg.agent.max_turns,
                         is_continuation=is_continuation,
@@ -667,11 +719,11 @@ class Orchestrator:
                     # and the listener running, swallowing the visibility
                     # signal. Logging here guarantees one line per
                     # successful turn even when reconcile races us.
-                    running_entry = self._running.get(issue.id)
+                    running_entry = self._running.get(running_issue_id)
                     if running_entry is not None:
                         log.info(
                             "worker_turn_completed",
-                            issue_id=issue.id,
+                            issue_id=running_issue_id,
                             identifier=running_entry.issue.identifier,
                             turn=turn_number,
                             input_tokens=running_entry.codex_input_tokens,
@@ -685,13 +737,13 @@ class Orchestrator:
                     prev_phase_state = current_state
 
                     # Refresh issue state.
-                    refreshed = await self._refresh_issue_state(cfg, issue.id)
+                    refreshed = await self._refresh_issue_state(cfg, running_issue_id)
                     if refreshed is None:
                         outcome = "issue_state_refresh_failed"
                         error = "could not refresh issue state"
                         return
                     issue = refreshed
-                    self._running[issue.id].issue = issue
+                    self._running[running_issue_id].issue = issue
                     state = normalize_state(issue.state)
                     active = {s.lower() for s in cfg.tracker.active_states}
                     if state not in active:
@@ -721,14 +773,15 @@ class Orchestrator:
         except Exception as exc:
             outcome = "error"
             error = str(exc)
-            log.error("worker_unhandled_error", issue_id=issue.id, error=str(exc))
+            log.error("worker_unhandled_error", issue_id=running_issue_id, error=str(exc))
         finally:
-            await self._on_worker_exit(issue.id, outcome, error)
+            await self._on_worker_exit(running_issue_id, outcome, error)
 
     async def _rebuild_backend_for_phase(
         self,
         *,
         issue: Issue,
+        running_issue_id: str,
         cfg: ServiceConfig,
         workspace_path: Path,
         attempt: int | None,
@@ -765,7 +818,9 @@ class Orchestrator:
                 cfg=cfg,
                 cwd=workspace_path,
                 workspace_root=cfg.workspace_root,
-                on_event=lambda ev: self._on_codex_event(issue.id, ev),
+                on_event=lambda ev, issue_id=running_issue_id: self._on_codex_event(
+                    issue_id, ev
+                ),
                 client_tools=tools,
             )
         )
@@ -981,6 +1036,32 @@ class Orchestrator:
         )
         await self._notify_observers()
 
+    def _force_eject_zombie(
+        self, issue_id: str, entry: RunningEntry, cfg: ServiceConfig
+    ) -> None:
+        """Forcibly free a worker slot when cancellation didn't propagate.
+
+        Pops the entry from `_running` / `_claimed` and queues a backoff
+        retry. The original `worker_task` stays cancelled — if it ever
+        unblocks, its `finally` chain hits `_on_worker_exit`, which is a
+        no-op on a missing entry, so this is race-safe.
+        """
+        self._running.pop(issue_id, None)
+        self._claimed.discard(issue_id)
+        next_attempt = (entry.retry_attempt or 0) + 1
+        cap = cfg.agent.max_retry_backoff_ms
+        delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
+        self._schedule_retry(
+            issue_id,
+            identifier=entry.issue.identifier,
+            attempt=next_attempt,
+            delay_ms=delay_ms,
+            error="force_ejected_zombie",
+        )
+        debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+        debug.last_workspace = entry.workspace_path
+        debug.last_error = "force_ejected_zombie"
+
     # ------------------------------------------------------------------
     # retry handling (§16.6)
     # ------------------------------------------------------------------
@@ -1070,11 +1151,27 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _reconcile_running(self, cfg: ServiceConfig) -> None:
-        # Part A: stall detection.
+        # Part A: stall detection + force-eject of zombie workers.
         _, _, stall_timeout_ms = cfg.backend_timeouts()
         if stall_timeout_ms > 0:
             now = datetime.now(timezone.utc)
             for issue_id, entry in list(self._running.items()):
+                # Worker that already received a stall-cancel: if it didn't
+                # exit within the grace window, force-eject so its slot
+                # doesn't leak. The cancel is still in flight; if the worker
+                # eventually wakes, `_on_worker_exit` no-ops on a missing
+                # entry.
+                if entry.cancelled_at is not None:
+                    since_cancel = (now - entry.cancelled_at).total_seconds()
+                    if since_cancel > STALL_FORCE_EJECT_GRACE_S:
+                        log.error(
+                            "stalled_worker_force_ejected",
+                            issue_id=issue_id,
+                            identifier=entry.issue.identifier,
+                            elapsed_since_cancel_s=round(since_cancel, 1),
+                        )
+                        self._force_eject_zombie(issue_id, entry, cfg)
+                    continue
                 seen = entry.last_codex_timestamp or entry.started_at
                 elapsed_ms = (now - seen).total_seconds() * 1000
                 if elapsed_ms > stall_timeout_ms:
@@ -1085,6 +1182,7 @@ class Orchestrator:
                         elapsed_ms=int(elapsed_ms),
                     )
                     entry.worker_task.cancel()
+                    entry.cancelled_at = now
         # Part B: tracker state refresh.
         running_ids = list(self._running.keys())
         if not running_ids:
@@ -1234,3 +1332,42 @@ def _from_monotonic_to_iso(due_at_ms: float) -> str:
     delta_seconds = max((due_at_ms - now_mono) / 1000.0, 0.0)
     target = datetime.now(timezone.utc).timestamp() + delta_seconds
     return datetime.fromtimestamp(target, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _task_debug(task: asyncio.Task[Any]) -> dict[str, Any]:
+    stack = [
+        f"{frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
+        for frame in task.get_stack()
+    ]
+    return {
+        "name": task.get_name(),
+        "done": task.done(),
+        "cancelled": task.cancelled() if task.done() else False,
+        "coro_repr": repr(task.get_coro()),
+        "stack": stack,
+    }
+
+
+def _sort_for_dispatch_fifo(issues: list[Issue], cfg: ServiceConfig) -> list[Issue]:
+    """Sort dispatch candidates FIFO by current active-state entry time.
+
+    File-board tickets use `updated_at` (falling back to file mtime) as the
+    best available "entered this state" timestamp. Priority and identifier
+    only break ties; they must not let new work jump ahead of older work.
+    """
+    del cfg  # Reserved for future tracker-specific ordering knobs.
+    normal_order = {
+        issue.id: index for index, issue in enumerate(sort_for_dispatch(issues))
+    }
+    return sorted(
+        issues,
+        key=lambda issue: (
+            _dispatch_fifo_timestamp(issue),
+            normal_order.get(issue.id, len(normal_order)),
+        ),
+    )
+
+
+def _dispatch_fifo_timestamp(issue: Issue) -> float:
+    dt = issue.updated_at or issue.created_at
+    return dt.timestamp() if dt is not None else float("inf")
