@@ -1,0 +1,5 @@
+wrote : /Users/danny/symphony_workspaces/SMA-20-qa-roundtrip-tmp/.symphony-session.json
+on disk: {"version": 1, "agent_kind": "claude", "session_id": "qa-real-roundtrip-001", "minted_at": "2026-05-10T05:08:09Z", "last_used_at": "2026-05-10T05:08:09Z"}
+loaded : SessionRecord(version=1, agent_kind='claude', session_id='qa-real-roundtrip-001', minted_at='2026-05-10T05:08:09Z', last_used_at='2026-05-10T05:08:09Z')
+OK    : round-trip passed against real workspace_root
+cleaned: /Users/danny/symphony_workspaces/SMA-20-qa-roundtrip-tmp

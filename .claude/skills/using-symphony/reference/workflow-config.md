@@ -197,8 +197,6 @@ observe via stderr logs and the TUI.
 tui:
   language: en               # `en` (default) or `ko`. Aliases like `Korean` /
                              # `ko-KR` also resolve. Unknown → English.
-  max_cards_per_column: 6    # cap each column at N cards; rest collapses to
-                             # "+M more". Omit / 0 / negative = render all.
 ```
 
 ### `language`
@@ -221,13 +219,6 @@ config change others would inherit:
 SYMPHONY_LANG=ko symphony tui ./WORKFLOW.md
 ```
 
-### `max_cards_per_column`
-
-`rich.live.Live(screen=True)` runs in alt-screen mode and clips overflow
-silently — there's no terminal scrollback inside the TUI. When a column
-grows past one viewport, the cards beyond the cutoff just disappear off
-the bottom edge. `max_cards_per_column: N` caps each column at N cards
-and renders a dim `+M more` line for the rest, so the count stays
-honest and you know to filter the board.
-
-Set to `0` (or omit) to keep the original render-everything behavior.
+Per-lane scrolling, mouse wheel, focus traversal, and ticket-detail
+modals are handled by the Textual framework — there is nothing to
+configure for them.

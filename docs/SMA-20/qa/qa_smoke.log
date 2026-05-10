@@ -1,0 +1,14 @@
+ts=2026-05-10T05:07:51Z level=WARN logger=symphony message="session_store_corrupt" path=/var/folders/lp/p1cqpv0549zdwkvkg6tzpp7h0000gn/T/tmp1s7t03hk/SMA-20/.symphony-session.json error="Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+[PASS] atomic_write_returns_record -- path=/var/folders/lp/p1cqpv0549zdwkvkg6tzpp7h0000gn/T/tmpvksbd426/SMA-20/.symphony-session.json
+[PASS] on_disk_shape_matches_PRD_spec -- {"version": 1, "agent_kind": "pi", "session_id": "019e0f48-aaaa-bbbb-cccc-1111", "minted_at": "2026-05-10T05:07:51Z", "last_used_at": "2026-05-10T05:07:51Z"}
+[PASS] no_atomic_write_tempfile_leak -- leftover=[]
+[PASS] round_trip_through_restart -- loaded=SessionRecord(version=1, agent_kind='claude', session_id='claude-xyz', minted_at='2026-05-10T05:07:51Z', last_used_at='2026-05-10T05:07:51Z')
+[PASS] kind_mismatch_does_not_resume -- file_kind=pi cfg_kind=claude
+[PASS] corrupt_file_returns_none -- loaded=None
+[PASS] pi_backend_honors_resume_session_id -- saw=resumed-pi-id
+[PASS] claude_backend_honors_resume_session_id -- saw=resumed-claude-id
+[PASS] gemini_backend_honors_resume_session_id -- saw=resumed-gemini-id
+[PASS] codex_backend_honors_resume_session_id -- saw=resumed-codex-id
+[PASS] gemini_start_session_preserves_resumed_id -- sid=gemini-prev-session
+
+summary: 11 passed, 0 failed

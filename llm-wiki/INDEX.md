@@ -8,3 +8,4 @@ Learn writes back to them after QA passes.
 |------------|---------|--------------|
 | production-pipeline | Seven-stage pipeline + docs/<id>/<stage>/ artefact convention + WORKFLOW/PIPELINE sync invariant | 2026-05-09 (this ticket) |
 | agent-observability | Headless event log signal set + stall signatures + cross-refs to orchestrator/doctor/workspace | 2026-05-10 |
+| session-persistence | Per-workspace `.symphony-session.json` + load on dispatch + save on session_started + per-backend honor-points + codex `thread/resume` fallback | 2026-05-10 (SMA-20) |

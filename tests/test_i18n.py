@@ -5,8 +5,6 @@ from __future__ import annotations
 import textwrap
 from pathlib import Path
 
-import pytest
-
 from symphony.i18n import (
     DEFAULT_LANGUAGE,
     LANGUAGE_ENV_VAR,
@@ -178,60 +176,6 @@ def test_workflow_env_override_wins_over_config(tmp_path, monkeypatch):
 def test_column_more_format_string():
     assert t("column.more").format(n=3) == "+3 more"
     assert t("column.more", "ko").format(n=3) == "+3개 더"
-
-
-def test_workflow_max_cards_default_none(tmp_path, monkeypatch):
-    monkeypatch.setenv("LINEAR_API_KEY", "tok")
-    path = _write(
-        tmp_path,
-        textwrap.dedent(
-            """\
-            ---
-            tracker: { kind: linear, project_slug: x }
-            ---
-            body
-            """
-        ),
-    )
-    cfg = build_service_config(load_workflow(path))
-    assert cfg.tui.max_cards_per_column is None
-
-
-def test_workflow_max_cards_explicit(tmp_path, monkeypatch):
-    monkeypatch.setenv("LINEAR_API_KEY", "tok")
-    path = _write(
-        tmp_path,
-        textwrap.dedent(
-            """\
-            ---
-            tracker: { kind: linear, project_slug: x }
-            tui: { max_cards_per_column: 6 }
-            ---
-            body
-            """
-        ),
-    )
-    cfg = build_service_config(load_workflow(path))
-    assert cfg.tui.max_cards_per_column == 6
-
-
-def test_workflow_max_cards_invalid_values_become_none(tmp_path, monkeypatch):
-    monkeypatch.setenv("LINEAR_API_KEY", "tok")
-    for raw in ("not-an-int", -1, 0, True, False):
-        path = _write(
-            tmp_path,
-            textwrap.dedent(
-                f"""\
-                ---
-                tracker: {{ kind: linear, project_slug: x }}
-                tui: {{ max_cards_per_column: {raw!r} }}
-                ---
-                body
-                """
-            ),
-        )
-        cfg = build_service_config(load_workflow(path))
-        assert cfg.tui.max_cards_per_column is None, f"raw={raw!r} should map to None"
 
 
 def test_workflow_alias_korean(tmp_path, monkeypatch):

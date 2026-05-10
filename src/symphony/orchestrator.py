@@ -200,6 +200,10 @@ class Orchestrator:
         self._tick_event.set()
         return False
 
+    def iter_running_issues(self) -> tuple[Issue, ...]:
+        """Return the issues currently owned by running workers."""
+        return tuple(entry.issue for entry in self._running.values())
+
     def snapshot(self) -> dict[str, Any]:
         running_rows = [self._running_row(eid, entry) for eid, entry in self._running.items()]
         retry_rows = [self._retry_row(entry) for entry in self._retry.values()]

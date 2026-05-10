@@ -53,8 +53,6 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n} more",
         "column.more_above": "↑ {n} above",
-        # controls hint shown in the header of the TUI
-        "header.controls": "controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap={n}",
     },
     "ko": {
         # header
@@ -80,8 +78,6 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n}개 더",
         "column.more_above": "↑ 위로 {n}개",
-        # controls hint shown in the header of the TUI
-        "header.controls": "조작: j/↓ 다음 · k/↑ 이전 · PgDn/PgUp 페이지 · g/G 처음/끝 · q 종료 · cap={n}",
     },
 }
 

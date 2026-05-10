@@ -13,3 +13,6 @@ htmlcov/
 /WORKFLOW.md
 /kanban/
 /log/
+
+# Runtime cache written by tui-open.sh on each launch (contains absolute paths)
+/.tui-launcher.command

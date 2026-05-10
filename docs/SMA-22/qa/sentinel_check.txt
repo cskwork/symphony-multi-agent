@@ -1,0 +1,2 @@
+lane_wrap_width = 0
+OK: -1 rejected -> ConfigValidationError

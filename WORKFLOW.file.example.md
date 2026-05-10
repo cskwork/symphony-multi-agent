@@ -74,8 +74,6 @@ server:
 
 tui:
   language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
-  max_cards_per_column: 6    # cap each column at N cards; rest collapses to "+M more"
-  lane_wrap_width: 200       # below N terminal columns, lay lanes across two rows; 0 disables
 ---
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
