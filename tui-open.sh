@@ -32,6 +32,13 @@ if [[ ! -f "${WORKFLOW}" ]]; then
   exit 2
 fi
 
+# Resolve WORKFLOW to an absolute path and remember its directory.
+# tracker.board_root is a path relative to the working directory, so we
+# must launch from the workflow's own directory — not SCRIPT_DIR — or
+# external/demo workflows will read the wrong board.
+WORKFLOW_ABS="$(cd "$(dirname "${WORKFLOW}")" && pwd)/$(basename "${WORKFLOW}")"
+WORKFLOW_DIR="$(dirname "${WORKFLOW_ABS}")"
+
 if [[ -x "${SCRIPT_DIR}/.venv/bin/symphony" ]]; then
   SYMPHONY="${SCRIPT_DIR}/.venv/bin/symphony"
 elif command -v symphony >/dev/null 2>&1; then
@@ -42,16 +49,63 @@ else
   exit 3
 fi
 
+# Detect whether a TUI for this workflow's port is already running. If so,
+# focus the user on that window instead of launching a duplicate (which
+# would just collide on the port and crash with EADDRINUSE).
+PORT="$(awk '
+  /^server:/                       { in_server = 1; next }
+  in_server && /^[^[:space:]]/     { in_server = 0 }
+  in_server && /^[[:space:]]+port:/ { gsub(/[^0-9]/, "", $2); if ($2 != "") { print $2; exit } }
+' "${WORKFLOW_ABS}")"
+PORT="${PORT:-9999}"
+
+EXISTING_PID=""
+if command -v lsof >/dev/null 2>&1; then
+  EXISTING_PID="$(lsof -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -n1 || true)"
+fi
+
+if [[ -n "${EXISTING_PID}" ]]; then
+  EXISTING_CMD="$(ps -o command= -p "${EXISTING_PID}" 2>/dev/null || true)"
+  if [[ "${EXISTING_CMD}" == *"--tui"* ]]; then
+    echo "tui-open: TUI already running on port ${PORT} (PID ${EXISTING_PID})."
+    echo "tui-open: bringing the existing terminal app to the front instead of duplicating."
+    case "$(uname -s)" in
+      Darwin)
+        # Best-effort raise. We can't pinpoint the exact window without
+        # tracking window ids, so just bring the most likely terminal app
+        # frontmost and let the user pick the right window.
+        if [[ -d "/Applications/iTerm.app" ]] || mdfind "kMDItemCFBundleIdentifier == 'com.googlecode.iterm2'" 2>/dev/null | grep -q iTerm; then
+          osascript -e 'tell application "iTerm" to activate' 2>/dev/null || true
+        else
+          osascript -e 'tell application "Terminal" to activate' 2>/dev/null || true
+        fi
+        ;;
+      *)
+        # No portable, non-X11-specific way to raise a foreign terminal
+        # window; the message above is the best we can do.
+        :
+        ;;
+    esac
+    exit 0
+  else
+    echo "tui-open: port ${PORT} is held by PID ${EXISTING_PID}, but its argv has no --tui:" >&2
+    echo "  ${EXISTING_CMD}" >&2
+    echo "tui-open: stop that process (or change server.port in ${WORKFLOW_ABS}) and retry." >&2
+    exit 5
+  fi
+fi
+
 # Preflight in current terminal so the user sees doctor output before the
 # TUI repaints the screen.
 echo "tui-open: running doctor preflight..."
-"${SYMPHONY}" doctor "${WORKFLOW}" || {
+"${SYMPHONY}" doctor "${WORKFLOW_ABS}" || {
   echo "tui-open: doctor reported FAIL — aborting launch" >&2
   exit 4
 }
 
-# The actual command we want a new terminal to run.
-LAUNCH_CMD="cd '${SCRIPT_DIR}' && '${SYMPHONY}' --tui '${WORKFLOW}'"
+# The actual command we want a new terminal to run. cd into WORKFLOW_DIR
+# (not SCRIPT_DIR) so tracker.board_root resolves correctly.
+LAUNCH_CMD="cd '${WORKFLOW_DIR}' && '${SYMPHONY}' --tui '${WORKFLOW_ABS}'"
 
 case "$(uname -s)" in
   Darwin)
@@ -64,8 +118,8 @@ case "$(uname -s)" in
     LAUNCHER="${SCRIPT_DIR}/.tui-launcher.command"
     cat >"${LAUNCHER}" <<EOF
 #!/usr/bin/env bash
-cd "${SCRIPT_DIR}"
-exec "${SYMPHONY}" --tui "${WORKFLOW}"
+cd "${WORKFLOW_DIR}"
+exec "${SYMPHONY}" --tui "${WORKFLOW_ABS}"
 EOF
     chmod +x "${LAUNCHER}"
     if [[ -d "/Applications/iTerm.app" ]] || mdfind "kMDItemCFBundleIdentifier == 'com.googlecode.iterm2'" 2>/dev/null | grep -q iTerm; then
@@ -97,4 +151,4 @@ EOF
 esac
 
 echo "tui-open: launched. Headless logs (if any) tail with:"
-echo "  tail -F '${SCRIPT_DIR}/log/symphony.log'"
+echo "  tail -F '${WORKFLOW_DIR}/log/symphony.log'"
