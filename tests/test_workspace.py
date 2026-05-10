@@ -2,11 +2,40 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+
 import pytest
 
 from symphony.errors import InvalidWorkspaceCwd, SymphonyError
 from symphony.workflow import HooksConfig
-from symphony.workspace import WorkspaceManager, validate_agent_cwd
+from symphony.workspace import (
+    WorkspaceManager,
+    commit_workspace_on_done,
+    validate_agent_cwd,
+)
+
+
+_HAS_GIT = shutil.which("git") is not None
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+        check=True,
+        env={
+            "HOME": str(cwd),
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+            "PATH": os.environ.get("PATH", ""),
+        },
+    )
 
 
 def _hooks(**overrides) -> HooksConfig:
@@ -133,3 +162,89 @@ async def test_workflow_dir_env_exported(tmp_path):
     ws = await mgr.create_or_reuse("MT-ENV")
     content = (ws.path / "wfdir").read_text().strip()
     assert content == str(wf_dir)
+
+
+# ---------------------------------------------------------------------------
+# auto-commit on Done — commit_workspace_on_done
+# ---------------------------------------------------------------------------
+
+
+def _git_id_env(monkeypatch, home):
+    """Set per-test git author/committer + isolated HOME so commits don't
+    pick up the developer's global ~/.gitconfig (sigstore signing, etc.)."""
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Test")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@example.com")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Test")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@example.com")
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_initialises_fresh_repo(
+    tmp_path, monkeypatch
+):
+    """Workspace with no .git ancestor: init + commit creates first revision."""
+    _git_id_env(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "out.txt").write_text("hello")
+
+    await commit_workspace_on_done(ws, identifier="OLV-1", title="setup db")
+
+    assert (ws / ".git").is_dir()
+    log = _git(ws, "log", "--oneline")
+    assert "OLV-1: setup db" in log.stdout
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_reuses_parent_repo(
+    tmp_path, monkeypatch
+):
+    """Workspace nested in an existing repo: commit lands there, no nested .git."""
+    _git_id_env(monkeypatch, tmp_path)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    _git(parent, "init", "-q", "-b", "main")
+    (parent / "seed.txt").write_text("seed")
+    _git(parent, "add", "-A")
+    _git(parent, "commit", "-q", "-m", "seed")
+
+    nested = parent / "ws"
+    nested.mkdir()
+    (nested / "out.txt").write_text("nested work")
+
+    await commit_workspace_on_done(nested, identifier="OLV-2", title="nested")
+
+    assert not (nested / ".git").exists()
+    log = _git(parent, "log", "--oneline")
+    assert "OLV-2: nested" in log.stdout
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_skips_when_nothing_to_commit(
+    tmp_path, monkeypatch
+):
+    """Empty workspace with init: helper logs and returns, no commit created."""
+    _git_id_env(monkeypatch, tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()  # empty — no files to commit
+
+    await commit_workspace_on_done(ws, identifier="OLV-3", title="empty")
+
+    assert (ws / ".git").is_dir()
+    # `git log` errors with exit 128 on a zero-commit repo (no HEAD yet),
+    # so count revs instead — empty workspace must produce zero commits.
+    count = _git(ws, "rev-list", "--all", "--count")
+    assert count.stdout.strip() == "0"
+
+
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_missing_path_is_silent_noop(tmp_path):
+    """Workspace already removed by hook/agent: helper must not raise."""
+    missing = tmp_path / "gone"
+    # Don't create it.
+    await commit_workspace_on_done(missing, identifier="OLV-4", title="x")
+    # No exception = pass.

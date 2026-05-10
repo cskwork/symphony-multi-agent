@@ -55,6 +55,10 @@ agent:
     Review: 2
     QA: 2
     Learn: 2
+  # Snapshot the workspace into one git commit when a ticket reaches Done.
+  # Reuses any enclosing git repo; otherwise runs `git init` first. Set to
+  # false to opt out (e.g. workspace is a real repo you don't want touched).
+  auto_commit_on_done: true
 
 codex:
   command: codex app-server

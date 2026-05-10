@@ -55,6 +55,12 @@ agent:
     Review: 2
     QA: 2
     Learn: 2
+  # When a ticket reaches Done cleanly, snapshot the workspace into one
+  # git commit (`<identifier>: <title>`). If the workspace is nested
+  # inside an existing repo, the commit lands there; otherwise `git init`
+  # runs first. Set to false if your workspace is an existing repo with
+  # strict commit-style rules you don't want auto-touched.
+  auto_commit_on_done: true
 
 codex:
   command: codex app-server

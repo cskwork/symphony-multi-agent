@@ -49,7 +49,7 @@ from .workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
-from .workspace import WorkspaceManager
+from .workspace import WorkspaceManager, commit_workspace_on_done
 
 
 log = get_logger()
@@ -1164,6 +1164,20 @@ class Orchestrator:
 
         if reason == "normal":
             self._completed.add(issue_id)
+            cfg = self._workflow_state.current()
+            if (
+                cfg is not None
+                and cfg.agent.auto_commit_on_done
+                and normalize_state(entry.issue.state) == "done"
+            ):
+                # Lenient — failures only warn (see commit_workspace_on_done).
+                # The ticket is already at Done; a missed snapshot must not
+                # block the queue or surface as a worker error.
+                await commit_workspace_on_done(
+                    entry.workspace_path,
+                    identifier=entry.issue.identifier,
+                    title=entry.issue.title,
+                )
             self._schedule_retry(
                 issue_id,
                 identifier=entry.issue.identifier,

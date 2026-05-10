@@ -225,6 +225,97 @@ def _truncate(value: str, limit: int = 400) -> str:
     return value[:limit] + "...(truncated)"
 
 
+async def commit_workspace_on_done(
+    path: Path,
+    *,
+    identifier: str,
+    title: str,
+    timeout_s: float = 60.0,
+) -> None:
+    """Snapshot the per-ticket workspace into one git commit on Done.
+
+    Lenient by design — every failure (missing path, no diffs, pre-commit
+    rejection, signing error, timeout) logs a warning and returns. We
+    never raise out of the worker exit path because the ticket is
+    already complete; a failed auto-commit is a housekeeping miss, not
+    a regression of the work itself.
+
+    Reuses any enclosing git repo (`git -C path rev-parse --git-dir`).
+    Only initialises a new repo when the workspace has no git ancestor,
+    so workspaces nested inside an existing project repo just add a
+    commit to that project's history rather than creating a nested
+    `.git`. The commit message is `"<identifier>: <title>"`.
+    """
+    if not path.exists():
+        log.info("auto_commit_skipped_missing_workspace", path=str(path))
+        return
+
+    safe_title = (title or "").replace("\n", " ").strip()[:200] or "(no title)"
+    msg = f"{identifier}: {safe_title}"
+
+    script = (
+        'set -u\n'
+        'if ! git rev-parse --git-dir >/dev/null 2>&1; then\n'
+        '  git init -q || exit 41\n'
+        'fi\n'
+        'git add -A || exit 42\n'
+        'if git diff --cached --quiet; then\n'
+        '  echo "auto_commit: nothing to commit"\n'
+        '  exit 0\n'
+        'fi\n'
+        'git commit -m "$SYMPHONY_AUTO_COMMIT_MSG" || exit 43\n'
+    )
+    env = {
+        **os.environ,
+        "SYMPHONY_AUTO_COMMIT_MSG": msg,
+    }
+
+    def _do_run() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [resolve_bash(), "-lc", script],
+            cwd=str(path),
+            capture_output=True,
+            timeout=timeout_s if timeout_s > 0 else None,
+            env=env,
+            check=False,
+        )
+
+    log.info("auto_commit_start", path=str(path), identifier=identifier)
+    try:
+        result = await asyncio.to_thread(_do_run)
+    except subprocess.TimeoutExpired:
+        log.warning("auto_commit_timeout", path=str(path), identifier=identifier)
+        return
+    except Exception as exc:
+        log.warning(
+            "auto_commit_spawn_failed",
+            path=str(path),
+            identifier=identifier,
+            error=str(exc),
+        )
+        return
+
+    rc = result.returncode or 0
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    if rc == 0:
+        log.info(
+            "auto_commit_completed",
+            path=str(path),
+            identifier=identifier,
+            stdout=_truncate(stdout),
+        )
+        return
+    log.warning(
+        "auto_commit_failed",
+        path=str(path),
+        identifier=identifier,
+        returncode=rc,
+        stdout=_truncate(stdout),
+        stderr=_truncate(stderr),
+    )
+
+
 def validate_agent_cwd(cwd: Path, workspace_root: Path) -> None:
     """§9.5 invariants 1 + 2 — refuse to launch outside workspace root."""
     cwd = cwd.resolve()

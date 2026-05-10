@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
 from symphony.orchestrator import Orchestrator, RunningEntry, _sort_for_dispatch_fifo
 from symphony.workflow import (
@@ -525,3 +527,118 @@ def test_on_codex_event_user_role_other_message_does_not_advance_progress():
         assert entry.last_progress_timestamp > baseline
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Auto-commit at Done — see workspace.commit_workspace_on_done.
+# ---------------------------------------------------------------------------
+
+
+def _install_running_entry(orch: Orchestrator, issue: Issue) -> RunningEntry:
+    entry = RunningEntry(
+        issue=issue,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp/ws-fake"),
+    )
+    orch._running[issue.id] = entry
+    return entry
+
+
+def _stub_workflow_state_returning(
+    orch: Orchestrator, cfg, monkeypatch: pytest.MonkeyPatch
+) -> list[dict]:
+    """Force `self._workflow_state.current()` to return cfg; capture commit calls.
+
+    Uses monkeypatch so the module-level rebind of commit_workspace_on_done
+    auto-reverts at test teardown — otherwise the stub leaks into other
+    tests that exercise orchestrator paths (observed: TUI integration
+    tests that drive a real worker exit path).
+    """
+    import symphony.orchestrator as _orch_mod
+
+    captured: list[dict] = []
+    monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+    async def _capture(path, *, identifier, title, **_):
+        captured.append(
+            {"path": path, "identifier": identifier, "title": title}
+        )
+
+    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture)
+    return captured
+
+
+def test_on_worker_exit_commits_workspace_at_done(monkeypatch):
+    """reason='normal' + state='Done' + auto_commit_on_done=True ⇒ commit fires."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-DONE", state="Done")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        captured = _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert len(captured) == 1, "commit must be invoked exactly once"
+            assert captured[0]["identifier"] == "MT-DONE"
+            assert captured[0]["title"] == "MT-DONE title"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_on_worker_exit_skips_commit_for_non_done_terminal_state(monkeypatch):
+    """Cancelled/Blocked are terminal but not 'done' — no auto-commit."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-CANCEL", state="Cancelled")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        captured = _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert captured == [], "commit must NOT fire for non-Done terminal"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_on_worker_exit_respects_auto_commit_off(monkeypatch):
+    """auto_commit_on_done=False ⇒ no commit even at Done."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_off = _replace_agent_field(base_cfg, auto_commit_on_done=False)
+    orch = _orch()
+    issue = _issue("MT-OFF", state="Done")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        captured = _stub_workflow_state_returning(orch, cfg_off, monkeypatch)
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert captured == [], "auto_commit_on_done=False must suppress commit"
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def _replace_agent_field(cfg, **agent_overrides):
+    """Return a new ServiceConfig with `agent` swapped for an updated AgentConfig."""
+    from dataclasses import replace
+
+    new_agent = replace(cfg.agent, **agent_overrides)
+    return replace(cfg, agent=new_agent)
