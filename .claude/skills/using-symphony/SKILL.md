@@ -55,6 +55,47 @@ Catches port collision, missing agent CLI on `$PATH`, missing pi auth
 clone URL, unwritable workspace, and missing board directory in one pass.
 Exit 0 if green; otherwise read FAIL lines and fix before launching.
 
+## Bootstrapping Symphony into another project (REQUIRED)
+
+Whenever you introduce Symphony to a project that does **not** live inside
+this repo, **always copy `tui-open.sh` (and `tui-open.bat` for Windows)
+alongside `WORKFLOW.md`** so the operator has a one-shot Kanban-UI
+launcher. Do this every time — even if the user only asks for tickets or
+headless mode — because they will want the board view sooner or later,
+and the launcher carries safety logic (`lsof` port-collision check,
+doctor preflight, new-window spawn) that plain `symphony tui` does not.
+
+```bash
+# from inside the symphony-multi-agent checkout, into the target project:
+cp tui-open.sh tui-open.bat   /path/to/target-project/
+cp WORKFLOW.example.md        /path/to/target-project/WORKFLOW.md   # then edit
+chmod +x /path/to/target-project/tui-open.sh
+```
+
+Then the operator opens the board with:
+
+```bash
+./tui-open.sh                 # macOS/Linux — uses ./WORKFLOW.md
+./tui-open.sh path/to/WORKFLOW.md
+tui-open.bat                  # Windows — uses .\WORKFLOW.md
+```
+
+Why the launcher matters (don't skip it):
+- Auto-detects an existing TUI on the workflow's `server.port` and raises
+  the existing window instead of crashing on `EADDRINUSE`.
+- Runs `symphony doctor` before swapping the screen, so failures stay
+  readable.
+- Prefers `<project>/.venv/bin/symphony` over PATH — works without global
+  install.
+- Spawns a real new window (macOS `.command` via iTerm/Terminal,
+  Linux via `$TERMINAL`/gnome-terminal/konsole/xterm), avoiding the
+  `osascript do script` "silent tab in another Space" trap.
+
+If the target project has no `.venv`, also remind the user to run
+`python3.11 -m venv .venv && .venv/bin/pip install -e <symphony-multi-agent>`
+(or `pip install symphony-multi-agent` once published) so the launcher's
+venv-first lookup succeeds.
+
 ## Headless visibility — what to grep for in `log/symphony.log`
 
 When running without the TUI, these INFO/WARN lines tell you the run is
@@ -85,7 +126,8 @@ stdin and auth (see troubleshooting reference).
 ```bash
 symphony board init ./kanban                                  # once per repo
 symphony board new TASK-1 "<title>" --description "<spec>"
-symphony tui ./WORKFLOW.md                                    # interactive (TTY required)
+./tui-open.sh ./WORKFLOW.md                                   # preferred — see "Bootstrapping" above
+# or: symphony tui ./WORKFLOW.md                              # plain CLI; TTY required
 ```
 
 ### 2. Headless launch + JSON observation (no TTY)
@@ -138,7 +180,8 @@ backend.
 | List tickets                          | `symphony board ls [--state STATE]`                          |
 | Show a ticket                         | `symphony board show <ID>`                                   |
 | Force a state transition              | `symphony board mv <ID> <state>`                             |
-| Launch TUI                            | `symphony tui ./WORKFLOW.md`                                 |
+| Launch TUI (preferred, new window)    | `./tui-open.sh ./WORKFLOW.md`                                |
+| Launch TUI (plain CLI, current TTY)   | `symphony tui ./WORKFLOW.md`                                 |
 | Headless + JSON API                   | `symphony ./WORKFLOW.md --port 9999`                         |
 | Force a poll/reconcile                | `curl -X POST http://127.0.0.1:9999/api/v1/refresh`          |
 | Snapshot state                        | `curl -s http://127.0.0.1:9999/api/v1/state \| jq`           |
