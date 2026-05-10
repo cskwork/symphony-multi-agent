@@ -20,29 +20,24 @@ and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done
 <summary>Plain-text version (for terminals viewing raw README)</summary>
 
 ```text
-  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=2  retrying=1  generated_at
-                                                                                                          2026-05-09T03:48:09Z
+  agent=codex  tracker=linear  workflow=WORKFLOW.md  lang=en   running=2  retrying=1   │  tokens in=84,200 out=27,640 total=111,840
+                                                                                       │  rate-limits=requests_remaining=4823, tokens_remaining=1.2M
 
-╭───────────────── Todo (3) ─────────────────╮      ╭───────────── In Progress (2) ──────────────╮
-│    DEMO-120                                │      │    DEMO-104  ●                             │
-│   Migrate auth middleware to async  P1     │      │   Fix race condition in pagination cursor  │
-│   #backend  #tech-debt                     │      │     P1                                     │
-│                                            │      │   turn 4  turn_completed  20,180 tok       │
-│    DEMO-111  ↻                             │      │   Patched cursor advance; running tests... │
-│   Refactor cache invalidation helper  P2   │      │                                            │
-│   retry #2  turn_error: Turn timed out     │      │    DEMO-098  ●                             │
-│                                            │      │   Add /api/search rate limiting  P2        │
-│    DEMO-121                                │      │   turn 2  turn_completed  11,310 tok       │
-│   Wire feature flag for new dashboard  P2  │      │   Added token-bucket middleware…           │
-│   blocked by DEMO-098                      │      ╰────────────────────────────────────────────╯
-╰────────────────────────────────────────────╯
-╭──────────────── Review (1) ────────────────╮      ╭───────────────── Done (2) ─────────────────╮
-│    DEMO-122                                │      │    DEMO-088   DEMO-091                     │
-│   Doc: contributor onboarding guide  P3    │      │   chore work (deps bump, dead-code drop)   │
-│   #docs                                    │      │   #chore                                   │
-╰────────────────────────────────────────────╯      ╰────────────────────────────────────────────╯
+╭── Todo (3) ──────╮ ╭── In Progress (2) ──╮ ╭── Review (1) ──╮ ╭── Done (2) ──╮ ╭── Archive (1) ──╮ ╭── detail ───────────────────────╮
+│  DEMO-120  P1    │ │  DEMO-104  ●  P1    │ │  DEMO-122  P3  │ │  DEMO-088    │ │  DEMO-074       │ │  DEMO-104                       │
+│  Migrate auth …  │ │  Fix race condi…    │ │  Doc: contri…  │ │  Drop dead-… │ │  Old experim…   │ │  Fix race condition in pagina…  │
+│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  DEMO-091    │ │                 │ │                                 │
+│                  │ │  Patched cursor…    │ ╰────────────────╯ │  Bump deps…  │ ╰─────────────────╯ │  state=In Progress              │
+│  DEMO-111  ↻ P2  │ │                     │                    ╰──────────────╯                     │  runtime=running                │
+│  Refactor cach…  │ │  DEMO-098  ●  P2    │                                                         │  turn=4                         │
+│  retry #2  tur…  │ │  Add /api/sear…     │                                                         │  in=14,200  out=5,980           │
+│                  │ │  turn 2  11,310t    │                                                         │  total=20,180                   │
+│  DEMO-121  P2    │ │  Added token-bu…    │                                                         │  Patched cursor advance;        │
+│  Wire feature …  │ ╰─────────────────────╯                                                         │  running test suite...          │
+│  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
+╰──────────────────╯
 
-  tokens  in=84,200  out=27,640  total=111,840   runtime=412.7s   rate-limits=requests_remaining=4823, tokens_remaining=1.2M
+q quit · r refresh · enter details · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · / filter · ?
 ```
 
 </details>
