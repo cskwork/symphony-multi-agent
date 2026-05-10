@@ -499,6 +499,18 @@ class Orchestrator:
                         prompt = first_prompt
 
                     self._running[issue.id].turn_count = turn_number
+                    # Symmetry with worker_turn_completed — a single line per
+                    # turn-start so multi-turn runs (especially slow ones
+                    # like gemini -p where a single turn can take 60-90s)
+                    # don't look stuck between turns.
+                    log.info(
+                        "worker_turn_started",
+                        issue_id=issue.id,
+                        identifier=self._running[issue.id].issue.identifier,
+                        turn=turn_number,
+                        max_turns=cfg.agent.max_turns,
+                        is_continuation=is_continuation,
+                    )
                     try:
                         await client.run_turn(prompt=prompt, is_continuation=is_continuation)
                     except (TurnTimeout, TurnFailed, TurnCancelled, TurnInputRequired) as exc:

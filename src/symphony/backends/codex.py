@@ -466,11 +466,31 @@ class CodexAppServerBackend:
     async def _handle_notification(self, msg: dict[str, Any]) -> None:
         method = msg.get("method") or msg.get("event") or ""
         params = msg.get("params") or msg.get("payload") or msg
-        # ----- token usage (unchanged in v2) -----
+        # ----- token usage -----
+        # Two payload shapes seen in the wild:
+        #   1. Legacy (≤0.129):  params.totals.{input_tokens,output_tokens,total_tokens}
+        #   2. v2 (0.130+):       params.tokenUsage.total.{inputTokens,outputTokens,
+        #                          totalTokens, cachedInputTokens, reasoningOutputTokens}
+        # Both are reported as ABSOLUTE cumulative totals — we overwrite
+        # rather than accumulate.
         if method == NOTIF_THREAD_TOKEN_USAGE or method.endswith(
             "/tokenUsage/updated"
         ):
-            self._update_tokens_absolute(params.get("totals") or params)
+            handled = False
+            # Try v2 shape first (more recent codex builds).
+            if isinstance(params, dict):
+                tu = params.get("tokenUsage")
+                if isinstance(tu, dict):
+                    block = tu.get("total") or tu.get("last")
+                    if isinstance(block, dict):
+                        self._update_tokens_from_v2_block(block)
+                        handled = True
+            # Fall back to legacy `totals` (or top-level snake_case).
+            if not handled:
+                self._update_tokens_absolute(
+                    params.get("totals") if isinstance(params, dict) else None
+                    or params
+                )
             return
         # ----- rate limits (v2: account/rateLimits/updated) -----
         if method == NOTIF_RATE_LIMITS or method.endswith("/rateLimits"):
@@ -517,6 +537,38 @@ class CodexAppServerBackend:
         for key in ("input_tokens", "output_tokens", "total_tokens"):
             if isinstance(payload.get(key), (int, float)):
                 self._latest_usage[key] = int(payload[key])
+
+    def _update_tokens_from_v2_block(self, usage: dict[str, Any]) -> None:
+        """Codex 0.130+ thread/tokenUsage/updated.tokenUsage.total shape.
+
+        Fields seen in the wild (camelCase, captured from a real run):
+          inputTokens, cachedInputTokens, outputTokens,
+          reasoningOutputTokens, totalTokens
+
+        Symphony's three-bucket model has no separate cache or reasoning
+        buckets, so cached input is folded into input_tokens and reasoning
+        output is folded into output_tokens. The reported totalTokens is
+        used as-is when present (it already reflects the sum on codex's
+        side); when absent we recompute from the folded buckets.
+
+        These notifications report ABSOLUTE cumulative totals (not deltas),
+        so we overwrite rather than accumulate.
+        """
+        if not isinstance(usage, dict):
+            return
+        in_t = int(usage.get("inputTokens") or 0)
+        cached = int(usage.get("cachedInputTokens") or 0)
+        out_t = int(usage.get("outputTokens") or 0)
+        reasoning = int(usage.get("reasoningOutputTokens") or 0)
+        folded_in = in_t + cached
+        folded_out = out_t + reasoning
+        total = usage.get("totalTokens")
+        folded_total = (
+            int(total) if isinstance(total, (int, float)) else folded_in + folded_out
+        )
+        self._latest_usage["input_tokens"] = folded_in
+        self._latest_usage["output_tokens"] = folded_out
+        self._latest_usage["total_tokens"] = folded_total
 
     async def _handle_approval(self, params: dict[str, Any]) -> None:
         # Best-effort auto-approve. The legacy `respondToApproval` method is

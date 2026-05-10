@@ -708,3 +708,116 @@ def test_pi_consume_stream_surfaces_compaction_events(tmp_path: Path) -> None:
     assert retry_events[0]["payload"]["max_attempts"] == 3
     assert retry_events[1]["payload"]["phase"] == "end"
     assert retry_events[1]["payload"]["success"] is True
+
+
+# --- Codex 0.130+ thread/tokenUsage/updated v2 schema (telemetry-bug regression) ---
+
+@pytest.mark.asyncio
+async def test_codex_handles_v2_token_usage_camelcase_shape(tmp_path: Path) -> None:
+    """Regression: codex 0.130 changed the `thread/tokenUsage/updated`
+    payload schema. Before this fix, every codex turn reported 0 tokens
+    because the dispatcher only knew the legacy `params.totals.{snake_case}`
+    shape, while codex now sends `params.tokenUsage.total.{camelCase}`.
+
+    Probe shape captured from a real symphony+codex run:
+      {method: thread/tokenUsage/updated, params: {threadId, turnId,
+        tokenUsage: {total: {totalTokens, inputTokens, cachedInputTokens,
+                              outputTokens, reasoningOutputTokens},
+                     last: {...}, modelContextWindow: 258400}}}
+    """
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "threadId": "019e0f77-db36-7183-b09c-da8e511f56a5",
+                "turnId": "019e0f77-e068-7572-84ad-575586b5c63b",
+                "tokenUsage": {
+                    "total": {
+                        "totalTokens": 32595,
+                        "inputTokens": 32325,
+                        "cachedInputTokens": 3456,
+                        "outputTokens": 270,
+                        "reasoningOutputTokens": 170,
+                    },
+                    "last": {
+                        "totalTokens": 999,  # ignored — total wins
+                        "inputTokens": 999,
+                        "outputTokens": 99,
+                    },
+                    "modelContextWindow": 258400,
+                },
+            },
+        }
+    )
+    # cachedInputTokens folds into input_tokens; reasoningOutputTokens folds
+    # into output_tokens; totalTokens used as-is.
+    assert backend.latest_usage == {
+        "input_tokens": 32325 + 3456,   # 35781
+        "output_tokens": 270 + 170,     # 440
+        "total_tokens": 32595,
+    }
+
+
+@pytest.mark.asyncio
+async def test_codex_v2_falls_back_to_last_when_total_absent(tmp_path: Path) -> None:
+    """When `tokenUsage.total` is missing, fall back to `tokenUsage.last`."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                        "totalTokens": 120,
+                    }
+                },
+            },
+        }
+    )
+    assert backend.latest_usage == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120,
+    }
+
+
+@pytest.mark.asyncio
+async def test_codex_legacy_totals_path_still_works(tmp_path: Path) -> None:
+    """Legacy snake_case `params.totals.*` shape must still parse — covers
+    older codex builds and the upstream mock_codex test fixture."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "totals": {
+                    "input_tokens": 50,
+                    "output_tokens": 10,
+                    "total_tokens": 60,
+                }
+            },
+        }
+    )
+    assert backend.latest_usage == {
+        "input_tokens": 50,
+        "output_tokens": 10,
+        "total_tokens": 60,
+    }
