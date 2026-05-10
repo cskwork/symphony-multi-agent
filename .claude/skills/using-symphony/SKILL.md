@@ -66,8 +66,12 @@ actually progressing (vs. hung):
 | `hook_completed hook=after_create`    | Workspace seeded; per-ticket cwd is ready            |
 | `agent_session_started session_id=`   | Agent CLI booted and minted a session id             |
 | `agent_turn_completed turn=N total_tokens=...` | Turn finished; tokens accumulated; live preview snippet attached |
-| `agent_turn_failed reason=...`        | Backend reported a turn-level failure                |
-| `reconcile_terminate_terminal state=` | Ticket reached a terminal state — worker about to exit |
+| `worker_turn_completed turn=N ...`    | Worker-side mirror of the above; guaranteed to fire even when reconcile races in |
+| `agent_turn_failed reason=... stderr_tail=[...]` | Backend reported a turn-level failure; last 20 stderr lines attached |
+| `agent_compaction phase=start/end`    | Pi only — context compaction (auto or `/compact`)    |
+| `agent_internal_retry phase=start/end` | Pi only — backend-internal LLM retry on transient error |
+| `reconcile_skip_active_worker`        | Reconcile saw terminal state but worker is still emitting events; lets it exit naturally |
+| `reconcile_terminate_terminal state=` | Ticket reached a terminal state and worker is stale (>10 s silent) — force-cancel |
 | `worker_exit reason=normal`           | Successful end-to-end run                            |
 
 If you see `dispatch` but no `agent_session_started` within a minute, the

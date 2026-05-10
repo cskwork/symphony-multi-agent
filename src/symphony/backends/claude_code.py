@@ -25,6 +25,7 @@ import json
 import os
 import shlex
 import time
+from collections import deque
 from typing import Any
 
 from .._shell import resolve_bash
@@ -74,6 +75,8 @@ class ClaudeCodeBackend:
         }
         self._latest_rate_limits: dict[str, Any] | None = None
         self._last_message: str = ""
+        # Bounded stderr ring buffer — see PiBackend for the rationale.
+        self._stderr_tail: deque[str] = deque(maxlen=20)
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
@@ -186,12 +189,20 @@ class ClaudeCodeBackend:
             await proc.wait()
             if terminal is None:
                 # Stream ended without a `result` event — treat as failure.
-                err_msg = f"claude exited with no result event (rc={proc.returncode})"
-                await self._emit(EVENT_TURN_FAILED, {"reason": err_msg})
+                stderr_blob = self._stderr_blob()
+                err_msg = (
+                    f"claude exited with no result event (rc={proc.returncode})"
+                    + (f"; stderr: {stderr_blob}" if stderr_blob else "")
+                )
+                await self._emit(
+                    EVENT_TURN_FAILED,
+                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
+                )
                 raise TurnFailed(err_msg)
 
             if terminal.get("is_error"):
-                await self._emit(EVENT_TURN_FAILED, terminal)
+                payload = {**terminal, "stderr_tail": list(self._stderr_tail)}
+                await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(
                     str(terminal.get("subtype") or terminal.get("error") or "claude turn failed")
                 )
@@ -286,7 +297,17 @@ class ClaudeCodeBackend:
                 break
             if not line:
                 break
-            log.debug("claude_stderr", line=line.decode("utf-8", errors="replace").rstrip())
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if text:
+                self._stderr_tail.append(text)
+            log.debug("claude_stderr", line=text)
+
+    def _stderr_blob(self) -> str:
+        """Compact stderr tail for failure messages (≤400 chars)."""
+        if not self._stderr_tail:
+            return ""
+        joined = " | ".join(self._stderr_tail)
+        return joined if len(joined) <= 400 else joined[-400:]
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
         """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""

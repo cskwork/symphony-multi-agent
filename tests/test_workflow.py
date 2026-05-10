@@ -306,3 +306,73 @@ def test_invalid_max_turns_fails_validation(tmp_path):
     )
     with pytest.raises(ConfigValidationError):
         build_service_config(load_workflow(path))
+
+
+# --- positive-int validation tightened in improve/observability-and-doctor ---
+
+@pytest.mark.parametrize("field,raw_value", [
+    ("max_concurrent_agents", 0),
+    ("max_concurrent_agents", -1),
+    ("max_retry_backoff_ms", 0),
+    ("max_retry_backoff_ms", -100),
+])
+def test_invalid_agent_int_fields_fail_validation(tmp_path, field, raw_value):
+    """Regression: previously these silently accepted 0/negative via
+    `_as_int`, leading to footguns (max_concurrent_agents=0 dispatches
+    nothing; max_retry_backoff_ms=0 produces a tight retry loop)."""
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            agent: {{ {field}: {raw_value} }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError):
+        build_service_config(load_workflow(path))
+
+
+@pytest.mark.parametrize("kind,field", [
+    ("pi", "turn_timeout_ms"),
+    ("pi", "read_timeout_ms"),
+    ("claude", "turn_timeout_ms"),
+    ("codex", "turn_timeout_ms"),
+    ("gemini", "stall_timeout_ms"),
+])
+def test_invalid_backend_timeouts_fail_validation(tmp_path, kind, field):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            f"""\
+            ---
+            tracker: {{ kind: linear, project_slug: x, api_key: xx }}
+            agent: {{ kind: {kind} }}
+            {kind}: {{ {field}: 0 }}
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError):
+        build_service_config(load_workflow(path))
+
+
+def test_invalid_polling_interval_fails_validation(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker: { kind: linear, project_slug: x, api_key: xx }
+            polling: { interval_ms: 0 }
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError):
+        build_service_config(load_workflow(path))

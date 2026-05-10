@@ -436,7 +436,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     polling_raw = cfg.get("polling") or {}
     if not isinstance(polling_raw, dict):
         polling_raw = {}
-    poll_interval_ms = _as_int(polling_raw.get("interval_ms"), DEFAULT_POLL_INTERVAL_MS)
+    poll_interval_ms = _validated_positive_or_default(
+        polling_raw.get("interval_ms"), DEFAULT_POLL_INTERVAL_MS, name="polling.interval_ms"
+    )
 
     workspace_raw = cfg.get("workspace") or {}
     if not isinstance(workspace_raw, dict):
@@ -484,12 +486,16 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         )
     agent = AgentConfig(
         kind=agent_kind,
-        max_concurrent_agents=_as_int(
-            agent_raw.get("max_concurrent_agents"), DEFAULT_MAX_CONCURRENT_AGENTS
+        max_concurrent_agents=_validated_positive_or_default(
+            agent_raw.get("max_concurrent_agents"),
+            DEFAULT_MAX_CONCURRENT_AGENTS,
+            name="agent.max_concurrent_agents",
         ),
         max_turns=max_turns,
-        max_retry_backoff_ms=_as_int(
-            agent_raw.get("max_retry_backoff_ms"), DEFAULT_MAX_RETRY_BACKOFF_MS
+        max_retry_backoff_ms=_validated_positive_or_default(
+            agent_raw.get("max_retry_backoff_ms"),
+            DEFAULT_MAX_RETRY_BACKOFF_MS,
+            name="agent.max_retry_backoff_ms",
         ),
         max_concurrent_agents_by_state=_normalize_state_map(
             agent_raw.get("max_concurrent_agents_by_state")
@@ -504,9 +510,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         approval_policy=codex_raw.get("approval_policy"),
         thread_sandbox=codex_raw.get("thread_sandbox"),
         turn_sandbox_policy=codex_raw.get("turn_sandbox_policy"),
-        turn_timeout_ms=_as_int(codex_raw.get("turn_timeout_ms"), DEFAULT_CODEX_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(codex_raw.get("read_timeout_ms"), DEFAULT_CODEX_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("turn_timeout_ms"), DEFAULT_CODEX_TURN_TIMEOUT_MS, name="codex.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("read_timeout_ms"), DEFAULT_CODEX_READ_TIMEOUT_MS, name="codex.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS, name="codex.stall_timeout_ms"
+        ),
     )
 
     claude_raw = cfg.get("claude") or {}
@@ -514,9 +526,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         claude_raw = {}
     claude = ClaudeConfig(
         command=_as_str(claude_raw.get("command"), DEFAULT_CLAUDE_COMMAND) or DEFAULT_CLAUDE_COMMAND,
-        turn_timeout_ms=_as_int(claude_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(claude_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(claude_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="claude.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="claude.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="claude.stall_timeout_ms"
+        ),
         resume_across_turns=bool(claude_raw.get("resume_across_turns", True)),
     )
 
@@ -525,9 +543,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         gemini_raw = {}
     gemini = GeminiConfig(
         command=_as_str(gemini_raw.get("command"), DEFAULT_GEMINI_COMMAND) or DEFAULT_GEMINI_COMMAND,
-        turn_timeout_ms=_as_int(gemini_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(gemini_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="gemini.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="gemini.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="gemini.stall_timeout_ms"
+        ),
     )
 
     pi_raw = cfg.get("pi") or {}
@@ -535,9 +559,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         pi_raw = {}
     pi = PiConfig(
         command=_as_str(pi_raw.get("command"), DEFAULT_PI_COMMAND) or DEFAULT_PI_COMMAND,
-        turn_timeout_ms=_as_int(pi_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(pi_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(pi_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="pi.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="pi.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="pi.stall_timeout_ms"
+        ),
         resume_across_turns=bool(pi_raw.get("resume_across_turns", True)),
     )
 

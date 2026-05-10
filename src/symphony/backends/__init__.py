@@ -40,6 +40,10 @@ EVENT_UNSUPPORTED_TOOL_CALL = "unsupported_tool_call"
 EVENT_NOTIFICATION = "notification"
 EVENT_OTHER_MESSAGE = "other_message"
 EVENT_MALFORMED = "malformed"
+# Pi-flavoured signals — backend may translate native events to these so the
+# orchestrator can log/observe them with cross-backend semantics.
+EVENT_COMPACTION = "compaction"           # context compaction started/ended
+EVENT_AGENT_RETRY = "agent_retry"         # backend-internal auto-retry
 
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]

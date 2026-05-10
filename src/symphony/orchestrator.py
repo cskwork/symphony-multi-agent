@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .backends import (
+    EVENT_AGENT_RETRY,
+    EVENT_COMPACTION,
     EVENT_TURN_FAILED,
     EVENT_SESSION_STARTED,
     EVENT_TURN_COMPLETED,
@@ -504,6 +506,25 @@ class Orchestrator:
                         error = str(exc)
                         return
 
+                    # Synchronous log on the worker's hot path — the
+                    # listener-side `agent_turn_completed` log fires from
+                    # `_on_codex_event` via the EVENT_TURN_COMPLETED emit,
+                    # but reconcile can cancel the worker between the emit
+                    # and the listener running, swallowing the visibility
+                    # signal. Logging here guarantees one line per
+                    # successful turn even when reconcile races us.
+                    running_entry = self._running.get(issue.id)
+                    if running_entry is not None:
+                        log.info(
+                            "worker_turn_completed",
+                            issue_id=issue.id,
+                            identifier=running_entry.issue.identifier,
+                            turn=turn_number,
+                            input_tokens=running_entry.codex_input_tokens,
+                            output_tokens=running_entry.codex_output_tokens,
+                            total_tokens=running_entry.codex_total_tokens,
+                        )
+
                     # Refresh issue state.
                     refreshed = await self._refresh_issue_state(cfg, issue.id)
                     if refreshed is None:
@@ -621,12 +642,37 @@ class Orchestrator:
             )
         if ev_name == EVENT_TURN_FAILED:
             reason = payload.get("reason") if isinstance(payload, dict) else None
+            stderr_tail = payload.get("stderr_tail") if isinstance(payload, dict) else None
             log.warning(
                 "agent_turn_failed",
                 issue_id=issue_id,
                 identifier=entry.issue.identifier,
                 turn=entry.turn_count,
                 reason=str(reason) if reason else "",
+                stderr_tail=stderr_tail if isinstance(stderr_tail, list) else None,
+            )
+        if ev_name == EVENT_COMPACTION:
+            phase = payload.get("phase") if isinstance(payload, dict) else None
+            log.info(
+                "agent_compaction",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                phase=str(phase) if phase else "",
+                reason=str(payload.get("reason") or "")
+                if isinstance(payload, dict) else "",
+                tokens_before=payload.get("tokens_before")
+                if isinstance(payload, dict) else None,
+            )
+        if ev_name == EVENT_AGENT_RETRY:
+            phase = payload.get("phase") if isinstance(payload, dict) else None
+            log.info(
+                "agent_internal_retry",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                phase=str(phase) if phase else "",
+                attempt=payload.get("attempt") if isinstance(payload, dict) else None,
+                error=str(payload.get("error") or payload.get("final_error") or "")
+                if isinstance(payload, dict) else "",
             )
 
         # Track recent events.
@@ -820,17 +866,40 @@ class Orchestrator:
             return
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         active = {s.lower() for s in cfg.tracker.active_states}
+        # Grace period: a worker that just emitted an event is almost
+        # certainly already inside its own natural-exit path (post run_turn).
+        # Cancelling it now races the worker's own _refresh_issue_state and
+        # tends to: (a) drop the in-flight EVENT_TURN_COMPLETED listener,
+        # losing observability; (b) wipe the workspace before after_run can
+        # capture artefacts. Reserve cancellation for genuinely-stuck
+        # workers — the worker's own loop will exit cleanly within a tick
+        # or two when the agent transitions to a terminal state.
+        RECONCILE_RECENT_EVENT_GRACE_S = 10.0
+        now = datetime.now(timezone.utc)
         for issue in refreshed:
             entry = self._running.get(issue.id)
             if entry is None:
                 continue
             state = normalize_state(issue.state)
             if state in terminal:
+                last_seen = entry.last_codex_timestamp
+                age = (now - last_seen).total_seconds() if last_seen else None
+                if age is not None and age < RECONCILE_RECENT_EVENT_GRACE_S:
+                    # Active worker — let it exit on its own.
+                    log.info(
+                        "reconcile_skip_active_worker",
+                        issue_id=issue.id,
+                        identifier=issue.identifier,
+                        state=issue.state,
+                        last_event_age_s=round(age, 1),
+                    )
+                    continue
                 log.info(
                     "reconcile_terminate_terminal",
                     issue_id=issue.id,
                     identifier=issue.identifier,
                     state=issue.state,
+                    last_event_age_s=round(age, 1) if age is not None else None,
                 )
                 entry.worker_task.cancel()
                 if self._workspace_manager is not None:

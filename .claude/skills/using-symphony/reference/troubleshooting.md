@@ -30,6 +30,9 @@ tail -F log/symphony.log
 | `outcome=turn_error`                     | Turn ended in error (timeout, agent crash, tool failure) | Inspect backend stderr; for timeouts, raise `<kind>.turn_timeout_ms`                |
 | `hook_timeout`                           | Hook exceeded its time budget                            | Shorten the hook or remove blocking commands                                        |
 | `hook_after_run_skipped_missing_cwd`     | Workspace was deleted before `after_run` could run       | INFO-level only; usually means the agent or a hook removed its own workspace. Not a bug — ignore unless you depend on `after_run`                                                                 |
+| `reconcile_skip_active_worker`           | Reconcile saw a terminal state but the worker is still emitting events; gives the worker `last_event_age_s` < 10 s grace to exit naturally | Informational — prevents races that previously dropped `agent_turn_completed` and wiped workspaces mid-cleanup |
+| `agent_compaction phase=start/end`       | Pi backend triggered context compaction (`/compact` or auto when nearing the model's context window) | Informational — a sudden token-count drop on the next turn is now attributable     |
+| `agent_internal_retry phase=start/end`   | Pi backend retried an upstream LLM call internally (transient error)                              | Informational — recoverable; if `final_error` is set the turn ultimately failed   |
 | `OSError [Errno 48]` on startup          | Port already in use                                      | `lsof -ti :9999 \| xargs -r kill`                                                   |
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
@@ -102,6 +105,21 @@ full list of related gotchas (CRLF, absolute paths, `set -e`, etc.).
 - Linear API rate-limited you? Check `rate_limits` in
   `/api/v1/state` — it's mirrored from upstream headers.
 
+### Pi/Claude backend: "turn failed but the reason is opaque"
+
+As of the observability patch, `agent_turn_failed` and `worker_exit reason=turn_error`
+carry a `stderr_tail` field with the last 20 lines of the backend CLI's stderr.
+That's where the actual reason (auth, network, ratelimit, model error)
+lives. Greb the structured log:
+
+```bash
+grep agent_turn_failed log/symphony.log | jq -R 'fromjson?'  # if you log JSON
+grep -A1 agent_turn_failed log/symphony.log                   # plain k=v
+```
+
+The `reason` field also concatenates the stderr blob into the human-readable
+failure string, so even a raw `tail -F log/symphony.log` shows it inline.
+
 ### Pi backend: "first turn fails immediately, no useful error"
 
 Most common cause: `~/.pi/agent/auth.json` is missing or stale. Without it,
@@ -119,6 +137,15 @@ Symphony spawns — you do *not* need to put `PI_API_KEY` (or any provider
 env var) into `WORKFLOW.md` or the `pi:` block.
 
 ### Pi backend: "agent silent for N seconds, no events in log"
+
+The TUI now grows a yellow `silent Ns` badge on running cards once their
+last event is older than 30 s, so visual stalls are immediate. In headless
+runs, grep for:
+
+```bash
+grep agent_session_started log/symphony.log     # session id minted
+grep agent_turn_completed log/symphony.log      # turn finished
+```
 
 If `agent_session_started` fired but no `agent_turn_completed` follows for
 5+ minutes, pi may be stuck on a long tool call (e.g. a slow fetch, or an

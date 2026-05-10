@@ -20,21 +20,31 @@ grep -E '(dispatch|agent_session|agent_turn|reconcile_terminate|worker_exit)' \
 Expected sequence for a healthy 1-turn run:
 
 ```
-INFO dispatch                        issue_id=X identifier=X attempt=null
-INFO hook_start hook=after_create    cwd=~/symphony_workspaces/X
-INFO hook_completed                  hook=after_create
-INFO hook_start hook=before_run      cwd=~/symphony_workspaces/X
-INFO hook_completed                  hook=before_run
-INFO agent_session_started           issue_id=X session_id=<uuid>
-INFO agent_turn_completed            turn=1 input_tokens=N output_tokens=M total_tokens=N+M last_message=…
-INFO reconcile_terminate_terminal    state=Done
-INFO hook_start hook=after_run       cwd=~/symphony_workspaces/X
-INFO hook_completed                  hook=after_run
-INFO worker_exit                     reason=normal error=null
+INFO dispatch                          issue_id=X identifier=X attempt=null
+INFO hook_start hook=after_create      cwd=~/symphony_workspaces/X
+INFO hook_completed                    hook=after_create
+INFO hook_start hook=before_run        cwd=~/symphony_workspaces/X
+INFO hook_completed                    hook=before_run
+INFO agent_session_started             issue_id=X session_id=<uuid>
+INFO reconcile_skip_active_worker      state=Done last_event_age_s=3.1   # if the agent just emitted
+INFO agent_turn_completed              turn=1 input_tokens=N output_tokens=M total_tokens=N+M last_message=…
+INFO worker_turn_completed             turn=1 input_tokens=N …             # worker-side mirror, fires even under cancellation
+INFO hook_start hook=after_run         cwd=~/symphony_workspaces/X
+INFO hook_completed                    hook=after_run
+INFO worker_exit                       reason=normal error=null
 ```
 
-Multi-turn runs repeat `agent_turn_completed` with `turn=N` incrementing.
-Failures replace `agent_turn_completed` with `WARN agent_turn_failed turn=N reason=...`.
+Multi-turn runs repeat `agent_turn_completed` (and `worker_turn_completed`)
+with `turn=N` incrementing. Failures replace those with `WARN
+agent_turn_failed turn=N reason=... stderr_tail=[...]`.
+
+Pi-only events that may interleave at any point:
+
+- `agent_compaction phase=start` / `phase=end tokens_before=N` — context
+  compaction triggered (manual or auto-threshold)
+- `agent_internal_retry phase=start attempt=K max_attempts=N` /
+  `phase=end success=true|false` — backend-internal retry on a transient
+  upstream error (network, ratelimit)
 
 ## Stall signatures
 
@@ -42,8 +52,9 @@ Failures replace `agent_turn_completed` with `WARN agent_turn_failed turn=N reas
 |---------------------------------------------------|--------------------------------------------------------|----------------------------------------------------|
 | `dispatch` then nothing for >60s                  | Agent CLI not booting (auth missing, wrong path)       | `symphony doctor ./WORKFLOW.md`                    |
 | `agent_session_started` then nothing for >5min    | Agent stuck in a tool call (long fetch, hung subprocess) | Lower `<kind>.turn_timeout_ms` or kill the child   |
-| repeated `agent_turn_failed reason=…`             | Real backend / prompt error, not an env issue          | Read the `reason=` value; inspect backend stderr   |
+| repeated `agent_turn_failed reason=… stderr_tail=[...]` | Real backend error                                | Read `stderr_tail` array — it's the literal stderr from pi/claude/gemini |
 | `hook_after_run_skipped_missing_cwd`              | Agent or hook removed its own workspace before exit    | Cosmetic; ignore unless `after_run` is load-bearing |
+| `reconcile_terminate_terminal last_event_age_s>10` | Worker stuck — reconcile force-cancelled it          | Inspect the agent CLI's last activity; raise turn_timeout_ms if legitimate work was in progress |
 
 ## Why this matters for the prompt template
 
@@ -60,7 +71,12 @@ never be honoured. Ask for ticket-body sections instead, and rely on
 
 ## Cross-references
 
-- `src/symphony/orchestrator.py:_on_codex_event` — where the events are logged
+- `src/symphony/orchestrator.py:_on_codex_event` — where listener-side events are logged
+- `src/symphony/orchestrator.py:_run_worker` — where `worker_turn_completed` fires (race-tolerant)
+- `src/symphony/orchestrator.py:_reconcile` — grace-period skip for active workers
+- `src/symphony/backends/pi.py` — stderr ring buffer, compaction/retry event mapping
+- `src/symphony/backends/claude_code.py` — same stderr ring buffer pattern
 - `src/symphony/doctor.py:check_pi_auth` — preflight for the `agent.kind=pi` auth file
 - `src/symphony/workspace.py:after_run_best_effort` — the missing-cwd skip
-- `tests/test_doctor.py` and `tests/test_workspace.py` — coverage anchors
+- `src/symphony/tui.py` — `_silent_seconds`, `SILENT_THRESHOLD_S` for the silence badge
+- `tests/test_doctor.py`, `tests/test_workspace.py`, `tests/test_backends.py`, `tests/test_workflow.py`, `tests/test_tui.py` — coverage anchors
