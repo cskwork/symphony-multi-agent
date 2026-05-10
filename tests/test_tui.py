@@ -649,6 +649,66 @@ async def test_p_toggles_detail_pane(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_bracket_focuses_detail_pane_for_arrow_scroll(
+    monkeypatch: Any,
+) -> None:
+    """`]` parks focus inside the detail pane so arrow / j / k scroll its
+    body. The pane must keep showing the previously focused card — otherwise
+    the act of focusing it would blank out the content the user is trying
+    to read."""
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    long_body = "\n".join(f"line {i}" for i in range(60))
+    _stub_tracker(
+        monkeypatch,
+        [_issue("SMA-1", description=long_body)],
+        [],
+    )
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards, "expected SMA-1 to render"
+        cards[0].focus()
+        await pilot.pause()
+        pane = app.query_one(DetailPane)
+        # `]` jumps focus into the inner scroll.
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        assert app.focused is pane.scroll
+        # Pane still shows the card we focused before pressing `]`.
+        assert app._last_focused_card_id == cards[0].id
+        # `[` returns focus to a card in the first non-empty visible lane.
+        await pilot.press("left_square_bracket")
+        await pilot.pause()
+        assert isinstance(app.focused, IssueCard)
+
+
+@pytest.mark.asyncio
+async def test_bracket_with_hidden_pane_is_a_no_op(monkeypatch: Any) -> None:
+    """`]` while the detail pane is hidden should not steal focus."""
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        # Hide the pane first.
+        await pilot.press("p")
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        cards[0].focus()
+        await pilot.pause()
+        before = app.focused
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        # Hidden pane → focus stays on the card.
+        assert app.focused is before
+
+
+@pytest.mark.asyncio
 async def test_slash_opens_filter_and_filters_cards(monkeypatch: Any) -> None:
     cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
     _stub_tracker(
@@ -682,6 +742,76 @@ async def test_slash_opens_filter_and_filters_cards(monkeypatch: Any) -> None:
         assert not bar.is_open
         cards = list(app.query(IssueCard))
         assert {c.issue.identifier for c in cards} == {"SMA-1", "SMA-2", "SMA-3"}
+
+
+@pytest.mark.asyncio
+async def test_archive_hotkey_calls_update_state_on_focused_done_card(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config(
+        active_states=("Todo",), terminal_states=("Done", "Archive")
+    )
+    done_issue = _issue("SMA-99", state="Done")
+    _stub_tracker(monkeypatch, [], [done_issue])
+
+    moved: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        KanbanApp,
+        "_call_update_state",
+        staticmethod(
+            lambda _cfg, issue, target: moved.append((issue.identifier, target))
+        ),
+    )
+
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = [
+            c for c in app.query(IssueCard) if c.issue.identifier == "SMA-99"
+        ]
+        assert cards, "expected the Done card to render"
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("a")
+        # `a` schedules a worker — give it a tick to land.
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+    assert moved == [("SMA-99", "Archive")]
+
+
+@pytest.mark.asyncio
+async def test_archive_hotkey_refuses_active_state_card(monkeypatch: Any) -> None:
+    cfg = _make_config(
+        active_states=("Todo",), terminal_states=("Done", "Archive")
+    )
+    _stub_tracker(monkeypatch, [_issue("SMA-1", state="Todo")], [])
+
+    moved: list[Any] = []
+
+    monkeypatch.setattr(
+        KanbanApp,
+        "_call_update_state",
+        staticmethod(lambda *_a, **_kw: moved.append("called")),
+    )
+
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+    # Active-state card → guarded by terminal_keys check; tracker untouched.
+    assert moved == []
 
 
 def test_matches_filter_substring_on_id_title_labels() -> None:
