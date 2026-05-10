@@ -576,6 +576,33 @@ def test_forward_transition_does_not_set_is_rewind(
     assert "rewind=False" in first_prompts[1]
 
 
+def test_run_agent_attempt_handles_orphaned_running_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Worker survives a missing `_running` entry instead of raising KeyError.
+
+    Regression for the OLV-002 cascade where `self._running[running_issue_id]`
+    direct-subscript access would raise `KeyError('OLV-002')` if a race popped
+    the entry between dispatch and the first-await completion. The fix routes
+    a missing entry to the `orphaned` outcome so the outer finally pops
+    cleanly (None pop) and no `worker_task_finished_without_cleanup` cascade
+    fires.
+    """
+    cfg = _make_config(max_turns=2)
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    # Deliberately do NOT seed a running entry — simulate the race where
+    # something popped it before `_run_agent_attempt` resumed from its
+    # first await.
+    instances = _install_fake_backend(monkeypatch)
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    # Orphan path returns before `build_backend` runs.
+    assert len(instances) == 0
+    assert issue.id not in o._running
+
+
 def test_done_callback_ignores_stale_task_for_replaced_running_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

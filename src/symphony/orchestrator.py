@@ -612,7 +612,22 @@ class Orchestrator:
         try:
             assert self._workspace_manager is not None
             workspace = await self._workspace_manager.create_or_reuse(issue.identifier)
-            self._running[running_issue_id].workspace_path = workspace.path
+            running = self._running.get(running_issue_id)
+            if running is None:
+                # Slot was reclaimed externally between dispatch and the
+                # first await completing. Surface the orphan path instead
+                # of crashing on `KeyError(running_issue_id)` — that crash
+                # was the source of the worker_task_finished_without_cleanup
+                # cascade observed on OLV-002.
+                outcome = "orphaned"
+                error = "running entry vanished before workspace bind"
+                log.warning(
+                    "worker_running_entry_vanished",
+                    issue_id=running_issue_id,
+                    site="workspace_bind",
+                )
+                return
+            running.workspace_path = workspace.path
             try:
                 await self._workspace_manager.before_run(workspace.path)
             except Exception as exc:
@@ -727,7 +742,17 @@ class Orchestrator:
                     else:
                         prompt = first_prompt
 
-                    self._running[running_issue_id].turn_count = turn_number
+                    running = self._running.get(running_issue_id)
+                    if running is None:
+                        outcome = "orphaned"
+                        error = "running entry vanished before turn start"
+                        log.warning(
+                            "worker_running_entry_vanished",
+                            issue_id=running_issue_id,
+                            site="turn_start",
+                        )
+                        return
+                    running.turn_count = turn_number
                     # Symmetry with worker_turn_completed — a single line per
                     # turn-start so multi-turn runs (especially slow ones
                     # like gemini -p where a single turn can take 60-90s)
@@ -735,7 +760,7 @@ class Orchestrator:
                     log.info(
                         "worker_turn_started",
                         issue_id=running_issue_id,
-                        identifier=self._running[running_issue_id].issue.identifier,
+                        identifier=running.issue.identifier,
                         turn=turn_number,
                         max_turns=cfg.agent.max_turns,
                         is_continuation=is_continuation,
@@ -778,7 +803,17 @@ class Orchestrator:
                         error = "could not refresh issue state"
                         return
                     issue = refreshed
-                    self._running[running_issue_id].issue = issue
+                    running = self._running.get(running_issue_id)
+                    if running is None:
+                        outcome = "orphaned"
+                        error = "running entry vanished after issue refresh"
+                        log.warning(
+                            "worker_running_entry_vanished",
+                            issue_id=running_issue_id,
+                            site="post_refresh",
+                        )
+                        return
+                    running.issue = issue
                     state = normalize_state(issue.state)
                     active = {s.lower() for s in cfg.tracker.active_states}
                     if state not in active:
