@@ -756,12 +756,20 @@ async def test_codex_handles_v2_token_usage_camelcase_shape(tmp_path: Path) -> N
         }
     )
     # cachedInputTokens folds into input_tokens; reasoningOutputTokens folds
-    # into output_tokens; totalTokens used as-is.
+    # into output_tokens. total_tokens is recomputed as folded_in + folded_out
+    # so the invariant `total_tokens == input_tokens + output_tokens` holds
+    # — codex's own narrower `totalTokens` (32595, which excludes cache and
+    # reasoning) is intentionally ignored.
     assert backend.latest_usage == {
-        "input_tokens": 32325 + 3456,   # 35781
-        "output_tokens": 270 + 170,     # 440
-        "total_tokens": 32595,
+        "input_tokens": 32325 + 3456,             # 35781
+        "output_tokens": 270 + 170,               # 440
+        "total_tokens": (32325 + 3456) + (270 + 170),  # 36221, NOT 32595
     }
+    # Three-bucket invariant.
+    assert (
+        backend.latest_usage["total_tokens"]
+        == backend.latest_usage["input_tokens"] + backend.latest_usage["output_tokens"]
+    )
 
 
 @pytest.mark.asyncio

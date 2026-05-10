@@ -547,9 +547,15 @@ class CodexAppServerBackend:
 
         Symphony's three-bucket model has no separate cache or reasoning
         buckets, so cached input is folded into input_tokens and reasoning
-        output is folded into output_tokens. The reported totalTokens is
-        used as-is when present (it already reflects the sum on codex's
-        side); when absent we recompute from the folded buckets.
+        output is folded into output_tokens.
+
+        Codex's own `totalTokens` field excludes both cache reads and
+        reasoning output (it counts only `inputTokens + outputTokens`),
+        which would make symphony's three-bucket invariant fail —
+        `input_tokens + output_tokens > total_tokens`. To preserve that
+        invariant and stay unit-comparable with the other backends,
+        symphony recomputes `total_tokens` as `folded_in + folded_out`
+        rather than copying codex's narrower value.
 
         These notifications report ABSOLUTE cumulative totals (not deltas),
         so we overwrite rather than accumulate.
@@ -562,13 +568,12 @@ class CodexAppServerBackend:
         reasoning = int(usage.get("reasoningOutputTokens") or 0)
         folded_in = in_t + cached
         folded_out = out_t + reasoning
-        total = usage.get("totalTokens")
-        folded_total = (
-            int(total) if isinstance(total, (int, float)) else folded_in + folded_out
-        )
+        # Always compute total = folded_in + folded_out so the invariant
+        # `total_tokens == input_tokens + output_tokens` holds. Codex's
+        # narrower `totalTokens` is intentionally ignored.
         self._latest_usage["input_tokens"] = folded_in
         self._latest_usage["output_tokens"] = folded_out
-        self._latest_usage["total_tokens"] = folded_total
+        self._latest_usage["total_tokens"] = folded_in + folded_out
 
     async def _handle_approval(self, params: dict[str, Any]) -> None:
         # Best-effort auto-approve. The legacy `respondToApproval` method is
