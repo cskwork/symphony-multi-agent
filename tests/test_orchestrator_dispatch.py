@@ -378,3 +378,40 @@ def test_dispatch_task_cancelled_before_start_releases_running_slot():
     assert issue.id not in orch._running
     assert issue.id in orch._retry
     assert "worker_task_cancelled_before_start" in (orch._retry[issue.id].error or "")
+
+
+def test_available_slots_counts_retry_pending_against_budget():
+    """A ticket with a pending retry holds its slot through Done.
+
+    Without this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
+    worker exiting and its retry firing would let another ticket claim
+    the slot — surfacing as "OLV-005 starts while OLV-002 is still
+    in Review" even though `max_concurrent_agents == 1`.
+    """
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        # Empty board: one slot is available.
+        assert orch._available_slots(cfg) == 1
+
+        # Worker exit path: `_on_worker_exit` removes the entry from
+        # `_running` and queues a retry. Simulate by scheduling a retry
+        # directly (no running entry).
+        orch._schedule_retry(
+            "id-OLV-002",
+            identifier="OLV-002",
+            attempt=1,
+            delay_ms=1_000,
+            error=None,
+        )
+        try:
+            assert "id-OLV-002" in orch._retry
+            # The retry-pending ticket holds the slot.
+            assert orch._available_slots(cfg) == 0
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())

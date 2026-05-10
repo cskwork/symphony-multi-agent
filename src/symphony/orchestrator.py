@@ -491,7 +491,14 @@ class Orchestrator:
         return True
 
     def _available_slots(self, cfg: ServiceConfig) -> int:
-        return max(cfg.agent.max_concurrent_agents - len(self._running), 0)
+        # Retry-pending tickets count against the slot budget so a ticket
+        # holds its slot through the full Todo → Done lifecycle. Without
+        # this, the 1s `CONTINUATION_RETRY_DELAY_MS` window between a
+        # worker exiting and its retry firing would let another ticket
+        # claim the slot — surfacing as "OLV-005 starts while OLV-002 is
+        # still in Review" even though `max_concurrent_agents == 1`.
+        in_flight = len(self._running) + len(self._retry)
+        return max(cfg.agent.max_concurrent_agents - in_flight, 0)
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
