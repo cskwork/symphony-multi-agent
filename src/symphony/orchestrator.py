@@ -324,7 +324,7 @@ class Orchestrator:
             log.info("workspace_root_changed", new=str(cfg.workspace_root))
             self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
         elif self._workspace_manager is not None:
-            self._workspace_manager.update_hooks(cfg.hooks)
+            self._workspace_manager.update_hooks(cfg.hooks, workflow_dir=cfg.workflow_path.parent)
 
         await self._reconcile_running(cfg)
 
