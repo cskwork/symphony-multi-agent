@@ -2,11 +2,13 @@
 
 `WORKFLOW.md` is a **hybrid file**:
 - **YAML frontmatter** = orchestrator config (tracker, hooks, agent, etc.)
-- **Body** = strict-Liquid prompt template injected as the agent's system
-  prompt per turn — `{{ issue.identifier }}`, `{{ issue.description }}`,
-  `{% if attempt %}…{% endif %}`, etc.
+- **Prompt source** = either external files declared under `prompts:` or,
+  if no matching prompt file is configured, the strict-Liquid body after
+  the frontmatter.
 
-When editing, distinguish the two halves.
+When editing, distinguish runtime config from agent instructions. New
+workflows should prefer `prompts.base` + `prompts.stages`; the body is the
+legacy fallback.
 
 ## Minimal template
 
@@ -30,7 +32,7 @@ hooks:
     echo "run finished at $(date)"
 
 agent:
-  kind: claude          # codex | claude | gemini
+  kind: claude          # codex | claude | gemini | pi
   max_concurrent_agents: 4
   max_turns: 20
 
@@ -41,7 +43,17 @@ claude:
 
 server:
   port: 9999
+
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
 ---
+
+This body is only used when `prompts:` is removed or no matching stage
+prompt exists.
 
 You are picking up ticket {{ issue.identifier }}: {{ issue.title }}.
 …
@@ -58,6 +70,33 @@ Set `agent.kind`:
 Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); the
 others are ignored. The `codex.linear_graphql` client tool is only
 advertised when `agent.kind: codex`.
+
+## Prompt files
+
+Preferred current shape:
+
+```yaml
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    Explore: ./docs/symphony-prompts/file/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Review: ./docs/symphony-prompts/file/stages/review.md
+    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
+```
+
+At dispatch, Symphony sends `base` plus only the file matching the ticket's
+current `state`. Paths are resolved relative to `WORKFLOW.md`; `$VAR`
+values are expanded through the usual config indirection. Stage keys are
+matched case-insensitively after trimming whitespace.
+
+Missing prompt files fail config validation with `prompt file not found`.
+If `prompts:` is absent, or a state has no configured stage file, Symphony
+falls back to the inline body below the frontmatter. Keep that body as a
+short legacy fallback, not as the primary place for all stage rules.
 
 ## Hooks
 

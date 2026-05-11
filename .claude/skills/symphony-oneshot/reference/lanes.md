@@ -5,10 +5,13 @@
 
 # The seven lanes — definitions + per-state prompts
 
-This skill uses Symphony's `tracker.active_states` + Liquid prompt branching
-to give each lane its own *implicit system prompt*. Workers see only the
-prompt for their current state, so context stays minimal and roles stay
-separate.
+This skill uses Symphony's `tracker.active_states` plus per-lane prompt
+rules to give each lane its own instructions. Modern Symphony workflows can
+split those rules into `prompts.base` + `prompts.stages` files; the bundled
+OneShot template still uses the legacy inline Liquid body so bootstrap stays
+single-file and self-contained. In either shape, workers see only the
+rendered prompt for their current state, so context stays minimal and roles
+stay separate.
 
 ## Lane order
 
@@ -52,11 +55,17 @@ makes the gate mechanical. The agent literally cannot mark Delivered if the
 shell exits non-zero — Symphony will retry the ticket until either the gate
 passes or `agent.max_turns` exhausts.
 
-## Per-lane prompts (Liquid body)
+## Per-lane prompts
 
-This is the body of `WORKFLOW.md` — pasted here as a *reference*; the
-copy-and-edit version is `templates/WORKFLOW.oneshot.md`. The orchestrator
-re-renders this every turn with the current ticket's `issue.state`.
+This is the prompt body used by the bundled `templates/WORKFLOW.oneshot.md`
+single-file bootstrap. For hand-maintained boards, you may split each
+`{% if issue.state == ... %}` branch into a file under `prompts.stages` and
+keep the common "ALWAYS START BY" block in `prompts.base`.
+
+The orchestrator assembles a fresh first-turn prompt whenever a ticket
+changes state. With external prompt files, that is `prompts.base` plus the
+current state's stage file. With this inline template, it is the same body
+re-rendered with the current `issue.state`.
 
 ```liquid
 You are Symphony OneShot worker for ticket {{ issue.identifier }}: {{ issue.title }}.

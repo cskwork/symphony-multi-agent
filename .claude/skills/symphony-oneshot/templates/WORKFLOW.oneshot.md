@@ -62,6 +62,11 @@ server:
   port: 9999
 ---
 
+This template intentionally keeps the lane rules inline so `bootstrap.sh`
+can copy one self-contained `WORKFLOW.md`. For long-lived custom OneShot
+boards, split the shared preamble into `prompts.base` and each lane branch
+below into `prompts.stages`.
+
 You are Symphony OneShot worker for ticket {{ issue.identifier }}: {{ issue.title }}.
 Current lane: {{ issue.state }}.
 {% if attempt %}Retry attempt: {{ attempt }}.{% endif %}
