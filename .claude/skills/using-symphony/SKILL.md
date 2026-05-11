@@ -43,6 +43,11 @@ Key invariants:
   state. That's how a ticket moves to `Done`.
 - Each ticket runs in its own **workspace directory** under `workspace.root`
   (default `~/symphony_workspaces/<ID>`). Hooks run inside that directory.
+- Ticket IDs are an ordering contract. Symphony sorts dispatch candidates by
+  stable ticket registration suffix (for example `TASK-001` before
+  `TASK-002`) before mutable fields like priority or update time. When
+  creating multiple tickets, assign numeric suffixes in the same order as the
+  task list and create the files in that order.
 
 ## Always run preflight first
 
@@ -125,7 +130,7 @@ stdin and auth (see troubleshooting reference).
 
 ```bash
 symphony board init ./kanban                                  # once per repo
-symphony board new TASK-1 "<title>" --description "<spec>"
+symphony board new TASK-001 "<title>" --description "<spec>"
 ./tui-open.sh ./WORKFLOW.md                                   # preferred — see "Bootstrapping" above
 # or: symphony tui ./WORKFLOW.md                              # plain CLI; TTY required
 ```

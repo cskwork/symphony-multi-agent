@@ -137,7 +137,9 @@ Outputs:
 - `$ONESHOT_ROOT/.oneshot/vault/architecture.md` (system design, components, data model)
 - `$ONESHOT_ROOT/.oneshot/vault/contracts.md` (interface contracts between Build slices)
 
-For each Build/Verify/QA/Deliver ticket in plan.md, create it from the project root with the **next lane as its starting state** (this is critical — `--state` defaults to Todo which is NOT in active_states):
+For each Build/Verify/QA/Deliver ticket in plan.md, create it from the project root with the **next lane as its starting state** (this is critical — `--state` defaults to Todo which is NOT in active_states).
+
+Ticket IDs are order metadata. Assign suffixes by walking the `plan.md` task table from top to bottom, then create the kanban files in that same order. Example: the first Build task in the table is `BUILD-1`, the second is `BUILD-2`, and a later task must never receive a lower suffix.
 
 ```bash
 cd "$ONESHOT_ROOT"

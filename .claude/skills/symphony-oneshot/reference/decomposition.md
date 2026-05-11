@@ -19,6 +19,16 @@ For each candidate ticket:
    `contracts.md`. Two tickets owning the same contract is a merge conflict
    waiting to happen.
 
+## Ticket numbering is task order
+
+The Plan lane must treat ticket IDs as ordering metadata, not decoration.
+After writing the task table in `plan.md`, assign suffixes by walking that
+table from top to bottom. The first Build task is `BUILD-1`, the second is
+`BUILD-2`, and so on; the same applies to `VERIFY-N`, `QA-N`, `POLISH-N`, and
+`DELIVER-N` if there are multiple tickets in those lanes. Then create the
+kanban files in that same order. Do not sort by lane name, priority, or ease
+of implementation when assigning numbers.
+
 ## Common slice patterns by product type
 
 ### CRUD web app

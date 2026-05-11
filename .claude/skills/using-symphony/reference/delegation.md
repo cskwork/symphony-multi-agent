@@ -9,19 +9,24 @@ context only carries the orchestration overhead, not all sub-implementations.
 ## Recipe
 
 1. **Decompose** the user's request into independent tickets, each with a
-   self-contained spec. Independence is critical — Symphony has no
-   sequencing primitive beyond `blocked_by` (advisory) and runs tickets
-   concurrently up to `agent.max_concurrent_agents`.
+   self-contained spec. Independence is critical: Symphony runs eligible
+   tickets concurrently up to `agent.max_concurrent_agents`. Use `blocked_by`
+   for real dependencies, and use ticket IDs to express FIFO order among
+   otherwise eligible tickets.
 
 2. **Register** each as a Symphony ticket with a rich description (this
    description is the only context the worker gets, plus the WORKFLOW.md
    prompt template):
 
    ```bash
-   symphony board new TASK-A "<title>" \
+   symphony board new TASK-001 "<title>" \
      --priority 2 \
      --description "<full spec + acceptance criteria + file pointers>"
    ```
+
+   Number tickets in the same order you created the task list. Do not let a
+   later task receive a lower suffix, because the dispatcher treats
+   `TASK-001` as earlier work than `TASK-002` regardless of priority.
 
 3. **Launch headless** (TUI requires a TTY you don't have):
 
@@ -54,7 +59,7 @@ context only carries the orchestration overhead, not all sub-implementations.
 
 ## When this pattern *doesn't* win
 
-- Sub-tasks have ordering dependencies the orchestrator can't express.
+- Sub-tasks have ordering dependencies you cannot encode with `blocked_by`.
 - The user expects real-time visibility into each sub-agent's reasoning
   (Symphony exposes only event-level logs, not the agent's stream).
 - There is no callback / push notification — the calling agent must poll.

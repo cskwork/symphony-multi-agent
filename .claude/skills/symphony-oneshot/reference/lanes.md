@@ -104,6 +104,9 @@ For each Build/Verify/QA/Deliver ticket in plan.md, create it via:
 read .oneshot/vault/plan.md §BUILD-N for the spec
 EOF
 )"
+Number each lane's tickets by task-table order, then run `symphony board new`
+in that same order. Ticket suffixes are dispatch-order metadata in Symphony;
+do not give a later task a lower number.
 For BUILD tickets that depend on others, set blocked_by in the kanban file's frontmatter.
 After all tickets are created, set this ticket's state to `Done` (Plan ticket itself terminates).
 Constraint: do NOT write any implementation code yourself. If you catch yourself implementing, stop.

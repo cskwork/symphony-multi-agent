@@ -26,6 +26,14 @@ Identifiers are free-form strings (`TASK-1`, `BUG-007`, `PROD-2026-05-09`).
 Convention is `<PREFIX>-<NUMBER>` but it is not enforced. The file lands at
 `kanban/<ID>.md`.
 
+When creating more than one ticket, assign IDs in the same order as the task
+list: `TASK-001`, then `TASK-002`, then `TASK-003`. Symphony uses the stable
+numeric suffix as its first dispatch order signal before mutable fields like
+priority or update time. If you are adding to an existing prefix, list or scan
+the board first, continue from the highest existing suffix, and create the
+files in that same order. Use zero padding consistently so humans and shell
+sorts see the same order as Symphony.
+
 ### List tickets
 
 ```bash

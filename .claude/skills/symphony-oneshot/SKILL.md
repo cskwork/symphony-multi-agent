@@ -77,6 +77,10 @@ ONE PROMPT
 1. The orchestrator NEVER writes implementation, plans, or verification inline. It only spawns Symphony tickets. If you catch yourself coding, stop and dispatch a ticket instead.
 2. The `.oneshot/vault/` is the only persistent state. Per-ticket workspaces are throwaway.
 3. The loop continues until **delivery proof exists**, not until tickets are "Done." Done without proof = re-open.
+4. Ticket numbers must follow task creation order. The Plan lane assigns
+   `BUILD-N`, `VERIFY-N`, `QA-N`, and `DELIVER-N` suffixes in the exact order
+   the tasks appear in `plan.md`, then creates the kanban files in that order;
+   never give a later task a lower suffix.
 
 ## When to use
 
