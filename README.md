@@ -206,7 +206,7 @@ points at Linear and needs an API key):
 cp WORKFLOW.file.example.md WORKFLOW.md
 ```
 
-Three blocks matter for first-run sanity:
+Four blocks matter for first-run sanity:
 
 ```yaml
 tracker:
@@ -227,6 +227,13 @@ hooks:
     : noop                       # runs before every agent turn
   after_run: |
     echo "run finished at $(date)"
+
+prompts:
+  # Symphony sends base plus only the file for the ticket's current state.
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
 ```
 
 > ⚠ The shipped `WORKFLOW.md` uses `git clone --depth=1 git@github.com:my-org/my-repo.git .`
@@ -303,7 +310,7 @@ symphony board mv TASK-1 Blocked         # forces a state transition
 
 The orchestrator re-evaluates on the next poll tick. Manual transitions are
 for unsticking — normally the agent transitions tickets itself per the
-prompt instructions in `WORKFLOW.md`.
+stage-specific prompt files configured by `WORKFLOW.md`.
 
 ### How dispatch works in one diagram
 
@@ -328,6 +335,24 @@ prompt instructions in `WORKFLOW.md`.
 ## Per-ticket artefacts
 
 Every artefact a ticket produces lives under `docs/<TICKET-ID>/<stage>/`. See [`docs/PIPELINE.md`](docs/PIPELINE.md#per-ticket-artefact-root) for the layout, what to commit, and the `${LLM_WIKI_PATH:-./llm-wiki}/` carve-out.
+
+## Custom prompts
+
+`WORKFLOW.md` can point at editable prompt files under `docs/`:
+
+```yaml
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    Explore: ./docs/symphony-prompts/file/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+```
+
+Symphony sends `base` plus only the prompt file for the ticket's current
+state, keeping each turn smaller than the old all-stage prompt. If the
+`prompts` block is absent, the inline body of `WORKFLOW.md` still works as
+the legacy fallback.
 
 ---
 

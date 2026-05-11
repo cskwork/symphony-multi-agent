@@ -26,6 +26,7 @@ from symphony.workflow import (
     GeminiConfig,
     HooksConfig,
     PiConfig,
+    PromptConfig,
     ServerConfig,
     ServiceConfig,
     TrackerConfig,
@@ -112,11 +113,13 @@ class _FakeWorkspaceManager:
 # ---------------------------------------------------------------------------
 
 
-def _make_config(*, max_turns: int = 5) -> ServiceConfig:
+def _make_config(
+    *, max_turns: int = 5, prompt_template: str | None = None, prompts: PromptConfig | None = None
+) -> ServiceConfig:
     # Prompt template references {{ issue.state }} and {{ is_rewind }} so
     # the rendered first prompt is observably different across phase
     # transitions AND the rewind signal is testable end-to-end.
-    template = (
+    template = prompt_template or (
         "issue={{ issue.identifier }} state={{ issue.state }} rewind={{ is_rewind }}"
     )
     return ServiceConfig(
@@ -170,6 +173,7 @@ def _make_config(*, max_turns: int = 5) -> ServiceConfig:
         ),
         server=ServerConfig(port=None),
         tui=TuiConfig(language="en", visible_lanes=5),
+        prompts=prompts or PromptConfig(),
         prompt_template=template,
     )
 
@@ -314,6 +318,44 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     # And the prompt sent on that run_turn equals the freshly rendered
     # first-turn prompt (not a build_continuation_prompt body).
     assert second_run[0][1]["prompt"] == first_prompts[1]
+
+
+def test_phase_transition_uses_stage_specific_prompt_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(
+        max_turns=5,
+        prompt_template="LEGACY {{ issue.state }}",
+        prompts=PromptConfig(
+            base_template="BASE {{ issue.identifier }}",
+            stage_templates={
+                "todo": "TODO ONLY {{ issue.state }}",
+                "in progress": "IMPLEMENT ONLY {{ issue.state }}",
+            },
+        ),
+    )
+    issue = _make_issue(state="Todo")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["In Progress", "Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    first_prompts = [
+        call[1]["initial_prompt"]
+        for inst in instances
+        for call in inst.calls
+        if call[0] == "start_session"
+    ]
+    assert len(first_prompts) == 2
+    assert "BASE MT-1" in first_prompts[0]
+    assert "TODO ONLY Todo" in first_prompts[0]
+    assert "IMPLEMENT ONLY" not in first_prompts[0]
+    assert "BASE MT-1" in first_prompts[1]
+    assert "IMPLEMENT ONLY In Progress" in first_prompts[1]
+    assert "TODO ONLY" not in first_prompts[1]
+    assert "LEGACY" not in "\n".join(first_prompts)
 
 
 def test_same_phase_does_not_restart_backend(

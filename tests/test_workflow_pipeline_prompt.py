@@ -1,8 +1,8 @@
-"""Coverage for the production-pipeline prompt template shipped in
-WORKFLOW.md / WORKFLOW.file.example.md / WORKFLOW.example.md.
+"""Coverage for the production-pipeline prompt templates shipped in
+WORKFLOW.file.example.md / WORKFLOW.example.md plus docs/symphony-prompts/.
 
 These tests assert the prompt: (1) parses + renders for every active state,
-(2) carries the stage-specific instructions the agent needs at each stage,
+(2) carries only the current stage-specific instructions the agent needs,
 (3) renders the retry and blocked_by branches, and (4) preserves the
 fixed `## As-Is -> To-Be Report` shape required at Done.
 """
@@ -31,19 +31,15 @@ WORKFLOW_FILES = (
     "WORKFLOW.example.md",
 )
 
-# Phrases that must appear in every render. The template is not state-
-# branched in the parser sense; it ships every stage rule and the agent
-# selects the matching one. So whatever the issue's state, all stage
-# headings must be present (and the issue's state must be echoed).
-STAGE_HEADINGS = (
-    "TRIAGE",
-    "EXPLORE",
-    "IMPLEMENT",
-    "REVIEW",
-    "QA",
-    "LEARN",
-    "DONE",
-)
+STAGE_HEADINGS_BY_STATE = {
+    "Todo": "### TRIAGE",
+    "Explore": "### EXPLORE",
+    "In Progress": "### IMPLEMENT",
+    "Review": "### REVIEW",
+    "QA": "### QA",
+    "Learn": "### LEARN",
+    "Done": "### DONE",
+}
 
 # Phrases the EXPLORE stage must reference so the agent actually consults
 # the three sources of domain knowledge (wiki, history, code) and produces
@@ -107,6 +103,12 @@ def test_active_states_cover_full_pipeline(workflow: str) -> None:
         assert required in cfg.tracker.active_states, (
             f"{workflow} active_states missing {required!r} — TUI lane will not render"
         )
+        assert required.lower() in cfg.prompts.stage_templates, (
+            f"{workflow} prompts.stages missing {required!r}"
+        )
+    assert "done" in cfg.prompts.stage_templates, (
+        f"{workflow} prompts.stages missing terminal Done report prompt"
+    )
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
@@ -115,16 +117,30 @@ def test_active_states_cover_full_pipeline(workflow: str) -> None:
 )
 def test_prompt_renders_for_every_stage(workflow: str, state: str) -> None:
     cfg = _load(workflow)
-    rendered = render(cfg.prompt_template, build_prompt_env(_issue(state), attempt=None))
+    rendered = render(
+        cfg.prompt_template_for_state(state),
+        build_prompt_env(_issue(state), attempt=None),
+    )
     assert f"Current state: {state}." in rendered
-    for heading in STAGE_HEADINGS:
-        assert heading in rendered, f"missing stage heading {heading!r} at state={state}"
+    current_heading = STAGE_HEADINGS_BY_STATE[state]
+    assert current_heading in rendered, (
+        f"missing current stage heading {current_heading!r} at state={state}"
+    )
+    for other_state, heading in STAGE_HEADINGS_BY_STATE.items():
+        if other_state == state:
+            continue
+        assert heading not in rendered, (
+            f"unexpected stage heading {heading!r} in render for state={state}"
+        )
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_qa_stage_demands_real_execution(workflow: str) -> None:
     cfg = _load(workflow)
-    rendered = render(cfg.prompt_template, build_prompt_env(_issue("QA"), attempt=None))
+    rendered = render(
+        cfg.prompt_template_for_state("QA"),
+        build_prompt_env(_issue("QA"), attempt=None),
+    )
     for phrase in QA_HARD_RULES:
         assert phrase in rendered, f"QA stage missing hard rule: {phrase!r}"
 
@@ -133,7 +149,8 @@ def test_qa_stage_demands_real_execution(workflow: str) -> None:
 def test_explore_stage_consults_wiki_history_and_code(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
-        cfg.prompt_template, build_prompt_env(_issue("Explore"), attempt=None)
+        cfg.prompt_template_for_state("Explore"),
+        build_prompt_env(_issue("Explore"), attempt=None),
     )
     for phrase in EXPLORE_HARD_RULES:
         assert phrase in rendered, f"Explore stage missing hard rule: {phrase!r}"
@@ -143,7 +160,8 @@ def test_explore_stage_consults_wiki_history_and_code(workflow: str) -> None:
 def test_learn_stage_writes_back_to_wiki(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
-        cfg.prompt_template, build_prompt_env(_issue("Learn"), attempt=None)
+        cfg.prompt_template_for_state("Learn"),
+        build_prompt_env(_issue("Learn"), attempt=None),
     )
     for phrase in LEARN_HARD_RULES:
         assert phrase in rendered, f"Learn stage missing hard rule: {phrase!r}"
@@ -152,7 +170,10 @@ def test_learn_stage_writes_back_to_wiki(workflow: str) -> None:
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_done_stage_carries_as_is_to_be_report_shape(workflow: str) -> None:
     cfg = _load(workflow)
-    rendered = render(cfg.prompt_template, build_prompt_env(_issue("Done"), attempt=None))
+    rendered = render(
+        cfg.prompt_template_for_state("Done"),
+        build_prompt_env(_issue("Done"), attempt=None),
+    )
     for heading in DONE_REPORT_SHAPE:
         assert heading in rendered, f"Done report missing section: {heading!r}"
 
@@ -161,7 +182,8 @@ def test_done_stage_carries_as_is_to_be_report_shape(workflow: str) -> None:
 def test_retry_branch_renders(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
-        cfg.prompt_template, build_prompt_env(_issue("In Progress"), attempt=2)
+        cfg.prompt_template_for_state("In Progress"),
+        build_prompt_env(_issue("In Progress"), attempt=2),
     )
     assert "retry attempt 2" in rendered
 
@@ -173,7 +195,9 @@ def test_blocked_by_branch_renders(workflow: str) -> None:
         "Todo",
         blocked_by=(BlockerRef(id="b1", identifier="B-1", state="Todo"),),
     )
-    rendered = render(cfg.prompt_template, build_prompt_env(issue, attempt=None))
+    rendered = render(
+        cfg.prompt_template_for_state("Todo"), build_prompt_env(issue, attempt=None)
+    )
     assert "B-1 (Todo)" in rendered
 
 

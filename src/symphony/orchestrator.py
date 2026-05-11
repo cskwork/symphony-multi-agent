@@ -687,7 +687,7 @@ class Orchestrator:
                 # honours `SYMPHONY_LANG` (build_service_config call).
                 doc_language = cfg.tui.language
                 first_prompt, _ = build_first_turn_prompt(
-                    prompt_template=cfg.prompt_template,
+                    prompt_template=cfg.prompt_template_for_state(issue.state),
                     issue=issue,
                     attempt=attempt,
                     language=doc_language,
@@ -947,7 +947,7 @@ class Orchestrator:
         await new_client.start()
         await new_client.initialize()
         first_prompt, _ = build_first_turn_prompt(
-            prompt_template=cfg.prompt_template,
+            prompt_template=cfg.prompt_template_for_state(issue.state),
             issue=issue,
             attempt=attempt,
             language=doc_language,

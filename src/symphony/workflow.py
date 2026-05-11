@@ -288,6 +288,23 @@ class TuiConfig:
 
 
 @dataclass(frozen=True)
+class PromptConfig:
+    """External prompt files configured from WORKFLOW.md.
+
+    `base_template` is shared across all states. `stage_templates` is keyed
+    by normalized tracker state and contains only the current-stage rule body.
+    """
+
+    base_template: str = ""
+    base_path: Path | None = None
+    stage_templates: dict[str, str] = field(default_factory=dict)
+    stage_paths: dict[str, Path] = field(default_factory=dict)
+
+    def has_stage_prompts(self) -> bool:
+        return bool(self.stage_templates)
+
+
+@dataclass(frozen=True)
 class ServiceConfig:
     workflow_path: Path
     poll_interval_ms: int
@@ -301,8 +318,18 @@ class ServiceConfig:
     pi: PiConfig
     server: ServerConfig
     tui: TuiConfig = field(default_factory=TuiConfig)
+    prompts: PromptConfig = field(default_factory=PromptConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
+
+    def prompt_template_for_state(self, state: str) -> str:
+        """Return the runtime prompt template for one tracker state."""
+        key = _normalize_state_key(state)
+        stage_template = self.prompts.stage_templates.get(key)
+        if stage_template is None:
+            return self.prompt_template
+        parts = [self.prompts.base_template, stage_template]
+        return "\n\n".join(part for part in parts if part)
 
     def backend_timeouts(self) -> tuple[int, int, int]:
         """Return `(turn_ms, read_ms, stall_ms)` for the active backend."""
@@ -357,6 +384,10 @@ def _as_str(value: Any, default: str = "") -> str:
     return default
 
 
+def _normalize_state_key(value: str) -> str:
+    return value.strip().lower()
+
+
 def _normalize_state_map(value: Any) -> dict[str, int]:
     """§5.3.5 — keys lowercased, invalid entries dropped."""
     if not isinstance(value, dict):
@@ -392,6 +423,60 @@ def _normalize_state_description_map(value: Any) -> dict[str, str]:
             continue
         out[key.lower()] = text
     return out
+
+
+def _resolve_config_path(base_dir: Path, value: str) -> Path:
+    resolved = resolve_var_indirection(value) if value.startswith("$") else value
+    if not isinstance(resolved, str) or not resolved:
+        return base_dir
+    path = Path(expand_path_value(resolved))
+    if not path.is_absolute():
+        return (base_dir / path).resolve()
+    return path.resolve()
+
+
+def _read_prompt_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise ConfigValidationError("prompt file not found", path=str(path)) from exc
+    except OSError as exc:
+        raise ConfigValidationError(
+            "prompt file unreadable", path=str(path), error=str(exc)
+        ) from exc
+
+
+def _build_prompt_config(raw: Any, base_dir: Path) -> PromptConfig:
+    if not isinstance(raw, dict):
+        return PromptConfig()
+
+    base_template = ""
+    base_path: Path | None = None
+    raw_base = raw.get("base")
+    if isinstance(raw_base, str) and raw_base.strip():
+        base_path = _resolve_config_path(base_dir, raw_base.strip())
+        base_template = _read_prompt_file(base_path)
+
+    stage_templates: dict[str, str] = {}
+    stage_paths: dict[str, Path] = {}
+    raw_stages = raw.get("stages")
+    if isinstance(raw_stages, dict):
+        for raw_state, raw_path in raw_stages.items():
+            if not isinstance(raw_state, str):
+                continue
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            key = _normalize_state_key(raw_state)
+            path = _resolve_config_path(base_dir, raw_path.strip())
+            stage_paths[key] = path
+            stage_templates[key] = _read_prompt_file(path)
+
+    return PromptConfig(
+        base_template=base_template,
+        base_path=base_path,
+        stage_templates=stage_templates,
+        stage_paths=stage_paths,
+    )
 
 
 def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
@@ -646,6 +731,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     )
 
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
+    prompts = _build_prompt_config(cfg.get("prompts"), base_dir)
 
     return ServiceConfig(
         workflow_path=workflow.source_path,
@@ -660,6 +746,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         pi=pi,
         server=server,
         tui=tui,
+        prompts=prompts,
         raw=dict(cfg),
         prompt_template=prompt_template,
     )

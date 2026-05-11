@@ -1,11 +1,12 @@
 # Production pipeline
 
-Symphony's default task (the prompt template in `WORKFLOW.md`) drives every
-ticket through seven gated stages. The harness picks the ticket up on each
-poll tick; the agent moves it from one stage to the next by editing the
-ticket file's `state` field. The orchestrator only reads, so this stage
-machine is intentionally implemented in the prompt rather than the Python
-core.
+Symphony's default task drives every ticket through seven gated stages.
+`WORKFLOW.md` remains the orchestration manifest, while the default agent
+instructions live in `docs/symphony-prompts/`. The harness picks the
+ticket up on each poll tick; the agent moves it from one stage to the next
+by editing the ticket file's `state` field. The orchestrator only reads, so
+this stage machine is intentionally implemented in prompt files rather
+than the Python core.
 
 ```
   Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
@@ -107,14 +108,41 @@ completed ticket carries an `## As-Is -> To-Be Report` block that captures:
 The block lives in the ticket body so future readers (and future agent
 runs) get the full story without spelunking through git or chat history.
 
+## Stage prompts
+
+The example workflows use a stage-specific prompt manifest:
+
+```yaml
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    Explore: ./docs/symphony-prompts/file/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Review: ./docs/symphony-prompts/file/stages/review.md
+    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
+```
+
+At runtime Symphony assembles `base` plus the one file matching
+`{{ issue.state }}`. A `Todo` ticket receives the triage prompt, an
+`Explore` ticket receives the Explore prompt, and so on; unrelated stage
+rules are not sent on that turn. If `prompts.stages` is omitted, Symphony
+falls back to the legacy inline body of `WORKFLOW.md`.
+
+Use `docs/symphony-prompts/file/` for the Markdown-file Kanban tracker and
+`docs/symphony-prompts/linear/` for Linear. Customize those files directly
+when a board needs different agent behavior.
+
 ## Stage transitions and the orchestrator
 
 `active_states` in `WORKFLOW.md` is `[Todo, Explore, "In Progress", Review, QA, Learn]`.
 The orchestrator dispatches a worker for any ticket whose state is in
-that set, regardless of which stage it is on. Each turn the agent reads
-`{{ issue.state }}` from the prompt and applies the matching stage rule.
-That keeps the Python core simple: states are just strings; the pipeline
-is policy expressed in the prompt.
+that set, regardless of which stage it is on. Each phase starts with a
+fresh first-turn prompt assembled from `prompts.base` and the current
+state's `prompts.stages` file. That keeps the Python core simple: states
+are just strings; the pipeline policy lives in editable Markdown.
 
 `max_concurrent_agents_by_state` lets you cap how many tickets can sit
 in each stage in parallel — useful when QA runs are expensive (real
@@ -127,15 +155,18 @@ brief reflects a quiet workspace.
    (Linear) to `WORKFLOW.md` and customize.
 2. Confirm `tracker.active_states` includes `Explore`, `Review`, `QA`,
    and `Learn` (in addition to `Todo` and `In Progress`).
-3. Make sure your `before_run` / `after_create` hooks land the agent in
+3. Confirm the `prompts:` block points at the prompt directory you want
+   to customize. The shipped examples use `docs/symphony-prompts/file/`
+   and `docs/symphony-prompts/linear/`.
+4. Make sure your `before_run` / `after_create` hooks land the agent in
    a workspace where the test suite, target API, or browser harness is
    actually runnable. The QA stage is only as good as the workspace it
    runs in.
-4. Decide whether `llm-wiki/` lives in the same repo as the source (the
+5. Decide whether `llm-wiki/` lives in the same repo as the source (the
    default; Learn commits wiki edits onto the ticket's branch) or in a
    sibling repo. Either works; keep it adjacent to `kanban/` so Explore
    can reach it without extra configuration.
-5. Run `symphony doctor ./WORKFLOW.md` before launching to catch the
+6. Run `symphony doctor ./WORKFLOW.md` before launching to catch the
    common first-run failures (port collision, missing CLI on PATH,
    placeholder clone URL).
 

@@ -120,6 +120,73 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.tracker.api_key == "lin_test_token"
     assert cfg.tracker.project_slug == "my-proj"
     assert cfg.codex.command == "codex app-server"
+    assert cfg.prompt_template_for_state("Todo") == "Hello {{ issue.identifier }}"
+
+
+def test_stage_prompt_files_are_loaded_relative_to_workflow(tmp_path):
+    prompt_dir = tmp_path / "docs" / "prompts" / "stages"
+    prompt_dir.mkdir(parents=True)
+    (tmp_path / "docs" / "prompts" / "base.md").write_text(
+        "BASE for {{ issue.identifier }}", encoding="utf-8"
+    )
+    (prompt_dir / "todo.md").write_text(
+        "TODO rules for {{ issue.state }}", encoding="utf-8"
+    )
+    (prompt_dir / "explore.md").write_text(
+        "EXPLORE rules for {{ issue.state }}", encoding="utf-8"
+    )
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+              active_states: [Todo, Explore]
+            prompts:
+              base: ./docs/prompts/base.md
+              stages:
+                Todo: ./docs/prompts/stages/todo.md
+                Explore: ./docs/prompts/stages/explore.md
+            ---
+            LEGACY all-stage prompt
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    todo_prompt = cfg.prompt_template_for_state("Todo")
+    explore_prompt = cfg.prompt_template_for_state("explore")
+    assert todo_prompt == "BASE for {{ issue.identifier }}\n\nTODO rules for {{ issue.state }}"
+    assert "EXPLORE rules" not in todo_prompt
+    assert explore_prompt == (
+        "BASE for {{ issue.identifier }}\n\nEXPLORE rules for {{ issue.state }}"
+    )
+    assert "LEGACY all-stage prompt" not in todo_prompt
+
+
+def test_missing_stage_prompt_file_fails_validation(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            prompts:
+              stages:
+                Todo: ./docs/prompts/stages/missing.md
+            ---
+            legacy prompt
+            """
+        ),
+    )
+
+    with pytest.raises(ConfigValidationError, match="prompt file not found"):
+        build_service_config(load_workflow(path))
 
 
 def test_build_service_config_workspace_root_relative(tmp_path, monkeypatch):
