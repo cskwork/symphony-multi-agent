@@ -246,10 +246,10 @@ def test_first_meaningful_line_skips_markdown_chrome() -> None:
     assert _first_meaningful_line(None) == ""
 
 
-def test_card_sort_key_promotes_high_priority() -> None:
-    a = _issue("SMA-1")
-    b = _issue("SMA-2", state="Todo", priority=1)
-    assert _card_sort_key(b) < _card_sort_key(a)
+def test_card_sort_key_follows_ticket_registration_number() -> None:
+    earlier = _issue("OLV-061")
+    later = _issue("OLV-131", state="Todo", priority=1)
+    assert _card_sort_key(earlier) < _card_sort_key(later)
 
 
 def test_compact_rate_limits_serializes_first_three_keys() -> None:

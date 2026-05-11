@@ -167,15 +167,17 @@ def test_per_state_concurrency_cap():
     assert orch._should_dispatch(new, cfg) is False
 
 
-def test_sort_for_dispatch_ties_by_identifier():
-    a = _issue("MT-2", priority=1)
-    b = _issue("MT-1", priority=1)
-    out = [i.identifier for i in sort_for_dispatch([a, b])]
-    assert out == ["MT-1", "MT-2"]
+def test_sort_for_dispatch_uses_registration_number_before_priority():
+    earlier = _issue("OLV-061", priority=None)
+    later = _issue("OLV-131", priority=1)
+
+    out = [i.identifier for i in sort_for_dispatch([later, earlier])]
+
+    assert out == ["OLV-061", "OLV-131"]
 
 
-def test_orchestrator_dispatch_prioritizes_oldest_active_entry():
-    """Workers run active tickets FIFO by current-state entry time."""
+def test_orchestrator_dispatch_prioritizes_ticket_registration_order():
+    """Workers run tickets in registration order, not current-state timestamp."""
     cfg = _make_config(
         max_concurrent=1,
         active_states=("Todo", "Explore", "In Progress", "Review", "QA", "Learn"),
@@ -219,6 +221,26 @@ def test_orchestrator_dispatch_prioritizes_oldest_active_entry():
     ]
 
     assert ordered == ["OLV-010", "OLV-011"]
+
+    older_registered = _issue(
+        "OLV-061",
+        state="Todo",
+        priority=None,
+        updated_at=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+    )
+    newer_registered = _issue(
+        "OLV-131",
+        state="Todo",
+        priority=1,
+        updated_at=datetime(2025, 1, 1, 8, tzinfo=timezone.utc),
+    )
+
+    ordered = [
+        issue.identifier
+        for issue in _sort_for_dispatch_fifo([newer_registered, older_registered], cfg)
+    ]
+
+    assert ordered == ["OLV-061", "OLV-131"]
 
 
 import asyncio

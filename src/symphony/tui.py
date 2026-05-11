@@ -32,7 +32,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Static
 
 from .i18n import SUPPORTED_LANGUAGES, t
-from .issue import Issue, normalize_state
+from .issue import Issue, normalize_state, registration_order_key
 from .logging import get_logger
 from .orchestrator import Orchestrator
 from .tracker import build_tracker_client
@@ -154,9 +154,8 @@ def _first_meaningful_line(description: str | None) -> str:
     return ""
 
 
-def _card_sort_key(issue: Issue) -> tuple[int, str]:
-    pri = issue.priority if isinstance(issue.priority, int) and issue.priority > 0 else 99
-    return (pri, issue.identifier)
+def _card_sort_key(issue: Issue) -> tuple[int, str, int, float, str]:
+    return registration_order_key(issue)
 
 
 def _ordered_column_states(cfg: ServiceConfig) -> list[str]:

@@ -32,21 +32,25 @@ def test_workspace_key_sanitizes():
     assert workspace_key("a b c") == "a_b_c"
 
 
-def test_sort_priority_then_created_at():
-    a = _i("A", 3, datetime(2026, 1, 1, tzinfo=timezone.utc))
-    b = _i("B", 1, datetime(2026, 2, 1, tzinfo=timezone.utc))
-    c = _i("C", 1, datetime(2026, 1, 5, tzinfo=timezone.utc))
-    d = _i("D", None, datetime(2025, 1, 1, tzinfo=timezone.utc))
-    sorted_issues = [i.identifier for i in sort_for_dispatch([a, b, c, d])]
-    # Priority 1 (C, B) before priority 3 (A); null priority (D) last.
-    assert sorted_issues == ["C", "B", "A", "D"]
+def test_sort_for_dispatch_follows_ticket_registration_number():
+    older = _i("OLV-061", None, datetime(2026, 2, 1, tzinfo=timezone.utc))
+    newer = _i("OLV-131", 1, datetime(2025, 1, 1, tzinfo=timezone.utc))
+    earliest = _i("OLV-012", None, datetime(2026, 3, 1, tzinfo=timezone.utc))
+
+    sorted_issues = [
+        i.identifier for i in sort_for_dispatch([newer, older, earliest])
+    ]
+
+    assert sorted_issues == ["OLV-012", "OLV-061", "OLV-131"]
 
 
-def test_priority_zero_treated_as_null():
-    a = _i("A", 0, datetime(2026, 1, 1, tzinfo=timezone.utc))
-    b = _i("B", 4, datetime(2026, 2, 1, tzinfo=timezone.utc))
-    out = [i.identifier for i in sort_for_dispatch([a, b])]
-    assert out == ["B", "A"]
+def test_sort_for_dispatch_falls_back_to_created_at_without_ticket_number():
+    a = _i("zeta", 0, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    b = _i("alpha", 4, datetime(2026, 2, 1, tzinfo=timezone.utc))
+
+    out = [i.identifier for i in sort_for_dispatch([b, a])]
+
+    assert out == ["zeta", "alpha"]
 
 
 def test_coerce_priority():

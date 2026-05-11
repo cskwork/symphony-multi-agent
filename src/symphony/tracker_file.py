@@ -33,6 +33,7 @@ Conventions:
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -54,6 +55,21 @@ from .workflow import TrackerConfig
 
 
 _FRONT_MATTER_DELIM = "---"
+_YAML_TOP_LEVEL_KEY = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_-]*)\s*:")
+_MARKDOWN_SECTION_START = re.compile(r"^\s*(#{1,6}\s|```)")
+_CANONICAL_FRONT_MATTER_KEYS = {
+    "id",
+    "identifier",
+    "title",
+    "state",
+    "priority",
+    "branch_name",
+    "url",
+    "labels",
+    "blocked_by",
+    "created_at",
+    "updated_at",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +93,9 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
     try:
         parsed = yaml.safe_load(front_text)
     except yaml.YAMLError as exc:
+        healed = _auto_heal_markdown_in_front_matter(path, lines, end)
+        if healed is not None:
+            return healed
         raise SymphonyError(
             "invalid YAML front matter", path=str(path), error=str(exc)
         ) from exc
@@ -88,6 +107,70 @@ def parse_ticket_file(path: Path) -> tuple[dict[str, Any], str]:
         front = parsed
     body = "\n".join(lines[end + 1 :]).strip()
     return front, body
+
+
+def _auto_heal_markdown_in_front_matter(
+    path: Path, lines: list[str], end: int
+) -> tuple[dict[str, Any], str] | None:
+    """Repair a common ticket corruption: Markdown inserted before YAML close."""
+    yaml_lines: list[str] = []
+    misplaced_lines: list[str] = []
+    in_misplaced_markdown = False
+
+    for line in lines[1:end]:
+        key_match = _YAML_TOP_LEVEL_KEY.match(line)
+        is_canonical_key = (
+            key_match is not None
+            and key_match.group("key") in _CANONICAL_FRONT_MATTER_KEYS
+        )
+
+        if in_misplaced_markdown:
+            if is_canonical_key:
+                in_misplaced_markdown = False
+                yaml_lines.append(line)
+            else:
+                misplaced_lines.append(line)
+            continue
+
+        if _MARKDOWN_SECTION_START.match(line):
+            in_misplaced_markdown = True
+            while yaml_lines and not yaml_lines[-1].strip():
+                yaml_lines.pop()
+            misplaced_lines.append(line)
+            continue
+
+        if not _looks_like_front_matter_line(line):
+            return None
+        yaml_lines.append(line)
+
+    moved_text = "\n".join(misplaced_lines).strip()
+    if not moved_text:
+        return None
+
+    yaml_text = "\n".join(yaml_lines)
+    try:
+        parsed = yaml.safe_load(yaml_text)
+    except yaml.YAMLError:
+        return None
+    if parsed is None:
+        front: dict[str, Any] = {}
+    elif not isinstance(parsed, dict):
+        return None
+    else:
+        front = parsed
+
+    original_body = "\n".join(lines[end + 1 :]).strip()
+    body = "\n\n".join(part for part in (moved_text, original_body) if part)
+    write_ticket_atomic(path, front, body)
+    return front, body
+
+
+def _looks_like_front_matter_line(line: str) -> bool:
+    if not line.strip():
+        return True
+    if _YAML_TOP_LEVEL_KEY.match(line):
+        return True
+    return line.startswith((" ", "\t"))
 
 
 def issue_from_file(path: Path) -> Issue | None:
@@ -273,10 +356,7 @@ class FileBoardTracker:
     def _scan_all(self) -> list[Issue]:
         out: list[Issue] = []
         for path in sorted(self._root.glob("*.md")):
-            try:
-                issue = issue_from_file(path)
-            except SymphonyError:
-                continue
+            issue = issue_from_file(path)
             if issue is not None:
                 out.append(issue)
         return _hydrate_blocker_states(out)

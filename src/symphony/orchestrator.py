@@ -1661,25 +1661,6 @@ def _task_debug(task: asyncio.Task[Any]) -> dict[str, Any]:
 
 
 def _sort_for_dispatch_fifo(issues: list[Issue], cfg: ServiceConfig) -> list[Issue]:
-    """Sort dispatch candidates FIFO by current active-state entry time.
-
-    File-board tickets use `updated_at` (falling back to file mtime) as the
-    best available "entered this state" timestamp. Priority and identifier
-    only break ties; they must not let new work jump ahead of older work.
-    """
+    """Sort dispatch candidates by stable ticket registration order."""
     del cfg  # Reserved for future tracker-specific ordering knobs.
-    normal_order = {
-        issue.id: index for index, issue in enumerate(sort_for_dispatch(issues))
-    }
-    return sorted(
-        issues,
-        key=lambda issue: (
-            _dispatch_fifo_timestamp(issue),
-            normal_order.get(issue.id, len(normal_order)),
-        ),
-    )
-
-
-def _dispatch_fifo_timestamp(issue: Issue) -> float:
-    dt = issue.updated_at or issue.created_at
-    return dt.timestamp() if dt is not None else float("inf")
+    return sort_for_dispatch(issues)

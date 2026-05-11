@@ -110,6 +110,44 @@ def test_unterminated_front_matter_raises(tmp_path):
         parse_ticket_file(path)
 
 
+def test_parse_ticket_file_auto_heals_markdown_inside_front_matter(tmp_path):
+    path = _write(
+        tmp_path,
+        "DEV-1.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: DEV-1
+            title: Heal misplaced triage
+            state: In Progress
+
+            ## Triage
+
+            ticket is actionable; routing to Explore.
+            labels: [product, api]
+            blocked_by:
+              - identifier: DEV-0
+                state: Done
+            ---
+            Existing body.
+            """
+        ),
+    )
+
+    front, body = parse_ticket_file(path)
+
+    assert front["id"] == "DEV-1"
+    assert front["labels"] == ["product", "api"]
+    assert front["blocked_by"][0]["identifier"] == "DEV-0"
+    assert body.startswith("## Triage\n\nticket is actionable")
+    assert "Existing body." in body
+
+    healed_text = path.read_text(encoding="utf-8")
+    front_text = healed_text.split("---", 2)[1]
+    assert "## Triage" not in front_text
+    assert "labels:" in front_text
+
+
 def test_fetch_candidate_filters_by_active(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Todo\n---\n")
@@ -118,6 +156,16 @@ def test_fetch_candidate_filters_by_active(tmp_path):
     fbt = FileBoardTracker(_tracker(root))
     ids = sorted(i.identifier for i in fbt.fetch_candidate_issues())
     assert ids == ["A", "C"]
+
+
+def test_fetch_candidate_raises_on_invalid_ticket_yaml(tmp_path):
+    root = tmp_path / "board"
+    _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Todo\n---\n")
+    _write(root, "B.md", "---\nid: B\ntitle: b\nstate: Todo\nbroken\n---\n")
+    fbt = FileBoardTracker(_tracker(root))
+
+    with pytest.raises(SymphonyError, match="invalid YAML front matter"):
+        fbt.fetch_candidate_issues()
 
 
 def test_fetch_candidate_resolves_blocker_state_from_current_board(tmp_path):
