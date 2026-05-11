@@ -55,6 +55,8 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "turn",
         "card.retry": "retry #",
         "card.blocked_by": "blocked by",
+        "card.paused": "paused",
+        "header.paused": "paused=",
         # language switch hint shown in the header
         "header.lang": "lang=",
         "header.lang_hint": "(SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)",
@@ -80,6 +82,8 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "턴",
         "card.retry": "재시도 #",
         "card.blocked_by": "차단:",
+        "card.paused": "일시정지",
+        "header.paused": "일시정지=",
         # language switch hint shown in the header
         "header.lang": "언어=",
         "header.lang_hint": "(SYMPHONY_LANG=en 또는 WORKFLOW.md tui.language 수정 후 재시작)",

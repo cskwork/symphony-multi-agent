@@ -642,3 +642,168 @@ def _replace_agent_field(cfg, **agent_overrides):
 
     new_agent = replace(cfg.agent, **agent_overrides)
     return replace(cfg, agent=new_agent)
+
+
+# ---------------------------------------------------------------------------
+# Operator-driven pause / resume.
+# ---------------------------------------------------------------------------
+
+
+def test_pause_worker_rejects_unknown_issue():
+    """Pausing a ticket that isn't running must report failure, not crash."""
+    orch = _orch()
+    assert orch.pause_worker("id-missing") is False
+    assert orch.is_paused("id-missing") is False
+
+
+def test_pause_then_resume_flips_state_and_snapshot_reports_it():
+    """`is_paused` + snapshot row both reflect the operator's pause toggle."""
+    orch = _orch()
+    issue = _issue("MT-1")
+
+    async def _run() -> None:
+        event = asyncio.Event()
+
+        async def _parked_worker() -> None:
+            await event.wait()
+
+        worker_task = asyncio.create_task(_parked_worker())
+        try:
+            await asyncio.sleep(0)
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+
+            assert orch.is_paused(issue.id) is False
+            assert orch.pause_worker(issue.id) is True
+            assert orch.is_paused(issue.id) is True
+
+            snap = orch.snapshot()
+            row = next(r for r in snap["running"] if r["issue_id"] == issue.id)
+            assert row["paused"] is True
+
+            # Re-pausing an already-paused worker is a no-op (no double-clear).
+            assert orch.pause_worker(issue.id) is False
+
+            assert orch.resume_worker(issue.id) is True
+            assert orch.is_paused(issue.id) is False
+            assert orch.resume_worker(issue.id) is False
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_pause_event_blocks_then_resume_releases_worker():
+    """A coroutine awaiting the pause event blocks until resume_worker fires."""
+    orch = _orch()
+    issue = _issue("MT-1")
+
+    async def _run() -> bool:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        orch.pause_worker(issue.id)
+        event = orch._pause_events[issue.id]
+        assert not event.is_set()
+
+        observed_release = False
+
+        async def _waiter() -> None:
+            nonlocal observed_release
+            await event.wait()
+            observed_release = True
+
+        waiter_task = asyncio.create_task(_waiter())
+        # Yield so the waiter parks on the event.
+        await asyncio.sleep(0)
+        assert not waiter_task.done(), "waiter must be parked while paused"
+
+        orch.resume_worker(issue.id)
+        await asyncio.wait_for(waiter_task, timeout=1.0)
+        return observed_release
+
+    released = asyncio.run(_run())
+    assert released is True
+
+
+def test_reconcile_skips_stall_detection_for_paused_worker():
+    """A paused worker that hasn't emitted progress in 10 min must NOT be cancelled."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            now = datetime.now(timezone.utc)
+            entry = RunningEntry(
+                issue=issue,
+                started_at=now - timedelta(hours=1),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                # No progress in 10 min — would normally fire the stall.
+                last_progress_timestamp=now - timedelta(minutes=10),
+            )
+            orch._running[issue.id] = entry
+            orch.pause_worker(issue.id)
+
+            await orch._reconcile_running(cfg)
+
+            # Pause overrides stall detection — the entry must not be cancelled.
+            assert orch._running[issue.id].cancelled_at is None
+            assert worker_task.cancelled() is False
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_worker_exit_clears_pause_state_so_retries_dont_inherit_pause():
+    """Pause must NOT carry into a retry — operator paused the *current* run."""
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        orch.pause_worker(issue.id)
+        assert orch.is_paused(issue.id) is True
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="turn_error", error="boom")
+
+            assert issue.id not in orch._pause_events
+            assert orch.is_paused(issue.id) is False
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_find_running_issue_id_resolves_human_identifier():
+    """Server endpoints take `OLV-002` style ids — resolve to internal id."""
+    orch = _orch()
+    issue = _issue("OLV-002")
+    _install_running_entry(orch, issue)
+
+    assert orch.find_running_issue_id("OLV-002") == issue.id
+    assert orch.find_running_issue_id("NOT-A-TICKET") is None

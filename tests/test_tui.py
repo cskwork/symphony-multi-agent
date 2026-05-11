@@ -915,6 +915,116 @@ async def test_archive_hotkey_refuses_active_state_card(monkeypatch: Any) -> Non
     assert moved == []
 
 
+@pytest.mark.asyncio
+async def test_shift_p_pauses_focused_running_card(monkeypatch: Any) -> None:
+    """Shift+P on a running card calls orchestrator.pause_worker; second press resumes."""
+    cfg = _make_config(active_states=("In Progress",), terminal_states=("Done",))
+    issue = _issue("SMA-1", state="In Progress")
+    _stub_tracker(monkeypatch, [issue], [])
+
+    snap_paused = {"value": False}
+
+    class _PauseStub(_StubOrchestrator):
+        def __init__(self) -> None:
+            super().__init__(snapshot={
+                "counts": {"running": 1, "retrying": 0},
+                "codex_totals": {},
+                "running": [
+                    {
+                        "issue_id": issue.id,
+                        "issue_identifier": issue.identifier,
+                        "turn_count": 1,
+                        "last_event_at": datetime.now(timezone.utc).isoformat(),
+                        "tokens": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                        "paused": False,
+                    }
+                ],
+                "retrying": [],
+                "generated_at": "now",
+            })
+            self.pause_calls: list[str] = []
+            self.resume_calls: list[str] = []
+
+        def snapshot(self) -> dict[str, Any]:
+            row = self._snapshot["running"][0]
+            row["paused"] = snap_paused["value"]
+            return self._snapshot
+
+        def is_paused(self, issue_id: str) -> bool:
+            return snap_paused["value"]
+
+        def pause_worker(self, issue_id: str) -> bool:
+            self.pause_calls.append(issue_id)
+            snap_paused["value"] = True
+            return True
+
+        def resume_worker(self, issue_id: str) -> bool:
+            self.resume_calls.append(issue_id)
+            snap_paused["value"] = False
+            return True
+
+    orch = _PauseStub()
+    app = KanbanApp(orch, _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards, "expected SMA-1 card"
+        cards[0].focus()
+        await pilot.pause()
+
+        await pilot.press("P")
+        await pilot.pause()
+        assert orch.pause_calls == [issue.id]
+        cards = list(app.query(IssueCard))
+        assert any(c.has_class("-paused") for c in cards)
+
+        await pilot.press("P")
+        await pilot.pause()
+        assert orch.resume_calls == [issue.id]
+        cards = list(app.query(IssueCard))
+        assert not any(c.has_class("-paused") for c in cards)
+
+
+@pytest.mark.asyncio
+async def test_shift_p_on_non_running_card_is_a_safe_noop(monkeypatch: Any) -> None:
+    """Shift+P must not invoke pause for a Todo / idle card."""
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    _stub_tracker(monkeypatch, [_issue("SMA-1", state="Todo")], [])
+
+    class _TrackingStub(_StubOrchestrator):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pause_calls: list[str] = []
+
+        def is_paused(self, issue_id: str) -> bool:
+            return False
+
+        def pause_worker(self, issue_id: str) -> bool:
+            self.pause_calls.append(issue_id)
+            return True
+
+        def resume_worker(self, issue_id: str) -> bool:
+            self.pause_calls.append(f"resume:{issue_id}")
+            return True
+
+    orch = _TrackingStub()
+    app = KanbanApp(orch, _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("P")
+        await pilot.pause()
+        # Idle (non-running) card → orchestrator was never called.
+        assert orch.pause_calls == []
+
+
 def test_matches_filter_substring_on_id_title_labels() -> None:
     issue = Issue(
         id="x",

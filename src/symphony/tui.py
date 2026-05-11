@@ -102,6 +102,9 @@ class _CardStatus:
     attempt: int | None = None
     error: str | None = None
     last_message: str = ""
+    # True when the orchestrator has been asked to hold this worker at the
+    # next turn boundary. Surfaced from `snapshot()["running"][N]["paused"]`.
+    paused: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +198,7 @@ def _build_runtime_index(snap: dict[str, Any]) -> dict[str, _CardStatus]:
             input_tokens=int(tokens_block.get("input_tokens") or 0),
             output_tokens=int(tokens_block.get("output_tokens") or 0),
             last_message=str(row.get("last_message") or ""),
+            paused=bool(row.get("paused", False)),
         )
     for row in snap.get("retrying", []) or []:
         issue_id = row.get("issue_id") or ""
@@ -249,9 +253,11 @@ class IssueCard(Static):
     IssueCard.-running { border: round green; }
     IssueCard.-retrying { border: round yellow; }
     IssueCard.-completed { border: round $success-darken-1; color: $text-muted; }
+    IssueCard.-paused { border: round magenta; }
     IssueCard.-compact.-running { color: green; border: none; }
     IssueCard.-compact.-retrying { color: yellow; border: none; }
     IssueCard.-compact.-completed { color: $text-muted; border: none; }
+    IssueCard.-compact.-paused { color: magenta; border: none; }
     """
 
     can_focus = True
@@ -300,6 +306,10 @@ class IssueCard(Static):
             self.add_class("-compact")
         if self._status.runtime in ("running", "retrying", "completed"):
             self.add_class(f"-{self._status.runtime}")
+        # Pause variant is orthogonal to runtime — it overlays "running" so
+        # the border colour changes while still flagging it as in-flight.
+        if self._status.paused:
+            self.add_class("-paused")
         self.update(self._render_body())
 
     def _render_body(self) -> Text:
@@ -314,7 +324,9 @@ class IssueCard(Static):
         color = STATE_COLOR.get(normalize_state(issue.state), "white")
         line = Text()
         line.append(issue.identifier, style=f"bold {color}")
-        if status.runtime == "running":
+        if status.runtime == "running" and status.paused:
+            line.append(" ⏸", style="bold bright_magenta")
+        elif status.runtime == "running":
             line.append(" ●", style="bold green")
         elif status.runtime == "retrying":
             line.append(" ↻", style="bold yellow")
@@ -339,7 +351,9 @@ class IssueCard(Static):
         color = STATE_COLOR.get(normalize_state(issue.state), "white")
 
         title = Text(issue.identifier, style=f"bold {color}")
-        if status.runtime == "running":
+        if status.runtime == "running" and status.paused:
+            title.append("  ⏸", style="bold bright_magenta")
+        elif status.runtime == "running":
             title.append("  ●", style="bold green")
         elif status.runtime == "retrying":
             title.append("  ↻", style="bold yellow")
@@ -353,9 +367,21 @@ class IssueCard(Static):
 
         meta = Text()
         if status.runtime == "running":
+            if status.paused:
+                meta.append(
+                    f"{t('card.paused', language)}  ",
+                    style="bold bright_magenta",
+                )
             meta.append(f"{t('card.turn', language)} {status.turn}", style="green")
             silent_s = _silent_seconds(status.last_event_at)
-            if silent_s is not None and silent_s >= SILENT_THRESHOLD_S:
+            # Paused workers are intentionally idle — suppress the silent
+            # badge so the card doesn't look stuck when the operator put
+            # it on hold.
+            if (
+                not status.paused
+                and silent_s is not None
+                and silent_s >= SILENT_THRESHOLD_S
+            ):
                 meta.append(f"  silent {int(silent_s)}s", style="bold yellow")
             if status.last_event:
                 meta.append(f"  {status.last_event}", style="dim")
@@ -552,6 +578,16 @@ class StatsBar(Static):
                 line.append("]", style="green")
         line.append("  ")
         line.append(f"{t('header.retrying', lang)}{counts.get('retrying', 0)}  ", style="yellow")
+        # Paused count is folded into the header only when non-zero so the
+        # status bar stays compact on the common case.
+        paused_count = sum(
+            1 for row in running_rows if row.get("paused")
+        )
+        if paused_count:
+            line.append(
+                f"{t('header.paused', lang)}{paused_count}  ",
+                style="bright_magenta",
+            )
         line.append("│  ", style="dim")
         line.append(f"{t('footer.tokens', lang)} ", style="dim")
         line.append(f"in={totals.get('input_tokens', 0):,} ", style="cyan")
@@ -638,7 +674,13 @@ class DetailPane(Vertical):
         if issue.labels:
             meta.append("  " + " ".join(f"#{l}" for l in issue.labels), style="dim")
         if status.runtime != "idle":
-            meta.append(f"\nruntime={status.runtime}", style="green")
+            runtime_label = (
+                f"runtime={status.runtime} (paused)"
+                if status.paused
+                else f"runtime={status.runtime}"
+            )
+            runtime_style = "bright_magenta" if status.paused else "green"
+            meta.append(f"\n{runtime_label}", style=runtime_style)
             if status.turn:
                 meta.append(f"  turn={status.turn}", style="dim")
             if status.attempt:
@@ -812,6 +854,7 @@ class KanbanApp(App):
         Binding("left_square_bracket", "focus_board", "Board focus", show=False),
         Binding("L", "toggle_language", "Language"),
         Binding("a", "archive_focused", "Archive"),
+        Binding("P", "toggle_pause_focused", "Pause/resume"),
         Binding("slash", "open_filter", "Filter"),
         Binding("escape", "escape", "Close filter / zoom", show=False),
     ]
@@ -1013,7 +1056,7 @@ class KanbanApp(App):
             "1-9 zoom lane · 0/esc reset · "
             f"t/T page lanes ({page}/{total_pages}) · +/- resize window · "
             "d density · p detail-pane · ]/[ focus detail/board · "
-            "L language · a archive · / filter · "
+            "L language · a archive · P pause/resume · / filter · "
             "tab focus · j/k scroll · g/G top/bottom · "
             f"lang={lang}"
         )
@@ -1265,6 +1308,44 @@ class KanbanApp(App):
             client.update_state(issue, target_state)
         finally:
             client.close()
+
+    # ----- pause / resume ---------------------------------------------
+
+    def action_toggle_pause_focused(self) -> None:
+        """Hold or release the worker behind the focused card.
+
+        The pause is queued — the in-flight turn (if any) is allowed to
+        finish so the model isn't aborted mid-thought. Only meaningful for
+        cards currently in the running runtime; idle / retrying / completed
+        cards get a notification explaining why nothing happened.
+        """
+        focused = self.focused
+        if not isinstance(focused, IssueCard):
+            self.notify("focus a card first", timeout=2)
+            return
+        if focused.status.runtime != "running":
+            self.notify(
+                f"only running workers can be paused (runtime={focused.status.runtime})",
+                timeout=3,
+            )
+            return
+        issue_id = focused.issue.id
+        if self._orch.is_paused(issue_id):
+            if self._orch.resume_worker(issue_id):
+                self.notify(f"resumed {focused.issue.identifier}", timeout=2)
+            else:
+                self.notify("resume had no effect", timeout=2)
+        else:
+            if self._orch.pause_worker(issue_id):
+                self.notify(
+                    f"paused {focused.issue.identifier} (after current turn)",
+                    timeout=3,
+                )
+            else:
+                self.notify("pause had no effect", timeout=2)
+        # Snapshot polling drives the visual update on the next tick; force
+        # an immediate redraw so the keystroke feels responsive.
+        self._refresh_runtime()
 
     # ----- Iter3: detail pane + filter --------------------------------
 

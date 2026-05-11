@@ -183,6 +183,11 @@ class Orchestrator:
         self._stopping = False
         self._refresh_pending = False
         self._observers: list[Callable[[], Awaitable[None]]] = []
+        # Operator-driven pause gate. Key = issue.id; value = an Event that
+        # the worker awaits between turns. `set()` means "go", `clear()`
+        # means "hold". Events are lazily created on the first pause request
+        # and popped on worker exit so pause never carries across retries.
+        self._pause_events: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -208,6 +213,13 @@ class Orchestrator:
                 await self._tick_task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Set every pause event so any worker blocked on `event.wait()`
+        # wakes up and observes the upcoming cancel. Without this, a paused
+        # worker would never reach the awaited `CancelledError` and
+        # `stop()` would hang on `await worker_task`.
+        for event in list(self._pause_events.values()):
+            if not event.is_set():
+                event.set()
         for entry in list(self._running.values()):
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
@@ -328,6 +340,7 @@ class Orchestrator:
             "last_message": entry.last_codex_message,
             "started_at": _to_iso(entry.started_at),
             "last_event_at": _to_iso(entry.last_codex_timestamp),
+            "paused": self.is_paused(issue_id),
             "tokens": {
                 "input_tokens": entry.codex_input_tokens,
                 "output_tokens": entry.codex_output_tokens,
@@ -335,6 +348,73 @@ class Orchestrator:
             },
             "worker_task": _task_debug(entry.worker_task),
         }
+
+    # ------------------------------------------------------------------
+    # operator-driven pause / resume
+    # ------------------------------------------------------------------
+
+    def is_paused(self, issue_id: str) -> bool:
+        event = self._pause_events.get(issue_id)
+        return event is not None and not event.is_set()
+
+    def pause_worker(self, issue_id: str) -> bool:
+        """Queue a pause that takes effect at the next turn boundary.
+
+        Returns True if the issue is currently running and a pause was
+        registered, False if the id is unknown or already paused. The
+        currently-running turn (if any) is allowed to finish — abruptly
+        cancelling mid-turn would waste tokens and risk partial artefacts.
+        """
+        if issue_id not in self._running:
+            return False
+        event = self._pause_events.get(issue_id)
+        if event is None:
+            event = asyncio.Event()
+            event.set()
+            self._pause_events[issue_id] = event
+        if not event.is_set():
+            return False
+        event.clear()
+        log.info(
+            "worker_pause_requested",
+            issue_id=issue_id,
+            identifier=self._running[issue_id].issue.identifier,
+        )
+        return True
+
+    def resume_worker(self, issue_id: str) -> bool:
+        """Lift a pause registered via `pause_worker`.
+
+        Returns True if a paused worker was resumed, False if the id is
+        not paused. A worker that has already exited (e.g. cancelled by
+        the stall detector while paused) is treated as not paused.
+        """
+        event = self._pause_events.get(issue_id)
+        if event is None or event.is_set():
+            return False
+        event.set()
+        identifier = (
+            self._running[issue_id].issue.identifier
+            if issue_id in self._running
+            else None
+        )
+        log.info(
+            "worker_resume_requested",
+            issue_id=issue_id,
+            identifier=identifier,
+        )
+        return True
+
+    def find_running_issue_id(self, identifier: str) -> str | None:
+        """Resolve a human-readable identifier (e.g. `OLV-002`) to issue.id.
+
+        Used by the HTTP API so callers can target tickets without knowing
+        the tracker's internal id.
+        """
+        for issue_id, entry in self._running.items():
+            if entry.issue.identifier == identifier:
+                return issue_id
+        return None
 
     @staticmethod
     def _retry_row(entry: RetryEntry) -> dict[str, Any]:
@@ -707,6 +787,35 @@ class Orchestrator:
                 prev_phase_state = normalize_state(issue.state)
 
                 while True:
+                    # Operator pause gate — `pause_worker` clears the event,
+                    # `resume_worker` sets it. Honoured at the turn boundary
+                    # so we never tear down a turn the model is mid-way
+                    # through. On resume, re-fetch issue state because the
+                    # operator may have moved the ticket while it was held.
+                    pause_event = self._pause_events.get(running_issue_id)
+                    if pause_event is not None and not pause_event.is_set():
+                        log.info(
+                            "worker_paused",
+                            issue_id=running_issue_id,
+                            identifier=issue.identifier,
+                            turn=turn_number,
+                        )
+                        await pause_event.wait()
+                        log.info(
+                            "worker_resumed",
+                            issue_id=running_issue_id,
+                            identifier=issue.identifier,
+                            turn=turn_number,
+                        )
+                        refreshed = await self._refresh_issue_state(
+                            cfg, running_issue_id
+                        )
+                        if refreshed is not None:
+                            issue = refreshed
+                            running_entry = self._running.get(running_issue_id)
+                            if running_entry is not None:
+                                running_entry.issue = issue
+
                     current_state = normalize_state(issue.state)
                     is_phase_transition = (
                         turn_number > 1 and current_state != prev_phase_state
@@ -1147,6 +1256,16 @@ class Orchestrator:
             running_keys_before_pop=list(self._running.keys()),
         )
         entry = self._running.pop(issue_id, None)
+        # Pause state lives on the in-flight worker — it must not survive
+        # into the next dispatch, otherwise a retry would start "born paused"
+        # without the operator ever requesting it. Pop the event regardless
+        # of `entry`: a race between cancel and the pop above could leave
+        # a stale event behind.
+        pause_event = self._pause_events.pop(issue_id, None)
+        if pause_event is not None and not pause_event.is_set():
+            # Unblock anything still awaiting the event so the worker's
+            # cancellation path can run to completion.
+            pause_event.set()
         log.info(
             "worker_exit_pop",
             issue_id=issue_id,
@@ -1218,6 +1337,9 @@ class Orchestrator:
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)
+        pause_event = self._pause_events.pop(issue_id, None)
+        if pause_event is not None and not pause_event.is_set():
+            pause_event.set()
         next_attempt = (entry.retry_attempt or 0) + 1
         cap = cfg.agent.max_retry_backoff_ms
         delay_ms = min(RETRY_BASE_MS * (2 ** (next_attempt - 1)), cap)
@@ -1326,6 +1448,14 @@ class Orchestrator:
         if stall_timeout_ms > 0:
             now = datetime.now(timezone.utc)
             for issue_id, entry in list(self._running.items()):
+                # Paused workers are intentionally idle — operator chose to
+                # hold them. Treating that idleness as a stall would defeat
+                # the whole feature: a pause would trip cancel + force-eject
+                # within the stall window. Skip stall checks while paused;
+                # the moment the operator resumes, the next turn re-enters
+                # the normal progress-timestamp loop.
+                if self.is_paused(issue_id):
+                    continue
                 # Worker that already received a stall-cancel: if it didn't
                 # exit within the grace window, force-eject so its slot
                 # doesn't leak. The cancel is still in flight; if the worker
