@@ -281,6 +281,12 @@ def test_agent_color_map_covers_known_agents() -> None:
         assert k in AGENT_COLOR
 
 
+def test_refresh_runtime_ignores_missing_widget_tree() -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    app._refresh_runtime()
+
+
 def test_build_runtime_index_extracts_running_and_retrying() -> None:
     snap = {
         "running": [
@@ -363,6 +369,30 @@ async def test_q_quits_app(monkeypatch: Any) -> None:
 async def test_enter_opens_ticket_detail_modal(monkeypatch: Any) -> None:
     cfg = _make_config()
     _stub_tracker(monkeypatch, [_issue("SMA-1", description="full body text")], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(140, 35)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards, "expected at least one card to focus"
+        cards[0].focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, TicketDetailScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, TicketDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_ticket_detail_modal_renders_ticket_markdown_as_plain_text(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config()
+    body = "full body text with `[a=-...]` inside a Markdown code span"
+    _stub_tracker(monkeypatch, [_issue("SMA-1", description=body)], [])
     app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
     async with app.run_test(size=(140, 35)) as pilot:
         await pilot.pause()
@@ -696,6 +726,27 @@ async def test_p_toggles_detail_pane(monkeypatch: Any) -> None:
         await pilot.press("p")
         await pilot.pause()
         assert pane.is_open
+
+
+@pytest.mark.asyncio
+async def test_detail_pane_renders_ticket_markdown_as_plain_text(
+    monkeypatch: Any,
+) -> None:
+    cfg = _make_config(active_states=("Todo",), terminal_states=("Done",))
+    body = "## Why\n\n| case |\n| --- |\n| `[a=-...]` is documentation text |\n"
+    _stub_tracker(monkeypatch, [_issue("SMA-1", description=body)], [])
+    app = KanbanApp(_StubOrchestrator(), _StaticWorkflowState(cfg))  # type: ignore[arg-type]
+    async with app.run_test(size=(160, 30)) as pilot:
+        await pilot.pause()
+        await asyncio.sleep(0.05)
+        await pilot.pause()
+        cards = list(app.query(IssueCard))
+        assert cards, "expected SMA-1 to render"
+        cards[0].focus()
+        await pilot.pause()
+        pane = app.query_one(DetailPane)
+        assert pane.is_open
+        assert app._last_focused_card_id == cards[0].id
 
 
 @pytest.mark.asyncio

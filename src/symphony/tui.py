@@ -23,9 +23,10 @@ from typing import Any, Iterable
 
 from rich.console import Console
 from rich.text import Text
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.binding import Binding
 from textual.containers import Container, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Static
@@ -597,7 +598,7 @@ class DetailPane(Vertical):
         super().__init__(id="detail-pane")
         self._title = Static("", id="detail-title")
         self._meta = Static("", id="detail-meta")
-        self._body = Static("", id="detail-body")
+        self._body = Static("", id="detail-body", markup=False)
         self._scroll = VerticalScroll()
 
     def compose(self) -> ComposeResult:
@@ -729,7 +730,7 @@ class TicketDetailScreen(ModalScreen[None]):
             yield Static(self._title_text(), id="ticket-title")
             yield Static(self._meta_text(), id="ticket-meta")
             with VerticalScroll():
-                yield Static(self._issue.description or "(no description)")
+                yield Static(self._issue.description or "(no description)", markup=False)
             yield Static("[dim]esc / q to close[/dim]")
 
     def _title_text(self) -> Text:
@@ -945,7 +946,11 @@ class KanbanApp(App):
         if cfg is None:
             return
         snapshot = self._orch.snapshot()
-        self.query_one(StatsBar).update_from(
+        try:
+            stats = self.query_one(StatsBar)
+        except (NoMatches, ScreenStackError):
+            return
+        stats.update_from(
             cfg, snapshot, language=self._effective_language()
         )
         runtime_index = _build_runtime_index(snapshot)
