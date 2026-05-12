@@ -72,10 +72,51 @@ doctor preflight, new-window spawn) that plain `symphony tui` does not.
 
 ```bash
 # from inside the symphony-multi-agent checkout, into the target project:
-cp tui-open.sh tui-open.bat   /path/to/target-project/
-cp WORKFLOW.example.md        /path/to/target-project/WORKFLOW.md   # then edit
+cp tui-open.sh tui-open.bat       /path/to/target-project/
+cp WORKFLOW.example.md            /path/to/target-project/WORKFLOW.md   # then edit
+mkdir -p                          /path/to/target-project/docs
+cp -R docs/symphony-prompts       /path/to/target-project/docs/         # MANDATORY — see below
 chmod +x /path/to/target-project/tui-open.sh
 ```
+
+### Preserve the 7-stage pipeline by default (DO NOT simplify)
+
+`WORKFLOW.example.md` ships with the full production pipeline
+`[Todo, Explore, "In Progress", Review, QA, Learn]` + `Done` and
+matching `prompts.stages` that wire each lane to a stage-specific prompt
+under `docs/symphony-prompts/<linear|file>/stages/*.md`. This is the
+*supported default*, not a maximalist example — Explore briefs the agent
+from `llm-wiki/`, QA captures evidence, Learn writes back to the wiki,
+and the base prompt's "no skipping" gate refers to these by name.
+
+**When bootstrapping, do not shorten `active_states` or drop
+`prompts.stages` entries** unless the user explicitly asks for a smaller
+workflow. Trimming to `[Todo, "In Progress", Review]` (a common LLM
+"simplification" reflex) silently breaks:
+
+- the `Explore → In Progress → Review → QA → Learn → Done` flow the
+  base prompt assumes,
+- the QA evidence gate that the base prompt requires before `Done`,
+- the Learn write-back to `llm-wiki/` future tickets depend on.
+
+If the target project does need a different workflow (e.g. deploy
+pipeline), edit *both* `tracker.active_states` and the `prompts.stages`
+map together, and add matching stage files under
+`docs/symphony-prompts/<flavor>/stages/`. See
+`reference/customization.md` for the lane-rename recipe.
+
+### Pick the right prompt flavor
+
+- `tracker.kind: file` (default for repos that want kanban as files)
+  → keep `docs/symphony-prompts/file/...` and point `prompts.base` and
+  `prompts.stages` at the `file/` subtree.
+- `tracker.kind: linear` (Linear-backed) → keep
+  `docs/symphony-prompts/linear/...` (the example ships pointing here).
+
+The two flavors differ in *where* the agent writes stage notes
+(ticket-file body vs Linear comments) — picking the wrong one will
+generate artefacts in the wrong place. You can copy only the flavor
+you need if disk hygiene matters, but copying both is fine.
 
 Then the operator opens the board with:
 
