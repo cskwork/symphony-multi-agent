@@ -21,7 +21,7 @@ than the Python core.
 | Todo           | triager                     | `## Triage` line, route to Explore (or `Blocked`)                     |
 | Explore        | researcher (3 lenses)       | `## Domain Brief` + `## Plan Candidates` + `## Recommendation`        |
 | In Progress    | implementer                 | `## Implementation` (TDD), transition to Review                       |
-| Review         | reviewer                    | `## Review`, fix CRITICAL/HIGH, transition to QA                      |
+| Review         | reviewer                    | `## Review`; CRITICAL/HIGH/MEDIUM rewinds to In Progress, LOW-only transitions to QA |
 | QA             | qa runner (executes code)   | `## QA Evidence` (real exit codes), -> Learn                          |
 | Learn          | distiller                   | `llm-wiki/` updates + `## Learnings` + `## Wiki Updates`              |
 | Done           | reporter                    | `## As-Is -> To-Be Report` (structured)                               |

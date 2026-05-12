@@ -15,7 +15,7 @@ tracker:
     Todo: "Triage; route to Explore"
     Explore: "Brief from llm-wiki + git + code"
     "In Progress": "TDD loop, draft branch"
-    Review: "Read diff, fix CRITICAL/HIGH"
+    Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "pytest -q + real-CLI smoke"
     Learn: "Distill learnings, update llm-wiki"
     Done: "As-Is -> To-Be report"

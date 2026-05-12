@@ -17,15 +17,15 @@
 5. Classify findings into a severity table: `severity | file:line | fix`.
    Cap at 6 rows in the body; spillover goes to
    `docs/{{ issue.identifier }}/review/details.md`.
-6. **If any CRITICAL or HIGH finding exists:** set state back to
+6. **If any CRITICAL, HIGH, or MEDIUM finding exists:** set state back to
    `In Progress`, append `## Review Findings` with the Plain-Korean header
    + the severity table (referencing any verify artefacts under
    `docs/{{ issue.identifier }}/verify/`), and STOP. Do NOT fix the
    findings inside Review — that is In Progress's job, with a fresh
    context. Symphony will dispatch a new fix turn automatically.
-7. If the only findings are MEDIUM/LOW (or none): append `## Review`
+7. If the only findings are LOW (or none): append `## Review`
    with the Plain-Korean header + the same severity table — flag the
-   deferred items in the same section so Learn can address them — and
+   deferred LOW items in the same section so Learn can address them — and
    set state to `QA`.
 8. If something is genuinely out of scope or unfixable: set state to
    `Blocked` and append a `## Blocker` explaining what is needed.

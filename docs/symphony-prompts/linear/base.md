@@ -33,7 +33,7 @@ Every issue flows through the same gates. Honour the gate that matches
                               ^   \                ^    \                ^
                               |    +-> Blocked     |     +-> Blocked     |
                               |                    |                     |
-                              +-- Review CRITICAL/HIGH rewinds here      |
+                              +-- Review CRITICAL/HIGH/MEDIUM rewinds here|
                               +-- QA failure rewinds here ---------------+
 ```
 
@@ -118,7 +118,7 @@ line at the end: `_세부: docs/<id>/<stage>/details.md_`.
   files. Create the folder yourself (`mkdir -p`). The llm-wiki write-back
   in Learn is the only artefact that lives outside this root.
 - **Backward transitions are explicit, not failures.** `Review → In Progress`
-  (on CRITICAL/HIGH findings) and `QA → In Progress` (on test/spec failure)
+  (on CRITICAL/HIGH/MEDIUM findings) and `QA → In Progress` (on test/spec failure)
   are part of the pipeline. Each rewind starts the next In Progress turn
   with a **fresh agent context**; the only carry-over is what you wrote
   into the Linear comment thread and `docs/{{ issue.identifier }}/`. Treat
