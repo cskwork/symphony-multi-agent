@@ -104,17 +104,39 @@ Each hook is a shell script that runs in the workspace directory:
 
 | Hook            | When                                | Common use                          |
 |-----------------|-------------------------------------|-------------------------------------|
-| `after_create`  | once, when workspace is first created | clone the repo the agent works in |
+| `after_create`  | once, when workspace is first created | attach a `git worktree` of the host repo on a `symphony/<ID>` branch (default), or clone a remote |
 | `before_run`    | before every turn                   | `git fetch` to pull latest main     |
 | `after_run`     | after every turn                    | log markers, push branches          |
-| `before_remove` | before workspace cleanup            | persist artifacts                   |
+| `before_remove` | before workspace cleanup            | `git worktree remove --force` to drop the registration before Symphony rmtree's the dir |
+
+### Default workspace mechanism: `git worktree`
+
+`WORKFLOW.example.md` and `WORKFLOW.file.example.md` ship with
+`after_create` hooks that attach the per-ticket workspace as a **git
+worktree** of `$SYMPHONY_WORKFLOW_DIR` on a fresh `symphony/<ID>`
+branch. The host's working tree is never modified, and the operator
+merges results back explicitly with `git -C <host> merge symphony/<ID>`
+(or by opening a PR from that branch) — never automatic. Worktrees
+share the host's object DB so setup is near-instant compared to a
+full clone, and the branch is immediately visible to host-side `git`
+commands.
+
+The matching `before_remove` hook runs `git worktree remove --force`
+so cleanup also drops the `.git/worktrees/<ID>` registration; without
+it the registration lingers until `git worktree prune`.
+
+If your code lives in a *different* remote than the WORKFLOW.md repo
+(common for Linear setups where the config repo is config-only), swap
+the worktree commands for `git clone <remote> .`. While experimenting
+without any repo, use `: noop`.
 
 **Failure mode**: if `after_create` exits non-zero, the worker dies
-immediately with `worker_exit reason=error`. The shipped sample
-(`WORKFLOW.example.md` / `WORKFLOW.file.example.md`) uses a placeholder
-`git clone git@github.com:my-org/my-repo.git .` — that fails out of the
-box. Replace with `: noop` for experiments or with a real clone for actual
-work. `symphony doctor` catches this.
+immediately with `worker_exit reason=error`. The shipped sample's
+worktree hook fails when `$SYMPHONY_WORKFLOW_DIR` is not a git repo
+or when `symphony/<ID>` is already checked out in another worktree;
+a clone-mode override using a placeholder
+`git@github.com:my-org/my-repo.git` URL fails the same way.
+`symphony doctor` catches the placeholder case.
 
 ### Hook authoring rules
 

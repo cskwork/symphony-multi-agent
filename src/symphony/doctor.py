@@ -6,7 +6,9 @@ launches `symphony tui` or the headless service:
 - Port for the JSON API is bindable (catches the EADDRINUSE that crashed the
   start path with a raw OSError).
 - The agent CLI matching `agent.kind` is on `$PATH`.
-- `hooks.after_create` is not the shipped placeholder `my-org/my-repo` URL.
+- `hooks.after_create` is not a stale placeholder `my-org/my-repo` URL
+  (relevant when the operator overrode the worktree default with a
+  clone-mode hook but forgot to change the remote).
 - `workspace.root` exists and is writable.
 - File-tracker `tracker.board_root` exists; Linear-tracker `api_key` resolves.
 
@@ -134,7 +136,8 @@ def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
                 "hooks.after_create",
                 "fail",
                 f"contains placeholder {token!r} — every dispatch will fail with rc=128. "
-                "Replace with a real clone target or `: noop`.",
+                "Switch to the worktree default (see WORKFLOW.file.example.md) "
+                "or replace with a real clone target / `: noop`.",
             )
     return CheckResult("hooks.after_create", "pass", "looks customized")
 

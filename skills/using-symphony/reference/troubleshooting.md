@@ -25,7 +25,7 @@ tail -F log/symphony.log
 
 | Log line                                 | Meaning                                                  | Fix                                                                                 |
 |------------------------------------------|----------------------------------------------------------|-------------------------------------------------------------------------------------|
-| `hook_failed hook=after_create rc=128`   | First-time clone failed                                  | Replace placeholder repo URL in `WORKFLOW.md`, or set `after_create: \|\n  : noop`. If the hook parses ticket frontmatter, see "awk vs sed for YAML values" below |
+| `hook_failed hook=after_create rc=128`   | Worktree/clone failed (e.g. `git worktree add` against a non-repo, placeholder URL, or branch already checked out elsewhere) | Confirm `SYMPHONY_WORKFLOW_DIR` is a real git repo; `cd $HOST_REPO && git worktree list` to spot dangling registrations (`git worktree prune` to clean). For clone-mode hooks, replace placeholder repo URL or set `after_create: \|\n  : noop`. If the hook parses ticket frontmatter, see "awk vs sed for YAML values" below |
 | `worker_exit reason=error`               | Worker terminated abnormally                             | Read the preceding `hook_failed` event or backend stderr for the actual cause       |
 | `outcome=turn_error`                     | Turn ended in error (timeout, agent crash, tool failure) | Inspect backend stderr; for timeouts, raise `<kind>.turn_timeout_ms`                |
 | `hook_timeout`                           | Hook exceeded its time budget                            | Shorten the hook or remove blocking commands                                        |
@@ -70,8 +70,13 @@ ticket to `Blocked` to stop the cycle.
 
 ### "Card is in `Done` but workspace still exists"
 
-By design — workspaces persist for inspection. Manually clean up with
-`rm -rf ~/symphony_workspaces/<ID>` once you've extracted what you need.
+By design — workspaces persist for inspection. With the worktree-default
+hooks, clean up with `git -C <HOST_REPO> worktree remove --force
+~/symphony_workspaces/<ID>` (this removes both the directory and the
+`.git/worktrees/<ID>` registration). For clone-mode hooks, plain
+`rm -rf ~/symphony_workspaces/<ID>` is enough. The `symphony/<ID>`
+branch is left alone either way — delete with `git branch -D` once
+you've merged or discarded it.
 
 ### "Two TUI sessions show different state"
 

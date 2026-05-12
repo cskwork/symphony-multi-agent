@@ -169,7 +169,7 @@ Output (one line per check):
 ```
 PASS  server.port=9999              127.0.0.1:9999 is free
 PASS  agent.kind=claude             claude → /usr/local/bin/claude
-FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Replace with a real clone target or `: noop`.
+FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Switch to the worktree default or replace with a real clone / `: noop`.
 PASS  workspace.root=~/symphony_workspaces  exists and is writable
 PASS  tracker.board_root            ./kanban (3 tickets)
 ```
@@ -220,9 +220,11 @@ workspace:
 
 hooks:
   # Each ticket gets its own workspace at workspace.root/<ID>.
-  # after_create runs once when that workspace is created.
+  # The shipped default attaches it as a `git worktree` of the host repo
+  # on a `symphony/<ID>` branch — host working tree stays untouched.
+  # Use `: noop` instead while you experiment without a host repo.
   after_create: |
-    : noop                       # ← replace with `git clone …` for real work
+    : noop                       # ← swap for the worktree default in WORKFLOW.file.example.md
   before_run: |
     : noop                       # runs before every agent turn
   after_run: |
@@ -236,10 +238,16 @@ prompts:
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
 ```
 
-> ⚠ The shipped `WORKFLOW.md` uses `git clone --depth=1 git@github.com:my-org/my-repo.git .`
-> as a placeholder. If left unchanged, **every dispatch fails immediately**
-> on the SSH clone (`returncode=128`, `worker_exit reason=error`). Either
-> point it at a real repo or use `: noop` while you experiment.
+> ⚠ The shipped `WORKFLOW.example.md` / `WORKFLOW.file.example.md` default to
+> attaching the per-ticket workspace as a **git worktree** of the host repo
+> (the directory containing `WORKFLOW.md`) on a `symphony/<ID>` branch. The
+> host working tree is never disturbed; merge results back with
+> `git -C <host> merge symphony/<ID>` (or open a PR from that branch) when
+> you're satisfied — explicit operator action, never automatic.
+>
+> If your code lives in a *different* remote than the WORKFLOW.md repo,
+> swap the hook for `git clone <remote> .` instead. While experimenting
+> without any repo, use `: noop`.
 
 ### 3. Add a ticket
 

@@ -43,6 +43,10 @@ Key invariants:
   state. That's how a ticket moves to `Done`.
 - Each ticket runs in its own **workspace directory** under `workspace.root`
   (default `~/symphony_workspaces/<ID>`). Hooks run inside that directory.
+  The shipped `after_create` hook attaches that directory as a `git
+  worktree` of the host repo on a `symphony/<ID>` branch — host working
+  tree stays untouched, merge back explicitly via
+  `git -C <host> merge symphony/<ID>` (or open a PR from that branch).
 - Ticket IDs are an ordering contract. Symphony sorts dispatch candidates by
   stable ticket registration suffix (for example `TASK-001` before
   `TASK-002`) before mutable fields like priority or update time. When

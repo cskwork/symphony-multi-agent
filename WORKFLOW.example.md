@@ -29,19 +29,42 @@ workspace:
   root: ~/symphony_workspaces
 
 hooks:
+  # Default: attach the per-ticket workspace as a git worktree of the
+  # host repo on a symphony/<ID> branch. The host working tree is never
+  # touched. Operator merges back via `git -C <HOST_REPO> merge symphony/<ID>`
+  # (or PR from that branch) — explicit, never automatic.
+  #
+  # If your code lives in a *different* remote than where WORKFLOW.md
+  # sits (common with Linear setups where the config repo is config-only),
+  # replace the worktree commands with a `git clone <remote> .` instead.
   after_create: |
-    git clone --depth=1 git@github.com:my-org/my-repo.git .
-    # NOTE: If using tracker.kind=file, symlink the board_root directory
-    # back to the host repo so agent edits are visible to Symphony:
-    #   HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?}"
-    #   for dir in kanban docs llm-wiki; do
-    #     rm -rf "$dir"; ln -s "$HOST_REPO/$dir" "$dir"
-    #   done
+    set -euo pipefail
+    ISSUE_ID="$(basename "$PWD")"
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
+    WORKTREE_PATH="$PWD"
+    BRANCH="symphony/${ISSUE_ID}"
+    cd "$HOST_REPO"
+    [ -d "$WORKTREE_PATH" ] && rmdir "$WORKTREE_PATH"
+    if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+      git worktree add "$WORKTREE_PATH" "$BRANCH"
+    else
+      git worktree add "$WORKTREE_PATH" -b "$BRANCH"
+    fi
+    # Linear tracker reads from its API, not the file system, so no
+    # symlink-back step is needed. (For tracker.kind=file, also symlink
+    # kanban/docs/llm-wiki back to $HOST_REPO — see WORKFLOW.file.example.md.)
   before_run: |
-    git fetch origin main
-    git reset --hard origin/main
+    set -euo pipefail
+    git fetch origin main --quiet || true
   after_run: |
     echo "run finished at $(date)"
+  before_remove: |
+    # Detach the worktree before Symphony rmtree's the dir, otherwise
+    # `.git/worktrees/<ID>` lingers until `git worktree prune`.
+    set -uo pipefail
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?}"
+    WORKTREE_PATH="$PWD"
+    git -C "$HOST_REPO" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
 
 agent:
   kind: codex          # codex | claude | gemini | pi
