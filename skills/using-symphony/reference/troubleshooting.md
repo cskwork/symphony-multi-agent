@@ -78,6 +78,39 @@ hooks, clean up with `git -C <HOST_REPO> worktree remove --force
 branch is left alone either way — delete with `git branch -D` once
 you've merged or discarded it.
 
+### "Branch exists but has zero commits — agent's work is gone"
+
+Symptom: `git log symphony/<ID>` shows only the base point, the
+worktree is gone, and there's nothing to merge. Almost always one of:
+
+1. **`before_run: git reset --hard origin/<base>`** — wipes whatever the
+   agent did on the previous turn. Drop `reset --hard` from `before_run`;
+   only `git fetch`. The shipped examples follow this rule.
+2. **Per-turn amend hook missing or removed from `after_run`** — without
+   it, mid-run progress is uncommitted and a hard-crash before the
+   orchestrator's exit cleanup loses everything. Restore the
+   commit-or-amend snippet from `WORKFLOW.example.md`.
+3. **`auto_commit_on_done: false`** combined with an agent that
+   transitioned to a non-Done terminal state (Cancelled, Blocked) — the
+   agent had no chance to commit and the orchestrator was told not to.
+   Either flip `auto_commit_on_done: true` (the default), or commit
+   yourself in `before_remove`.
+4. **Pre-commit hook in the host repo rejected the auto-commit** — check
+   `log/symphony.log` for `auto_commit_failed` with the hook's stderr.
+   Fix the underlying hook violation, or commit manually from a copy of
+   the workspace before it's reaped.
+5. **Pre-`auto_commit_on_done`-broadening Symphony version** — older
+   builds only auto-committed when `state == "Done"`, so non-Done exits
+   lost their work. Upgrade.
+
+Recovery for already-lost work: `git fsck --no-reflog --lost-found` lists
+dangling commits; if any have a subject mentioning your ticket ID,
+`git branch recover-<ID> <sha>`. If `symphony/<ID>` itself still points
+at a `wip: turn …` commit (the per-turn amend survived), just rename:
+`git -C <host> commit --amend -m "<ID>: <title>"` while checked out
+on that branch. If the agent never committed at all, the changes are
+unrecoverable — there are no objects in the ODB.
+
 ### "Two TUI sessions show different state"
 
 Both read from the JSON snapshot via the same orchestrator instance, but

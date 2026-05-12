@@ -104,9 +104,9 @@ Each hook is a shell script that runs in the workspace directory:
 
 | Hook            | When                                | Common use                          |
 |-----------------|-------------------------------------|-------------------------------------|
-| `after_create`  | once, when workspace is first created | attach a `git worktree` of the host repo on a `symphony/<ID>` branch (default), or clone a remote |
-| `before_run`    | before every turn                   | `git fetch` to pull latest main     |
-| `after_run`     | after every turn                    | log markers, push branches          |
+| `after_create`  | once, when workspace is first created | attach a `git worktree` of the host repo on a `symphony/<ID>` branch + record fork-point (`git config symphony.basesha <HEAD>`) for the end-of-run squash |
+| `before_run`    | before every turn                   | `git fetch` to pull latest main — **never `git reset --hard`**; that would discard the agent's mid-run work |
+| `after_run`     | after every turn                    | per-turn **commit-or-amend**: first turn creates `wip: turn …`, every subsequent turn `--amend --no-edit`s into it. Branch stays at one commit but each turn is durably written to `.git/objects` |
 | `before_remove` | before workspace cleanup            | `git worktree remove --force` to drop the registration before Symphony rmtree's the dir |
 
 ### Default workspace mechanism: `git worktree`
@@ -129,6 +129,55 @@ If your code lives in a *different* remote than the WORKFLOW.md repo
 (common for Linear setups where the config repo is config-only), swap
 the worktree commands for `git clone <remote> .`. While experimenting
 without any repo, use `: noop`.
+
+### One commit per ticket (`agent.auto_commit_on_done`)
+
+`agent.auto_commit_on_done: true` (the default) gives you a
+**one-commit-per-ticket guarantee** on the `symphony/<ID>` branch:
+
+1. `after_create` records the fork-point (`git config symphony.basesha
+   $(git rev-parse HEAD)`).
+2. `after_run` commits-or-amends every turn into a single `wip: turn …`
+   commit on the branch — durable across hard crashes (SIGKILL, host
+   reboot) because each turn's tree lands in `.git/objects`.
+3. On any clean worker exit (Done, Cancelled, Blocked) and on every
+   cleanup path (`reconcile_terminate_terminal`,
+   `_startup_terminal_cleanup`), the orchestrator's
+   `commit_workspace_on_done`:
+   - reads `symphony.basesha`
+   - `git reset --soft <basesha>` to collapse the wip commit + any
+     agent-authored commits into the index
+   - `git commit -m "<ID>: <title>[ <suffix>]"` — single ticket commit
+
+Net result: `git log symphony/<ID>` shows exactly **base + 1 commit**.
+Operator merges with `git -C <host> merge --ff-only symphony/<ID>` (or
+opens a PR) and the host history stays clean.
+
+Commit-message convention:
+
+| Exit shape                         | Subject                                            |
+|------------------------------------|----------------------------------------------------|
+| Reached `Done`, normal worker exit | `<ID>: <title>`                                    |
+| Other terminal state (Cancelled)   | `<ID>: <title> [state: Cancelled]`                 |
+| Force-pruned by reconcile/startup  | `<ID>: <title> [state: <state>]` (or `[exit: …]`) |
+
+**Mid-run hard-crash recovery**: even if Symphony itself is SIGKILLed
+before any cleanup runs, the per-turn amend leaves the branch at the
+last completed turn's wip commit (durably in `.git/refs/heads/symphony/
+<ID>` and `.git/objects`). Operator can rename it manually with
+`git -C <host> commit --amend -m "<ID>: <title>"` then merge.
+
+**Pre-commit hook compatibility**: the per-turn commit and the final
+squash commit both honour the host repo's pre-commit hooks. If a hook
+fails, the auto-commit fails and the operator sees the rejection in
+`log/symphony.log` — work is still on disk in the worktree, no silent
+loss.
+
+**Opting out**: set `auto_commit_on_done: false` only when the
+workspace is an existing repo with strict commit-style rules you don't
+want auto-touched. Then you own snapshotting and squashing yourself in
+`before_remove`. Recovery from a discarded worktree without it is
+`git fsck --lost-found` plus luck.
 
 **Failure mode**: if `after_create` exits non-zero, the worker dies
 immediately with `worker_exit reason=error`. The shipped sample's

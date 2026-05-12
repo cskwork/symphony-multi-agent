@@ -230,38 +230,81 @@ async def commit_workspace_on_done(
     *,
     identifier: str,
     title: str,
+    exit_reason: str | None = None,
+    state: str | None = None,
     timeout_s: float = 60.0,
 ) -> None:
-    """Snapshot the per-ticket workspace into one git commit on Done.
+    """Snapshot the per-ticket workspace into one git commit on worker exit.
+
+    Always called before `WorkspaceManager.remove()` — the goal is that no
+    work the agent left in the worktree gets discarded by `git worktree
+    remove --force`. Fires for every exit (Done, Cancelled, Blocked,
+    error, timeout, reconcile-terminated) when `auto_commit_on_done` is
+    on; the commit message includes the exit reason / state for non-Done
+    cases so a quick `git log` makes the situation obvious.
 
     Lenient by design — every failure (missing path, no diffs, pre-commit
     rejection, signing error, timeout) logs a warning and returns. We
-    never raise out of the worker exit path because the ticket is
-    already complete; a failed auto-commit is a housekeeping miss, not
-    a regression of the work itself.
+    never raise out of the worker exit path; a failed auto-commit is a
+    housekeeping miss surfaced by the warning, not a regression that
+    blocks the queue.
 
     Reuses any enclosing git repo (`git -C path rev-parse --git-dir`).
     Only initialises a new repo when the workspace has no git ancestor,
     so workspaces nested inside an existing project repo just add a
     commit to that project's history rather than creating a nested
-    `.git`. The commit message is `"<identifier>: <title>"`.
+    `.git`. With the worktree-default hooks the commit lands on the
+    `symphony/<ID>` branch the worktree is checked out on.
     """
     if not path.exists():
         log.info("auto_commit_skipped_missing_workspace", path=str(path))
         return
 
     safe_title = (title or "").replace("\n", " ").strip()[:200] or "(no title)"
-    msg = f"{identifier}: {safe_title}"
+    normalized_state = (state or "").strip().lower()
+    suffix = ""
+    if normalized_state == "done":
+        # Work reached Done — message stays clean even when the cleanup
+        # path (reconcile / startup) supplied an exit_reason.
+        suffix = ""
+    elif normalized_state:
+        suffix = f" [state: {state}]"
+    elif exit_reason and exit_reason != "normal":
+        suffix = f" [exit: {exit_reason}]"
+    msg = f"{identifier}: {safe_title}{suffix}"
 
+    # One-commit-per-ticket: if the worktree's `after_create` recorded a
+    # fork point in `git config symphony.basesha`, soft-reset to that base
+    # so all per-turn commits + still-uncommitted changes collapse into a
+    # single commit with the ticket subject. When no base is recorded
+    # (legacy workspaces, non-worktree setups), fall back to a plain
+    # commit-on-top — preserves correctness without forcing operators to
+    # re-bootstrap.
     script = (
         'set -u\n'
         'if ! git rev-parse --git-dir >/dev/null 2>&1; then\n'
         '  git init -q || exit 41\n'
         'fi\n'
+        'BASE="$(git config --get symphony.basesha 2>/dev/null || true)"\n'
         'git add -A || exit 42\n'
-        'if git diff --cached --quiet; then\n'
+        'HAS_STAGED=1\n'
+        'git diff --cached --quiet && HAS_STAGED=0\n'
+        'HAS_NEW_COMMITS=0\n'
+        'if [ -n "$BASE" ] && git rev-parse --verify "$BASE" >/dev/null 2>&1; then\n'
+        '  HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"\n'
+        '  if [ -n "$HEAD_SHA" ] && [ "$HEAD_SHA" != "$BASE" ]; then\n'
+        '    HAS_NEW_COMMITS=1\n'
+        '  fi\n'
+        'fi\n'
+        'if [ "$HAS_STAGED" -eq 0 ] && [ "$HAS_NEW_COMMITS" -eq 0 ]; then\n'
         '  echo "auto_commit: nothing to commit"\n'
         '  exit 0\n'
+        'fi\n'
+        'if [ "$HAS_NEW_COMMITS" -eq 1 ]; then\n'
+        '  # Collapse every commit since the recorded fork point + any\n'
+        '  # currently-staged changes into one. --soft preserves the index\n'
+        '  # and working tree so the final `git commit` captures everything.\n'
+        '  git reset --soft "$BASE" || exit 44\n'
         'fi\n'
         'git commit -m "$SYMPHONY_AUTO_COMMIT_MSG" || exit 43\n'
     )

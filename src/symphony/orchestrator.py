@@ -1324,18 +1324,19 @@ class Orchestrator:
         if reason == "normal":
             self._completed.add(issue_id)
             cfg = self._workflow_state.current()
-            if (
-                cfg is not None
-                and cfg.agent.auto_commit_on_done
-                and normalize_state(entry.issue.state) == "done"
-            ):
-                # Lenient — failures only warn (see commit_workspace_on_done).
-                # The ticket is already at Done; a missed snapshot must not
-                # block the queue or surface as a worker error.
+            if cfg is not None and cfg.agent.auto_commit_on_done:
+                # Snapshot whatever the agent left in the worktree, even if
+                # the ticket isn't strictly at Done. The worker stopped
+                # cleanly (`reason == "normal"`); any subsequent reconcile or
+                # operator cleanup would `git worktree remove --force` and
+                # discard uncommitted work otherwise. Lenient — failures only
+                # warn; a missed snapshot must not block the queue.
                 await commit_workspace_on_done(
                     entry.workspace_path,
                     identifier=entry.issue.identifier,
                     title=entry.issue.title,
+                    exit_reason=reason,
+                    state=entry.issue.state,
                 )
             self._schedule_retry(
                 issue_id,
@@ -1610,6 +1611,17 @@ class Orchestrator:
                 if entry.worker_task is not None:
                     entry.worker_task.cancel()
                 if self._workspace_manager is not None:
+                    if cfg.agent.auto_commit_on_done:
+                        # Snapshot before remove — `git worktree remove
+                        # --force` would otherwise discard whatever the
+                        # agent left uncommitted in the worktree.
+                        await commit_workspace_on_done(
+                            entry.workspace_path,
+                            identifier=entry.issue.identifier,
+                            title=entry.issue.title,
+                            exit_reason="reconcile_terminate_terminal",
+                            state=issue.state,
+                        )
                     await self._workspace_manager.remove(entry.workspace_path)
             elif state in active:
                 # Update in-memory issue snapshot.
@@ -1683,6 +1695,18 @@ class Orchestrator:
         for issue in terminals:
             path = self._workspace_manager.path_for(issue.identifier)
             if path.exists():
+                if cfg.agent.auto_commit_on_done:
+                    # Workspaces lingering across orchestrator restarts often
+                    # hold the last in-progress changes the agent never got
+                    # to commit. Snapshot before remove so a force-prune
+                    # doesn't lose them.
+                    await commit_workspace_on_done(
+                        path,
+                        identifier=issue.identifier,
+                        title=issue.title,
+                        exit_reason="startup_terminal_cleanup",
+                        state=issue.state,
+                    )
                 await self._workspace_manager.remove(path)
 
 

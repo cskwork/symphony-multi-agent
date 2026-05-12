@@ -615,8 +615,10 @@ def test_on_worker_exit_commits_workspace_at_done(monkeypatch):
     asyncio.run(_run())
 
 
-def test_on_worker_exit_skips_commit_for_non_done_terminal_state(monkeypatch):
-    """Cancelled/Blocked are terminal but not 'done' — no auto-commit."""
+def test_on_worker_exit_commits_workspace_for_non_done_terminal_state(monkeypatch):
+    """Worker exited cleanly on Cancelled/Blocked — must still snapshot the
+    worktree so `git worktree remove --force` doesn't discard the agent's
+    work. The commit message includes the state for traceability."""
     cfg = _make_config(max_concurrent=1)
     orch = _orch()
     issue = _issue("MT-CANCEL", state="Cancelled")
@@ -628,7 +630,11 @@ def test_on_worker_exit_skips_commit_for_non_done_terminal_state(monkeypatch):
 
         try:
             await orch._on_worker_exit(issue.id, reason="normal", error=None)
-            assert captured == [], "commit must NOT fire for non-Done terminal"
+            assert len(captured) == 1, (
+                "commit must fire on every clean worker exit so worktree "
+                "removal can't lose uncommitted work"
+            )
+            assert captured[0]["identifier"] == "MT-CANCEL"
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()
@@ -982,6 +988,155 @@ def test_reconcile_part_b_skips_paused_worker_on_terminal_state(monkeypatch):
                 "paused worker must survive reconcile despite terminal state"
             )
             assert issue.id in orch._running
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
+    """Reconcile path that force-cancels a stale terminal-state worker MUST
+    snapshot the workspace before calling `WorkspaceManager.remove()`,
+    otherwise `git worktree remove --force` discards uncommitted work."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-RC", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp/ws-rc"),
+            )
+            # Backdate last activity so the 10s grace window is exhausted.
+            entry.last_codex_timestamp = datetime.now(timezone.utc).replace(year=2000)
+            orch._running[issue.id] = entry
+
+            # Tracker reports the ticket has moved to a terminal state.
+            moved = Issue(
+                id=issue.id,
+                identifier=issue.identifier,
+                title=issue.title,
+                description=issue.description,
+                priority=issue.priority,
+                state="Done",
+                blocked_by=issue.blocked_by,
+                created_at=issue.created_at,
+                updated_at=issue.updated_at,
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
+            )
+
+            # Capture the call order of commit + remove.
+            calls: list[str] = []
+
+            import symphony.orchestrator as _orch_mod
+
+            async def _capture_commit(path, *, identifier, title, **_):
+                calls.append(f"commit:{identifier}")
+
+            class _StubWS:
+                async def remove(self, p):
+                    calls.append(f"remove:{p}")
+
+                def path_for(self, ident):
+                    return Path("/tmp/ws-rc")
+
+            monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+            orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+            await orch._reconcile_running(cfg)
+
+            assert calls == ["commit:MT-RC", "remove:/tmp/ws-rc"], (
+                f"commit must precede remove; got {calls}"
+            )
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
+    """If the operator opted out via auto_commit_on_done=False, reconcile
+    must still remove but skip the commit."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_off = _replace_agent_field(base_cfg, auto_commit_on_done=False)
+    orch = _orch()
+    issue = _issue("MT-RC-OFF", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp/ws-off"),
+            )
+            entry.last_codex_timestamp = datetime.now(timezone.utc).replace(year=2000)
+            orch._running[issue.id] = entry
+
+            moved = Issue(
+                id=issue.id,
+                identifier=issue.identifier,
+                title=issue.title,
+                description=issue.description,
+                priority=issue.priority,
+                state="Done",
+                blocked_by=issue.blocked_by,
+                created_at=issue.created_at,
+                updated_at=issue.updated_at,
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
+            )
+
+            import symphony.orchestrator as _orch_mod
+
+            commit_calls: list[str] = []
+            remove_calls: list[str] = []
+
+            async def _capture_commit(path, *, identifier, title, **_):
+                commit_calls.append(identifier)
+
+            class _StubWS:
+                async def remove(self, p):
+                    remove_calls.append(str(p))
+
+                def path_for(self, ident):
+                    return Path("/tmp/ws-off")
+
+            monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+            orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+            await orch._reconcile_running(cfg_off)
+
+            assert commit_calls == [], "auto_commit_on_done=False must skip commit"
+            assert remove_calls == ["/tmp/ws-off"], "remove must still happen"
         finally:
             worker_task.cancel()
             try:

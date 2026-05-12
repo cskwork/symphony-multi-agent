@@ -49,6 +49,9 @@ hooks:
       git worktree add "$WORKTREE_PATH" -b "$BRANCH"
     fi
     cd "$WORKTREE_PATH"
+    # Record the fork point so commit_workspace_on_done can `git reset --soft`
+    # back to it and squash all per-turn work into a single ticket commit.
+    git config symphony.basesha "$(git rev-parse HEAD)"
     # Symlink tracker-managed directories back to host so agent state
     # transitions are visible to Symphony's FileBoardTracker (which reads
     # board_root from the host repo, not from this worktree's checkout).
@@ -57,13 +60,40 @@ hooks:
       ln -s "$HOST_REPO/$dir" "$dir"
     done
   before_run: |
-    set -euo pipefail
+    # NEVER `git reset --hard` inside a worktree — it discards in-progress
+    # work between turns. Just refresh remotes; let the agent decide if/when
+    # to rebase.
+    set -uo pipefail
     git fetch origin main --quiet || true
   after_run: |
+    # Per-turn commit-or-amend. The branch stays at the same number of
+    # commits across turns (amends in place when HEAD is already a `wip:`
+    # commit), but every completed turn is durably written to .git/objects
+    # so even a hard crash (SIGKILL, host reboot) won't lose work. The
+    # orchestrator squashes everything into a single `<ID>: <title>` commit
+    # on exit — see auto_commit_on_done.
+    set -uo pipefail
+    git add -A 2>/dev/null || true
+    if git diff --cached --quiet 2>/dev/null; then
+      echo "run finished at $(date) (no changes)"
+      exit 0
+    fi
+    # Honors any pre-commit hooks in the host repo — if they fail, this
+    # turn's snapshot fails and the next turn picks up where files are.
+    LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
+    if [ "${LAST#wip:}" != "$LAST" ]; then
+      git -c user.email=symphony@local -c user.name=symphony \
+          commit --amend --no-edit >/dev/null 2>&1 || true
+    else
+      git -c user.email=symphony@local -c user.name=symphony \
+          commit -m "wip: turn $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+    fi
     echo "run finished at $(date)"
   before_remove: |
     # Detach the worktree before Symphony rmtree's the dir, otherwise
-    # `.git/worktrees/<ID>` lingers until `git worktree prune`.
+    # `.git/worktrees/<ID>` lingers until `git worktree prune`. By this
+    # point the orchestrator has already auto-committed any leftover
+    # changes (see agent.auto_commit_on_done).
     set -uo pipefail
     HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?}"
     WORKTREE_PATH="$PWD"
