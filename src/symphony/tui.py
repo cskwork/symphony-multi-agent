@@ -205,6 +205,7 @@ def _build_runtime_index(snap: dict[str, Any]) -> dict[str, _CardStatus]:
             runtime="retrying",
             attempt=int(row.get("attempt", 0) or 0),
             error=str(row.get("error") or "") or None,
+            paused=bool(row.get("paused", False)),
         )
     return index
 
@@ -1314,19 +1315,15 @@ class KanbanApp(App):
         """Hold or release the worker behind the focused card.
 
         The pause is queued — the in-flight turn (if any) is allowed to
-        finish so the model isn't aborted mid-thought. Only meaningful for
-        cards currently in the running runtime; idle / retrying / completed
-        cards get a notification explaining why nothing happened.
+        finish so the model isn't aborted mid-thought. Pause is only
+        offered for currently running cards; resume is offered for any
+        paused card (running OR retrying) because pause now persists
+        across worker exit and a held ticket may have moved into the
+        retry queue.
         """
         focused = self.focused
         if not isinstance(focused, IssueCard):
             self.notify("focus a card first", timeout=2)
-            return
-        if focused.status.runtime != "running":
-            self.notify(
-                f"only running workers can be paused (runtime={focused.status.runtime})",
-                timeout=3,
-            )
             return
         issue_id = focused.issue.id
         if self._orch.is_paused(issue_id):
@@ -1335,6 +1332,12 @@ class KanbanApp(App):
             else:
                 self.notify("resume had no effect", timeout=2)
         else:
+            if focused.status.runtime != "running":
+                self.notify(
+                    f"only running workers can be paused (runtime={focused.status.runtime})",
+                    timeout=3,
+                )
+                return
             if self._orch.pause_worker(issue_id):
                 self.notify(
                     f"paused {focused.issue.identifier} (after current turn)",

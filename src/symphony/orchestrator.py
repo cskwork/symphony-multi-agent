@@ -56,6 +56,7 @@ log = get_logger()
 
 
 CONTINUATION_RETRY_DELAY_MS = 1_000  # §7.1
+PAUSED_RETRY_HOLD_MS = 5_000  # operator-pause re-park cadence (orchestrator.py:_on_retry_timer)
 RETRY_BASE_MS = 10_000  # §8.4
 
 # Grace window after `worker_task.cancel()` before we forcibly remove the
@@ -183,10 +184,19 @@ class Orchestrator:
         self._stopping = False
         self._refresh_pending = False
         self._observers: list[Callable[[], Awaitable[None]]] = []
-        # Operator-driven pause gate. Key = issue.id; value = an Event that
-        # the worker awaits between turns. `set()` means "go", `clear()`
-        # means "hold". Events are lazily created on the first pause request
-        # and popped on worker exit so pause never carries across retries.
+        # Operator-driven pause is split into two pieces:
+        #   * `_paused_issue_ids` — the authoritative "this ticket is held"
+        #     flag. Set on pause_worker, cleared only on resume_worker (or
+        #     when the ticket leaves the orchestrator entirely). Survives
+        #     worker exits + retries so a paused ticket doesn't auto-unpause
+        #     when its turn ends, errors, or hits max_turns.
+        #   * `_pause_events` — per-worker wakeup gate. The currently-running
+        #     worker awaits this between turns; `pause_worker` clears it,
+        #     `resume_worker` (and worker_exit, for cleanup) sets it. Lifetime
+        #     is the in-flight worker only; a fresh worker dispatched for a
+        #     ticket still in `_paused_issue_ids` is born-paused via a
+        #     pre-cleared event in `_dispatch`.
+        self._paused_issue_ids: set[str] = set()
         self._pause_events: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------
@@ -234,6 +244,8 @@ class Orchestrator:
                 pass
         self._running.clear()
         self._retry.clear()
+        self._paused_issue_ids.clear()
+        self._pause_events.clear()
 
     # ------------------------------------------------------------------
     # observers (§13)
@@ -354,8 +366,7 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     def is_paused(self, issue_id: str) -> bool:
-        event = self._pause_events.get(issue_id)
-        return event is not None and not event.is_set()
+        return issue_id in self._paused_issue_ids
 
     def pause_worker(self, issue_id: str) -> bool:
         """Queue a pause that takes effect at the next turn boundary.
@@ -364,16 +375,22 @@ class Orchestrator:
         registered, False if the id is unknown or already paused. The
         currently-running turn (if any) is allowed to finish — abruptly
         cancelling mid-turn would waste tokens and risk partial artefacts.
+
+        The pause persists across worker exit / retry: the wakeup event is
+        per-worker, but `_paused_issue_ids` is per-issue. So a paused
+        ticket whose turn ends with `turn_error` (or max_turns, or any
+        other natural exit) won't auto-unpause — dispatch + retry both
+        consult `is_paused` and refuse to start a fresh worker.
         """
         if issue_id not in self._running:
             return False
+        if issue_id in self._paused_issue_ids:
+            return False
+        self._paused_issue_ids.add(issue_id)
         event = self._pause_events.get(issue_id)
         if event is None:
             event = asyncio.Event()
-            event.set()
             self._pause_events[issue_id] = event
-        if not event.is_set():
-            return False
         event.clear()
         log.info(
             "worker_pause_requested",
@@ -385,17 +402,25 @@ class Orchestrator:
     def resume_worker(self, issue_id: str) -> bool:
         """Lift a pause registered via `pause_worker`.
 
-        Returns True if a paused worker was resumed, False if the id is
-        not paused. A worker that has already exited (e.g. cancelled by
-        the stall detector while paused) is treated as not paused.
+        Returns True if a paused ticket was resumed, False if the id is
+        not paused. Works on any ticket in `_paused_issue_ids`, including
+        ones currently sitting in the retry queue (their worker exited
+        while paused). On resume, a pending retry timer is fired
+        immediately so the operator doesn't wait out the original backoff
+        — they already chose to hold the ticket, they shouldn't pay a
+        second hold on top.
         """
-        event = self._pause_events.get(issue_id)
-        if event is None or event.is_set():
+        if issue_id not in self._paused_issue_ids:
             return False
-        event.set()
+        self._paused_issue_ids.discard(issue_id)
+        event = self._pause_events.get(issue_id)
+        if event is not None and not event.is_set():
+            event.set()
         identifier = (
             self._running[issue_id].issue.identifier
             if issue_id in self._running
+            else self._retry[issue_id].identifier
+            if issue_id in self._retry
             else None
         )
         log.info(
@@ -403,6 +428,14 @@ class Orchestrator:
             issue_id=issue_id,
             identifier=identifier,
         )
+        # Retry held by the pause gate? Fire it now so the resume feels
+        # immediate. We cancel the pending timer but leave the entry in
+        # `_retry` so `_on_retry_timer` can pop it normally (its `pop`
+        # is the single source of truth for "retry consumed").
+        retry = self._retry.get(issue_id)
+        if retry is not None and self._loop is not None:
+            retry.timer_handle.cancel()
+            asyncio.create_task(self._on_retry_timer(issue_id))
         return True
 
     def find_running_issue_id(self, identifier: str) -> str | None:
@@ -416,14 +449,16 @@ class Orchestrator:
                 return issue_id
         return None
 
-    @staticmethod
-    def _retry_row(entry: RetryEntry) -> dict[str, Any]:
+    def _retry_row(self, entry: RetryEntry) -> dict[str, Any]:
         return {
             "issue_id": entry.issue_id,
             "issue_identifier": entry.identifier,
             "attempt": entry.attempt,
             "due_at": _from_monotonic_to_iso(entry.due_at_ms),
             "error": entry.error,
+            # Pause now persists across worker exit, so a retry-queued
+            # ticket can carry a paused flag the TUI surfaces for resume.
+            "paused": self.is_paused(entry.issue_id),
         }
 
     # ------------------------------------------------------------------
@@ -559,6 +594,12 @@ class Orchestrator:
         if issue.id in self._running:
             return False
         if not owning_retry and issue.id in self._claimed:
+            return False
+        # Paused tickets hold their slot but never start a fresh worker
+        # until the operator resumes. Without this, a worker that exits
+        # (turn_error, max_turns, reconcile cancel, …) would silently
+        # re-dispatch via `_on_retry_timer` and look like an auto-unpause.
+        if issue.id in self._paused_issue_ids:
             return False
         active = {s.lower() for s in cfg.tracker.active_states}
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
@@ -1256,11 +1297,10 @@ class Orchestrator:
             running_keys_before_pop=list(self._running.keys()),
         )
         entry = self._running.pop(issue_id, None)
-        # Pause state lives on the in-flight worker — it must not survive
-        # into the next dispatch, otherwise a retry would start "born paused"
-        # without the operator ever requesting it. Pop the event regardless
-        # of `entry`: a race between cancel and the pop above could leave
-        # a stale event behind.
+        # The wakeup event is per-worker — pop it so a fresh worker (if
+        # any) starts with a clean gate. `_paused_issue_ids` is per-issue
+        # and is intentionally preserved: it's what lets `_eligible`
+        # refuse to re-dispatch a ticket the operator chose to hold.
         pause_event = self._pause_events.pop(issue_id, None)
         if pause_event is not None and not pause_event.is_set():
             # Unblock anything still awaiting the event so the worker's
@@ -1392,9 +1432,24 @@ class Orchestrator:
         retry = self._retry.pop(issue_id, None)
         if retry is None:
             return
+        # Paused tickets re-park the retry on a fixed short hold without
+        # consuming a retry attempt. `resume_worker` cancels the timer
+        # and re-fires this coroutine, so unpause is immediate. Without
+        # this we'd reach `_eligible` → "not eligible at retry time" and
+        # silently burn through the backoff schedule.
+        if issue_id in self._paused_issue_ids:
+            self._schedule_retry(
+                issue_id,
+                identifier=retry.identifier,
+                attempt=retry.attempt,
+                delay_ms=PAUSED_RETRY_HOLD_MS,
+                error="paused",
+            )
+            return
         cfg = self._workflow_state.current()
         if cfg is None:
             self._claimed.discard(issue_id)
+            self._paused_issue_ids.discard(issue_id)
             return
         try:
             candidates = await self._fetch_candidates(cfg)
@@ -1412,6 +1467,10 @@ class Orchestrator:
         match = next((i for i in candidates if i.id == issue_id), None)
         if match is None:
             self._claimed.discard(issue_id)
+            # Ticket left the orchestrator's view (terminal, archived,
+            # filtered out by workflow change); drop any pause flag so
+            # we don't leak it across the resurrection of the same id.
+            self._paused_issue_ids.discard(issue_id)
             log.info("retry_release", issue_id=issue_id, identifier=retry.identifier)
             return
         if not self._eligible(match, cfg, owning_retry=True):
@@ -1519,6 +1578,13 @@ class Orchestrator:
         for issue in refreshed:
             entry = self._running.get(issue.id)
             if entry is None:
+                continue
+            # Paused workers must not be cancelled by reconcile — the
+            # operator already chose to hold them. Without this guard a
+            # remote state-move while paused would tear the worker down,
+            # `_on_worker_exit` would clear the wakeup event, and the
+            # ticket would auto-unpause through retry-or-release.
+            if self.is_paused(issue.id):
                 continue
             state = normalize_state(issue.state)
             if state in terminal:

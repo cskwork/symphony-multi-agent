@@ -798,8 +798,13 @@ def test_reconcile_skips_stall_detection_for_paused_worker():
     asyncio.run(_run())
 
 
-def test_worker_exit_clears_pause_state_so_retries_dont_inherit_pause():
-    """Pause must NOT carry into a retry — operator paused the *current* run."""
+def test_worker_exit_preserves_pause_flag_for_held_ticket():
+    """Pause is per-issue — a worker exit must keep `_paused_issue_ids` intact.
+
+    Operator's intent ("hold this ticket") shouldn't evaporate just because
+    the in-flight turn errored out or completed. The wakeup event is the
+    per-worker piece; the pause flag is the per-issue piece.
+    """
     orch = _orch()
     issue = _issue("MT-1", state="Todo")
 
@@ -812,8 +817,200 @@ def test_worker_exit_clears_pause_state_so_retries_dont_inherit_pause():
         try:
             await orch._on_worker_exit(issue.id, reason="turn_error", error="boom")
 
+            # Wakeup event popped (per-worker), but pause flag preserved.
             assert issue.id not in orch._pause_events
-            assert orch.is_paused(issue.id) is False
+            assert orch.is_paused(issue.id) is True
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_eligible_refuses_paused_ticket_for_dispatch_and_retry():
+    """`_eligible` returns False for a paused issue on both code paths.
+
+    Without this, a worker that exits while paused would re-dispatch via
+    `_on_retry_timer`, surfacing as auto-unpause to the operator.
+    """
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    orch._paused_issue_ids.add(issue.id)
+
+    assert orch._eligible(issue, cfg, owning_retry=False) is False
+    assert orch._eligible(issue, cfg, owning_retry=True) is False
+
+    orch._paused_issue_ids.discard(issue.id)
+    assert orch._eligible(issue, cfg, owning_retry=False) is True
+
+
+def test_retry_timer_reparks_paused_ticket_without_dispatching(monkeypatch):
+    """A retry timer firing on a paused ticket reschedules without dispatch."""
+    from symphony.orchestrator import PAUSED_RETRY_HOLD_MS
+
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._claimed.add(issue.id)
+        orch._paused_issue_ids.add(issue.id)
+        monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+        # Schedule a "natural" retry — pretend a worker just exited.
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=2,
+            delay_ms=100,
+            error="turn_error: simulated",
+        )
+        original_attempt = orch._retry[issue.id].attempt
+        try:
+            await orch._on_retry_timer(issue.id)
+
+            # Should NOT dispatch; should re-park under the same attempt.
+            assert issue.id not in orch._running, "paused ticket must not dispatch"
+            reparked = orch._retry.get(issue.id)
+            assert reparked is not None, "retry must remain scheduled"
+            assert reparked.attempt == original_attempt, (
+                "paused re-park must not consume a retry attempt"
+            )
+            assert reparked.error == "paused"
+            # Hold delay roughly matches PAUSED_RETRY_HOLD_MS.
+            expected_due = (
+                orch._loop.time() * 1000 + PAUSED_RETRY_HOLD_MS
+            )
+            assert abs(reparked.due_at_ms - expected_due) < 500
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_resume_worker_releases_held_retry_immediately(monkeypatch):
+    """Resume must kick the retry-hold timer so the operator doesn't wait it out."""
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._claimed.add(issue.id)
+        orch._paused_issue_ids.add(issue.id)
+        monkeypatch.setattr(orch._workflow_state, "current", lambda: cfg)
+
+        async def _fake_fetch(_cfg):
+            return [issue]
+
+        monkeypatch.setattr(orch, "_fetch_candidates", _fake_fetch)
+
+        dispatched: list[str] = []
+
+        def _capture_dispatch(matched_issue, _cfg, *, attempt):
+            dispatched.append(matched_issue.id)
+
+        monkeypatch.setattr(orch, "_dispatch", _capture_dispatch)
+
+        orch._schedule_retry(
+            issue.id,
+            identifier=issue.identifier,
+            attempt=2,
+            delay_ms=60_000,  # long timer — only resume should fire it
+            error="turn_error",
+        )
+
+        assert orch.resume_worker(issue.id) is True
+        # Let the create_task() chain run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert dispatched == [issue.id], (
+            "resume must fire the held retry, not wait out the timer"
+        )
+        assert orch.is_paused(issue.id) is False
+
+    asyncio.run(_run())
+
+
+def test_reconcile_part_b_skips_paused_worker_on_terminal_state(monkeypatch):
+    """Reconcile must not cancel a paused worker when its state moves terminal."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+            orch.pause_worker(issue.id)
+
+            # Tracker reports the ticket moved to Done while we hold it.
+            moved = Issue(
+                id=issue.id,
+                identifier=issue.identifier,
+                title=issue.title,
+                description=issue.description,
+                priority=issue.priority,
+                state="Done",
+                blocked_by=issue.blocked_by,
+                created_at=issue.created_at,
+                updated_at=issue.updated_at,
+            )
+            monkeypatch.setattr(
+                orch, "_tracker_call_states_by_ids", lambda c, ids: [moved]
+            )
+
+            await orch._reconcile_running(cfg)
+
+            assert worker_task.cancelled() is False, (
+                "paused worker must survive reconcile despite terminal state"
+            )
+            assert issue.id in orch._running
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_snapshot_retry_row_includes_paused_flag():
+    """A paused ticket sitting in the retry queue must surface `paused` for the TUI."""
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        orch.pause_worker(issue.id)
+
+        try:
+            # Simulate the worker exiting while paused.
+            await orch._on_worker_exit(issue.id, reason="turn_error", error="boom")
+
+            snap = orch.snapshot()
+            retry_rows = snap.get("retrying", [])
+            assert retry_rows, "expected a retry row for the paused ticket"
+            assert retry_rows[0]["issue_id"] == issue.id
+            assert retry_rows[0]["paused"] is True
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()
