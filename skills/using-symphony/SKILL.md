@@ -72,12 +72,35 @@ doctor preflight, new-window spawn) that plain `symphony tui` does not.
 
 ```bash
 # from inside the symphony-multi-agent checkout, into the target project:
-cp tui-open.sh tui-open.bat       /path/to/target-project/
-cp WORKFLOW.example.md            /path/to/target-project/WORKFLOW.md   # then edit
-mkdir -p                          /path/to/target-project/docs
-cp -R docs/symphony-prompts       /path/to/target-project/docs/         # MANDATORY — see below
-chmod +x /path/to/target-project/tui-open.sh
+TARGET=/path/to/target-project
+cp tui-open.sh tui-open.bat       "$TARGET/"
+cp WORKFLOW.example.md            "$TARGET/WORKFLOW.md"            # then edit
+mkdir -p                          "$TARGET/docs"
+cp -R docs/symphony-prompts       "$TARGET/docs/"                  # MANDATORY — see below
+cp -R skills                      "$TARGET/"                       # operator skills (source of truth)
+cp AGENTS.md GEMINI.md            "$TARGET/"                       # codex / gemini entry points
+mkdir -p                          "$TARGET/.claude/skills"
+ln -s ../../skills/using-symphony   "$TARGET/.claude/skills/using-symphony"
+ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"
+chmod +x "$TARGET/tui-open.sh"
 ```
+
+### Why all four (skills/, .claude/skills/ symlinks, AGENTS.md, GEMINI.md)
+
+The same skill content has to be discoverable from whichever CLI the
+**operator** runs. Each platform looks in a different place:
+
+| Operator CLI       | Discovery path                                                |
+|--------------------|---------------------------------------------------------------|
+| Claude Code        | `.claude/skills/<name>/SKILL.md` (symlink → `skills/<name>/`) |
+| Codex              | `AGENTS.md` at repo root (references `skills/<name>/SKILL.md`) |
+| Gemini CLI         | `GEMINI.md` at repo root (references `skills/<name>/SKILL.md`) |
+| Pi                 | No documented skill convention — read `skills/` manually       |
+
+`skills/<name>/` is the **single source of truth**; the other three are
+pointers. Edit only the canonical files under `skills/`. Worker-side
+behavior is unaffected — dispatched codex/claude/gemini/pi workers get
+their guidance from `docs/symphony-prompts/`, not from these skills.
 
 ### Preserve the 7-stage pipeline by default (DO NOT simplify)
 
