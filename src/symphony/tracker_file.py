@@ -356,7 +356,10 @@ class FileBoardTracker:
     def _scan_all(self) -> list[Issue]:
         out: list[Issue] = []
         for path in sorted(self._root.glob("*.md")):
-            issue = issue_from_file(path)
+            try:
+                issue = issue_from_file(path)
+            except SymphonyError:
+                continue
             if issue is not None:
                 out.append(issue)
         return _hydrate_blocker_states(out)
