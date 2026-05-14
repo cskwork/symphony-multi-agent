@@ -54,8 +54,8 @@ hooks:
     # back to it and squash all per-turn work into a single ticket commit.
     git -C "$WORKTREE_PATH" config symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
     # Linear tracker reads from its API, not the file system, so no
-    # symlink-back step is needed. (For tracker.kind=file, also symlink
-    # kanban/docs/llm-wiki back to $HOST_REPO — see WORKFLOW.file.example.md.)
+    # symlink-back step is needed. (For tracker.kind=file, see
+    # WORKFLOW.file.example.md for symlink-back plus commit excludes.)
   before_run: |
     # NEVER `git reset --hard` inside a worktree — it discards in-progress
     # work between turns. Just refresh remotes; let the agent decide if/when
