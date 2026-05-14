@@ -438,6 +438,60 @@ async def test_commit_workspace_on_done_squashes_to_recorded_base(
 
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.skipif(os.name == "nt", reason="symlink privileges vary on Windows")
+@pytest.mark.asyncio
+async def test_commit_workspace_on_done_excludes_host_symlink_dirs(
+    tmp_path, monkeypatch
+):
+    """File-tracker worktrees symlink shared host dirs for visibility.
+
+    The final squash must not turn tracked repo directories into absolute
+    symlinks when it stages the ticket's code changes.
+    """
+    _git_id_env(monkeypatch, tmp_path)
+    host = tmp_path / "host"
+    host.mkdir()
+    _git(host, "init", "-q", "-b", "main")
+    for dirname in ("kanban", "docs", "llm-wiki"):
+        folder = host / dirname
+        folder.mkdir()
+        (folder / "tracked.md").write_text(f"{dirname}\n")
+    (host / "src").mkdir()
+    (host / "src" / "app.py").write_text("print('base')\n")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-q", "-m", "base commit")
+    base_sha = _git(host, "rev-parse", "HEAD").stdout.strip()
+
+    ws = tmp_path / "worktrees" / "TASK-1"
+    ws.parent.mkdir()
+    ws.mkdir()
+    _git(host, "worktree", "add", str(ws), "-b", "symphony/TASK-1")
+    _git(ws, "config", "symphony.basesha", base_sha)
+    for dirname in ("kanban", "docs", "llm-wiki"):
+        _git(ws, "config", "--add", "symphony.autocommitExclude", dirname)
+        shutil.rmtree(ws / dirname)
+        os.symlink(host / dirname, ws / dirname)
+
+    (ws / "src" / "app.py").write_text("print('ticket work')\n")
+
+    await commit_workspace_on_done(ws, identifier="TASK-1", title="safe symlinks")
+
+    log = _git(ws, "log", "--oneline", "--format=%s").stdout.strip().splitlines()
+    assert log == ["TASK-1: safe symlinks", "base commit"]
+    tree = _git(ws, "ls-tree", "HEAD", "kanban", "docs", "llm-wiki").stdout
+    assert "120000 blob" not in tree, tree
+    assert tree.count("040000 tree") == 3, tree
+    files = _git(ws, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    for tracked in (
+        "kanban/tracked.md",
+        "docs/tracked.md",
+        "llm-wiki/tracked.md",
+        "src/app.py",
+    ):
+        assert tracked in files
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
 async def test_commit_workspace_on_done_no_base_falls_back_to_plain_commit(
     tmp_path, monkeypatch

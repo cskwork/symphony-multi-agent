@@ -58,6 +58,11 @@ hooks:
     # Record the fork point so commit_workspace_on_done can `git reset --soft`
     # back to it and squash all per-turn work into a single ticket commit.
     git config symphony.basesha "$(git rev-parse HEAD)"
+    # These paths are symlinked to the host for file-tracker visibility; do not
+    # let per-turn or final auto-commits replace tracked directories with links.
+    git config --add symphony.autocommitExclude kanban
+    git config --add symphony.autocommitExclude docs
+    git config --add symphony.autocommitExclude llm-wiki
     # Symlink shared directories back to host so agent edits are visible
     # to Symphony's file tracker (which reads from the host's board_root).
     for dir in kanban docs llm-wiki; do
@@ -78,7 +83,7 @@ hooks:
     # orchestrator squashes everything into a single `<ID>: <title>` commit
     # on exit — see auto_commit_on_done.
     set -uo pipefail
-    git add -A 2>/dev/null || true
+    git add -A -- . ':(exclude)kanban' ':(exclude)docs' ':(exclude)llm-wiki' 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
       echo "run finished at $(date -u +%FT%TZ) (no changes)"
       exit 0

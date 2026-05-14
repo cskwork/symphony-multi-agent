@@ -121,6 +121,12 @@ share the host's object DB so setup is near-instant compared to a
 full clone, and the branch is immediately visible to host-side `git`
 commands.
 
+For `tracker.kind=file`, the file template symlinks `kanban/`, `docs/`,
+and `llm-wiki/` back to the host so state transitions are visible to the
+host-side tracker. Those symlinked paths are registered in
+`symphony.autocommitExclude` and omitted from each `git add`; otherwise the
+ticket branch would replace tracked directories with absolute symlinks.
+
 The matching `before_remove` hook runs `git worktree remove --force`
 so cleanup also drops the `.git/worktrees/<ID>` registration; without
 it the registration lingers until `git worktree prune`.
@@ -145,6 +151,7 @@ without any repo, use `: noop`.
    `_startup_terminal_cleanup`), the orchestrator's
    `commit_workspace_on_done`:
    - reads `symphony.basesha`
+   - stages changes, excluding any `symphony.autocommitExclude` paths
    - `git reset --soft <basesha>` to collapse the wip commit + any
      agent-authored commits into the index
    - `git commit -m "<ID>: <title>[ <suffix>]"` — single ticket commit
