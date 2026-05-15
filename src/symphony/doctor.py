@@ -94,6 +94,8 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
     binary = argv[0]
     # `python -m symphony.mock_codex` style — find the interpreter, not the module.
     located = shutil.which(binary)
+    if located is None and binary == "python":
+        located = sys.executable
     if located is None:
         return CheckResult(name, "fail", f"{binary!r} not on $PATH (configured: {command!r})")
     return CheckResult(name, "pass", f"{binary} → {located}")

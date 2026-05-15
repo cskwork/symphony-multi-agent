@@ -100,6 +100,9 @@ agent:
   kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 4
   max_turns: 20
+  # Hard per-ticket budget across continuation attempts. Prevents an
+  # active-state ticket from restarting forever and wasting tokens.
+  max_total_turns: 60
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     Todo: 2

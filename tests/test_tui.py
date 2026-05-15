@@ -292,7 +292,9 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
         "running": [
             {
                 "issue_id": "id-1",
-                "turn_count": 3,
+                "turn_count": 23,
+                "attempt_turn_count": 3,
+                "attempt_kind": "continuation",
                 "last_event": "agent_message_delta",
                 "last_event_at": "2026-05-09T23:51:21Z",
                 "tokens": {"total_tokens": 100, "input_tokens": 60, "output_tokens": 40},
@@ -305,7 +307,9 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
     }
     idx = _build_runtime_index(snap)
     assert idx["id-1"].runtime == "running"
-    assert idx["id-1"].turn == 3
+    assert idx["id-1"].turn == 23
+    assert idx["id-1"].attempt_turn == 3
+    assert idx["id-1"].attempt_kind == "continuation"
     assert idx["id-1"].tokens == 100
     assert idx["id-1"].last_event_at is not None
     assert idx["id-2"].runtime == "retrying"

@@ -34,6 +34,7 @@ DEFAULT_POLL_INTERVAL_MS = 30_000
 DEFAULT_HOOK_TIMEOUT_MS = 60_000
 DEFAULT_MAX_CONCURRENT_AGENTS = 10
 DEFAULT_MAX_TURNS = 20
+DEFAULT_MAX_TOTAL_TURNS = 60
 DEFAULT_MAX_RETRY_BACKOFF_MS = 300_000
 DEFAULT_CODEX_COMMAND = "codex app-server"
 DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
@@ -201,6 +202,7 @@ class AgentConfig:
     max_turns: int
     max_retry_backoff_ms: int
     max_concurrent_agents_by_state: dict[str, int]
+    max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
     # Default ON so a fresh `pip install symphony-multi-agent` plus a
@@ -606,6 +608,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     max_turns = _validated_positive_or_default(
         agent_raw.get("max_turns"), DEFAULT_MAX_TURNS, name="agent.max_turns"
     )
+    max_total_turns = _validated_positive_or_default(
+        agent_raw.get("max_total_turns"),
+        DEFAULT_MAX_TOTAL_TURNS,
+        name="agent.max_total_turns",
+    )
     agent_kind = _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower() or DEFAULT_AGENT_KIND
     if agent_kind not in SUPPORTED_AGENT_KINDS:
         raise ConfigValidationError(
@@ -628,6 +635,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         max_concurrent_agents_by_state=_normalize_state_map(
             agent_raw.get("max_concurrent_agents_by_state")
         ),
+        max_total_turns=max_total_turns,
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)
         ),

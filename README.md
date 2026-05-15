@@ -130,7 +130,7 @@ hooks:
   after_create: ": noop"
   before_run:   ": noop"
   after_run:    "echo done"
-agent:  { kind: codex, max_concurrent_agents: 2, max_turns: 3 }
+agent:  { kind: codex, max_concurrent_agents: 2, max_turns: 3, max_total_turns: 60 }
 codex:  { command: python -m symphony.mock_codex }
 server: { port: 9999 }
 ---

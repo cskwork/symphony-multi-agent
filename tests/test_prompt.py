@@ -176,6 +176,7 @@ def test_continuation_prompt_prepends_preamble_and_includes_turn_count():
     assert out.startswith(doc_language_preamble("ko"))
     assert "turn 3 of up to 20" in out
     assert "Continue working on the issue" in out
+    assert "record any progress or blocker in markdown" in out
 
 
 def test_continuation_prompt_default_english_path():

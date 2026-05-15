@@ -101,6 +101,7 @@ class RunningEntry:
     retry_attempt: int | None
     worker_task: asyncio.Task[None] | None
     workspace_path: Path
+    attempt_kind: str = "initial"
     session_id: str | None = None
     thread_id: str | None = None
     turn_id: str | None = None
@@ -139,6 +140,7 @@ class RetryEntry:
     due_at_ms: float
     timer_handle: asyncio.TimerHandle
     error: str | None = None
+    kind: str = "retry"
 
 
 @dataclass
@@ -154,6 +156,8 @@ class _CodexTotals:
 class _IssueDebug:
     restart_count: int = 0
     current_retry_attempt: int = 0
+    current_attempt_kind: str | None = None
+    completed_turn_count: int = 0
     last_workspace: Path | None = None
     last_error: str | None = None
     recent_events: list[dict[str, Any]] = field(default_factory=list)
@@ -175,6 +179,7 @@ class Orchestrator:
         self._claimed: set[str] = set()
         self._retry: dict[str, RetryEntry] = {}
         self._completed: set[str] = set()
+        self._turn_budget_exhausted: set[str] = set()
         self._totals = _CodexTotals()
         self._latest_rate_limits: dict[str, Any] | None = None
         self._issue_debug: dict[str, _IssueDebug] = {}
@@ -246,6 +251,7 @@ class Orchestrator:
         self._retry.clear()
         self._paused_issue_ids.clear()
         self._pause_events.clear()
+        self._turn_budget_exhausted.clear()
 
     # ------------------------------------------------------------------
     # observers (§13)
@@ -310,6 +316,8 @@ class Orchestrator:
                     "attempts": {
                         "restart_count": debug.restart_count,
                         "current_retry_attempt": debug.current_retry_attempt,
+                        "current_attempt_kind": debug.current_attempt_kind,
+                        "completed_turn_count": debug.completed_turn_count,
                     },
                     "running": self._running_row(issue_id, entry),
                     "retry": None,
@@ -331,6 +339,8 @@ class Orchestrator:
                     "attempts": {
                         "restart_count": debug.restart_count,
                         "current_retry_attempt": retry.attempt,
+                        "current_attempt_kind": retry.kind,
+                        "completed_turn_count": debug.completed_turn_count,
                     },
                     "running": None,
                     "retry": self._retry_row(retry),
@@ -342,12 +352,18 @@ class Orchestrator:
         return None
 
     def _running_row(self, issue_id: str, entry: RunningEntry) -> dict[str, Any]:
+        debug = self._issue_debug.get(issue_id, _IssueDebug())
+        total_turn_count = debug.completed_turn_count + entry.turn_count
         return {
             "issue_id": issue_id,
             "issue_identifier": entry.issue.identifier,
             "state": entry.issue.state,
             "session_id": entry.session_id,
-            "turn_count": entry.turn_count,
+            "turn_count": total_turn_count,
+            "total_turn_count": total_turn_count,
+            "attempt_turn_count": entry.turn_count,
+            "attempt": entry.retry_attempt,
+            "attempt_kind": entry.attempt_kind,
             "last_event": entry.last_codex_event,
             "last_message": entry.last_codex_message,
             "started_at": _to_iso(entry.started_at),
@@ -454,6 +470,7 @@ class Orchestrator:
             "issue_id": entry.issue_id,
             "issue_identifier": entry.identifier,
             "attempt": entry.attempt,
+            "kind": entry.kind,
             "due_at": _from_monotonic_to_iso(entry.due_at_ms),
             "error": entry.error,
             # Pause now persists across worker exit, so a retry-queued
@@ -601,6 +618,8 @@ class Orchestrator:
         # re-dispatch via `_on_retry_timer` and look like an auto-unpause.
         if issue.id in self._paused_issue_ids:
             return False
+        if issue.id in self._turn_budget_exhausted:
+            return False
         active = {s.lower() for s in cfg.tracker.active_states}
         terminal = {s.lower() for s in cfg.tracker.terminal_states}
         state = normalize_state(issue.state)
@@ -639,7 +658,14 @@ class Orchestrator:
     # dispatch (§16.4)
     # ------------------------------------------------------------------
 
-    def _dispatch(self, issue: Issue, cfg: ServiceConfig, *, attempt: int | None) -> None:
+    def _dispatch(
+        self,
+        issue: Issue,
+        cfg: ServiceConfig,
+        *,
+        attempt: int | None,
+        attempt_kind: str | None = None,
+    ) -> None:
         # Cancel any existing retry timer.
         existing_retry = self._retry.pop(issue.id, None)
         if existing_retry is not None:
@@ -653,6 +679,7 @@ class Orchestrator:
             workspace_path=self._workspace_manager.path_for(issue.identifier)
             if self._workspace_manager
             else Path("/"),
+            attempt_kind=attempt_kind or ("retry" if attempt is not None else "initial"),
         )
         self._running[issue.id] = entry
         self._claimed.add(issue.id)
@@ -672,6 +699,7 @@ class Orchestrator:
         debug = self._issue_debug.setdefault(issue.id, _IssueDebug())
         if attempt is not None:
             debug.restart_count += 1
+        debug.current_attempt_kind = entry.attempt_kind
         log.info(
             "dispatch",
             issue_id=issue.id,
@@ -911,10 +939,11 @@ class Orchestrator:
 
                     is_continuation = turn_number > 1 and not is_phase_transition
                     if is_continuation:
+                        debug = self._issue_debug.setdefault(running_issue_id, _IssueDebug())
                         prompt = build_continuation_prompt(
                             language=doc_language,
-                            turn_number=turn_number,
-                            max_turns=cfg.agent.max_turns,
+                            turn_number=debug.completed_turn_count + turn_number,
+                            max_turns=cfg.agent.max_total_turns,
                         )
                     else:
                         prompt = first_prompt
@@ -1320,10 +1349,27 @@ class Orchestrator:
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.last_workspace = entry.workspace_path
         debug.last_error = error
+        debug.completed_turn_count += entry.turn_count
 
         if reason == "normal":
-            self._completed.add(issue_id)
             cfg = self._workflow_state.current()
+            max_total_turns = cfg.agent.max_total_turns if cfg is not None else 60
+            if debug.completed_turn_count >= max_total_turns:
+                self._turn_budget_exhausted.add(issue_id)
+                self._claimed.add(issue_id)
+                debug.last_error = (
+                    f"max_total_turns reached "
+                    f"({debug.completed_turn_count}/{max_total_turns})"
+                )
+                log.warning(
+                    "worker_total_turn_budget_exhausted",
+                    issue_id=issue_id,
+                    issue_identifier=entry.issue.identifier,
+                    total_turns=debug.completed_turn_count,
+                    max_total_turns=max_total_turns,
+                )
+                return
+            self._completed.add(issue_id)
             if cfg is not None and cfg.agent.auto_commit_on_done:
                 # Snapshot whatever the agent left in the worktree, even if
                 # the ticket isn't strictly at Done. The worker stopped
@@ -1344,6 +1390,7 @@ class Orchestrator:
                 attempt=1,
                 delay_ms=CONTINUATION_RETRY_DELAY_MS,
                 error=None,
+                kind="continuation",
             )
         else:
             next_attempt = (entry.retry_attempt or 0) + 1
@@ -1356,6 +1403,7 @@ class Orchestrator:
                 attempt=next_attempt,
                 delay_ms=delay_ms,
                 error=f"{reason}: {error}" if error else reason,
+                kind="retry",
             )
         log.info(
             "worker_exit",
@@ -1407,6 +1455,7 @@ class Orchestrator:
         attempt: int,
         delay_ms: int,
         error: str | None,
+        kind: str | None = None,
     ) -> None:
         if self._loop is None:
             return
@@ -1425,9 +1474,11 @@ class Orchestrator:
             due_at_ms=due * 1000.0,
             timer_handle=handle,
             error=error,
+            kind=kind or ("continuation" if error is None else "retry"),
         )
         debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
         debug.current_retry_attempt = attempt
+        debug.current_attempt_kind = self._retry[issue_id].kind
 
     async def _on_retry_timer(self, issue_id: str) -> None:
         retry = self._retry.pop(issue_id, None)
@@ -1496,7 +1547,7 @@ class Orchestrator:
                 error="no available orchestrator slots",
             )
             return
-        self._dispatch(match, cfg, attempt=retry.attempt)
+        self._dispatch(match, cfg, attempt=retry.attempt, attempt_kind=retry.kind)
 
     # ------------------------------------------------------------------
     # reconciliation (§16.3)
@@ -1736,7 +1787,9 @@ def _from_monotonic_to_iso(due_at_ms: float) -> str:
     return datetime.fromtimestamp(target, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _task_debug(task: asyncio.Task[Any]) -> dict[str, Any]:
+def _task_debug(task: asyncio.Task[Any] | None) -> dict[str, Any] | None:
+    if task is None:
+        return None
     stack = [
         f"{frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
         for frame in task.get_stack()

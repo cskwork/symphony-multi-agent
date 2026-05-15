@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from symphony.issue import BlockerRef, Issue, sort_for_dispatch
-from symphony.orchestrator import Orchestrator, RunningEntry, _sort_for_dispatch_fifo
+from symphony.orchestrator import Orchestrator, RunningEntry, _IssueDebug, _sort_for_dispatch_fifo
 from symphony.workflow import (
     AgentConfig,
     ClaudeConfig,
@@ -916,7 +917,7 @@ def test_resume_worker_releases_held_retry_immediately(monkeypatch):
 
         dispatched: list[str] = []
 
-        def _capture_dispatch(matched_issue, _cfg, *, attempt):
+        def _capture_dispatch(matched_issue, _cfg, *, attempt, attempt_kind=None):
             dispatched.append(matched_issue.id)
 
         monkeypatch.setattr(orch, "_dispatch", _capture_dispatch)
@@ -1169,6 +1170,47 @@ def test_snapshot_retry_row_includes_paused_flag():
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_running_snapshot_uses_total_turn_count_across_continuations():
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    entry = _install_running_entry(orch, issue)
+    entry.retry_attempt = 1
+    entry.attempt_kind = "continuation"
+    entry.turn_count = 1
+    debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+    debug.completed_turn_count = 20
+
+    row = orch._running_row(issue.id, entry)
+
+    assert row["turn_count"] == 21
+    assert row["total_turn_count"] == 21
+    assert row["attempt_turn_count"] == 1
+    assert row["attempt_kind"] == "continuation"
+
+
+def test_normal_exit_does_not_continue_after_total_turn_budget():
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    cfg = _make_config()
+    cfg = replace(
+        cfg,
+        agent=replace(cfg.agent, max_turns=2, max_total_turns=2, auto_commit_on_done=False),
+    )
+    orch._workflow_state._config = cfg
+    entry = _install_running_entry(orch, issue)
+    entry.turn_count = 2
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+        assert issue.id not in orch._retry
+        assert issue.id in orch._turn_budget_exhausted
+        assert not orch._eligible(issue, cfg, owning_retry=False)
 
     asyncio.run(_run())
 

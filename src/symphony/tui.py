@@ -94,6 +94,8 @@ class _CardStatus:
 
     runtime: str = "idle"  # idle, running, retrying, completed
     turn: int = 0
+    attempt_turn: int = 0
+    attempt_kind: str = ""
     last_event: str = ""
     last_event_at: datetime | None = None
     tokens: int = 0
@@ -191,6 +193,8 @@ def _build_runtime_index(snap: dict[str, Any]) -> dict[str, _CardStatus]:
         index[issue_id] = _CardStatus(
             runtime="running",
             turn=int(row.get("turn_count", 0) or 0),
+            attempt_turn=int(row.get("attempt_turn_count", 0) or 0),
+            attempt_kind=str(row.get("attempt_kind") or ""),
             last_event=str(row.get("last_event") or ""),
             last_event_at=_parse_iso(row.get("last_event_at")),
             tokens=int(tokens_block.get("total_tokens") or 0),
@@ -373,6 +377,11 @@ class IssueCard(Static):
                     style="bold bright_magenta",
                 )
             meta.append(f"{t('card.turn', language)} {status.turn}", style="green")
+            if status.attempt_kind in ("continuation", "retry") and status.attempt_turn:
+                meta.append(
+                    f"  {status.attempt_kind} {status.attempt_turn}",
+                    style="dim",
+                )
             silent_s = _silent_seconds(status.last_event_at)
             # Paused workers are intentionally idle — suppress the silent
             # badge so the card doesn't look stuck when the operator put

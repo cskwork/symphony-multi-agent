@@ -518,7 +518,9 @@ def build_continuation_prompt(
 
     preamble = doc_language_preamble(language)
     body = (
-        "Continue working on the issue. Re-check the tracker if needed. "
+        "Continue working on the issue. Re-check the tracker and existing "
+        "ticket/workspace markdown before acting, then record any progress "
+        "or blocker in markdown before the turn ends. "
         f"This is turn {turn_number} of up to {max_turns}."
     )
     return preamble + "\n\n" + body
