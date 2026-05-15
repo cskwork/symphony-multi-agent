@@ -226,6 +226,7 @@ backend.
 | Add custom lanes, per-state prompts, deploy pipelines      | `reference/customization.md`               |
 | Offload sub-tasks from the calling agent's context         | `reference/delegation.md`                  |
 | Diagnose `worker_exit`, `hook_failed`, blank TUI, etc.     | `reference/troubleshooting.md`             |
+| Set up / debug on Windows or macOS, or port to a new platform | `reference/platform-compat.md`          |
 
 ## When NOT to use this skill
 
