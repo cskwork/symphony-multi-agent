@@ -137,4 +137,45 @@ def test_safe_proc_wait_timeout_returns_none() -> None:
         assert rc is None
     finally:
         popen.kill()
-        popen.wait(timeout=2.0)
+
+
+# Windows path: `os.waitpid` + WIF* helpers are POSIX-only, so the helper
+# delegates to ``proc.wait()`` (the asyncio child transport's own wait).
+# These tests ensure that delegation is wired up and doesn't reintroduce
+# the ``module 'os' has no attribute 'WIFEXITED'`` regression.
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
+def test_safe_proc_wait_windows_delegates_to_proc_wait() -> None:
+    async def _run() -> int | None:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import sys; sys.exit(7)",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return await safe_proc_wait(proc, timeout=10.0)
+    rc = asyncio.run(_run())
+    assert rc == 7
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
+def test_safe_proc_wait_windows_short_circuits_when_returncode_set() -> None:
+    fake = SimpleNamespace(pid=99999, returncode=0)
+    rc = asyncio.run(safe_proc_wait(fake, timeout=1.0))
+    assert rc == 0
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises the Windows delegation path")
+def test_safe_proc_wait_windows_timeout_returns_none() -> None:
+    async def _run() -> int | None:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import time; time.sleep(5)",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            return await safe_proc_wait(proc, timeout=0.2)
+        finally:
+            proc.kill()
+    rc = asyncio.run(_run())
+    assert rc is None

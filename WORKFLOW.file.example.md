@@ -42,19 +42,17 @@ hooks:
     WORKTREE_PATH="$PWD"
     BRANCH="symphony/${ISSUE_ID}"
     cd "$HOST_REPO"
-    # Retry rmdir to tolerate Windows file-indexer / AV handles on the
-    # freshly-created workspace dir; without this the hook spins in
-    # `Device or resource busy` until max_retries is exhausted.
-    i=0
-    while [ -d "$WORKTREE_PATH" ] && [ $i -lt 5 ]; do
-      rmdir "$WORKTREE_PATH" 2>/dev/null && break
-      sleep 0.2
-      i=$((i+1))
-    done
-    if [ -d "$WORKTREE_PATH" ]; then
-      echo "after_create: $WORKTREE_PATH still present after 5 rmdir retries (Windows file lock?); aborting." >&2
-      exit 1
-    fi
+    # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
+    # directory — which is exactly what Symphony pre-creates as the workspace.
+    # We rely on that here to avoid an rmdir that on Windows races against
+    # the file-indexer / AV scan and used to trip the dispatcher into a
+    # `Device or resource busy` retry loop.
+    #
+    # A prior crashed attempt may have left `.git/worktrees/<ID>` registered;
+    # detach it first so the next `add` doesn't fail with
+    # "missing but already registered" or "already checked out".
+    git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
     if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$BRANCH"
     else

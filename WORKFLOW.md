@@ -47,19 +47,20 @@ hooks:
     # Symphony pre-creates the workspace dir; git worktree add refuses to
     # populate an existing path, so drop the empty dir first.
     cd "$HOST_REPO"
-    # Windows note: the file indexer / AV may hold a transient handle on the
-    # just-created dir, so rmdir can hit `Device or resource busy` for tens of
-    # ms. Retry up to 5x with backoff; fail loudly if the handle persists.
-    i=0
-    while [ -d "$WORKTREE_PATH" ] && [ $i -lt 5 ]; do
-      rmdir "$WORKTREE_PATH" 2>/dev/null && break
-      sleep 0.2
-      i=$((i+1))
-    done
-    if [ -d "$WORKTREE_PATH" ]; then
-      echo "after_create: $WORKTREE_PATH still present after 5 rmdir retries (Windows file lock?); aborting." >&2
-      exit 1
-    fi
+    # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
+    # directory, which is exactly what Symphony pre-creates here. Trying to
+    # rmdir it first runs straight into Windows file-indexer / AV scans that
+    # hold a transient handle on the fresh dir and used to trip the
+    # dispatcher into a retry loop with `Device or resource busy`. Skipping
+    # the rmdir avoids the race entirely.
+    #
+    # A prior crashed attempt may have left `.git/worktrees/<ID>` registered;
+    # detach it first so the next `add` doesn't fail with
+    # "missing but already registered" or "already checked out". `remove`
+    # tolerates a non-existent path (returns non-zero, ignored); `prune`
+    # mops up any leftover admin files.
+    git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
     # Reuse the branch if a prior worktree was reaped without prune.
     if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$BRANCH"
@@ -76,8 +77,26 @@ hooks:
       rm -rf "$dir"
       ln -s "$HOST_REPO/$dir" "$dir"
     done
-    python3.11 -m venv .venv
-    .venv/bin/pip install --quiet -e '.[dev]'
+    # Pick the first available Python interpreter. `python3.11` is preferred
+    # because the project pins to >= 3.11, but we tolerate any newer 3.x so
+    # the hook does not break on fresh hosts that only ship 3.12+.
+    PYTHON=""
+    for candidate in python3.11 python3.12 python3.13 python3 python; do
+      if command -v "$candidate" >/dev/null 2>&1; then
+        PYTHON="$candidate"; break
+      fi
+    done
+    if [ -z "$PYTHON" ]; then
+      echo "after_create: no python3 on PATH; skipping venv install." >&2
+    else
+      "$PYTHON" -m venv .venv
+      # `python -m pip` survives the venv-script path differences between
+      # POSIX (`.venv/bin/pip`) and Windows (`.venv/Scripts/pip.exe`).
+      .venv/*/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
+        || .venv/bin/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
+        || .venv/Scripts/python -m pip install --quiet -e '.[dev]' 2>/dev/null \
+        || echo "after_create: pip install failed; agent will fall back to host python." >&2
+    fi
   before_run: |
     # NEVER `git reset --hard` inside a worktree — discards mid-run work.
     set -uo pipefail

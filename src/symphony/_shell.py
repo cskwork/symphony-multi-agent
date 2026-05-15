@@ -107,12 +107,25 @@ async def safe_proc_wait(proc: Any, *, timeout: float | None = None) -> int | No
 
     `timeout` is in seconds. Returns the exit code, or ``None`` on timeout
     (caller is responsible for sending SIGKILL and retrying).
+
+    Windows note: ``os.waitpid`` and the ``WIF*`` helpers are POSIX-only, so
+    on Windows we delegate to the asyncio child transport's own ``wait()``
+    — the SIGCHLD race the workaround targets does not exist there.
     """
+    if proc.returncode is not None:
+        return proc.returncode
+
+    if sys.platform == "win32":
+        try:
+            if timeout is None:
+                return await proc.wait()
+            return await asyncio.wait_for(proc.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
     pid = proc.pid
     if pid is None:
         return None
-    if proc.returncode is not None:
-        return proc.returncode
 
     def _blocking_wait() -> int | None:
         try:
