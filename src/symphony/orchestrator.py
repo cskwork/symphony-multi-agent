@@ -773,7 +773,9 @@ class Orchestrator:
                 entry.cancelled_at.isoformat() if entry.cancelled_at else None
             ),
         )
-        asyncio.create_task(self._on_worker_exit(issue_id, reason, error))
+        asyncio.create_task(
+            self._on_worker_exit(issue_id, reason, error, exiting_task=task)
+        )
 
     # ------------------------------------------------------------------
     # worker (§16.5)
@@ -1069,11 +1071,20 @@ class Orchestrator:
                 outcome=outcome,
                 error=error,
             )
+            current_task = asyncio.current_task()
             entry = self._running.get(running_issue_id)
-            if entry is not None:
+            if (
+                entry is not None
+                and (entry.worker_task is None or entry.worker_task is current_task)
+            ):
                 entry.exit_started_at = datetime.now(timezone.utc)
             await asyncio.shield(
-                self._on_worker_exit(running_issue_id, outcome, error)
+                self._on_worker_exit(
+                    running_issue_id,
+                    outcome,
+                    error,
+                    exiting_task=current_task,
+                )
             )
 
     async def _rebuild_backend_for_phase(
@@ -1314,7 +1325,14 @@ class Orchestrator:
     # worker exit handling (§16.6)
     # ------------------------------------------------------------------
 
-    async def _on_worker_exit(self, issue_id: str, reason: str, error: str | None) -> None:
+    async def _on_worker_exit(
+        self,
+        issue_id: str,
+        reason: str,
+        error: str | None,
+        *,
+        exiting_task: asyncio.Task[None] | None = None,
+    ) -> None:
         # INFO-level entry marker — pairs with `worker_finally_entered`.
         # If `worker_finally_entered` is in the log but this is missing,
         # the outer finally's `await self._on_worker_exit(...)` was
@@ -1325,7 +1343,24 @@ class Orchestrator:
             reason=reason,
             running_keys_before_pop=list(self._running.keys()),
         )
-        entry = self._running.pop(issue_id, None)
+        entry = self._running.get(issue_id)
+        if (
+            entry is not None
+            and exiting_task is not None
+            and entry.worker_task is not None
+            and entry.worker_task is not exiting_task
+        ):
+            log.warning(
+                "stale_worker_exit_ignored",
+                issue_id=issue_id,
+                reason=reason,
+                running_task_name=entry.worker_task.get_name()
+                if entry.worker_task is not None else None,
+                exiting_task_name=exiting_task.get_name(),
+            )
+            return
+        if entry is not None:
+            self._running.pop(issue_id, None)
         # The wakeup event is per-worker — pop it so a fresh worker (if
         # any) starts with a clean gate. `_paused_issue_ids` is per-issue
         # and is intentionally preserved: it's what lets `_eligible`
@@ -1368,6 +1403,14 @@ class Orchestrator:
                     total_turns=debug.completed_turn_count,
                     max_total_turns=max_total_turns,
                 )
+                if cfg is not None and cfg.agent.auto_commit_on_done:
+                    await commit_workspace_on_done(
+                        entry.workspace_path,
+                        identifier=entry.issue.identifier,
+                        title=entry.issue.title,
+                        exit_reason=reason,
+                        state=entry.issue.state,
+                    )
                 return
             self._completed.add(issue_id)
             if cfg is not None and cfg.agent.auto_commit_on_done:
@@ -1421,8 +1464,9 @@ class Orchestrator:
 
         Pops the entry from `_running` / `_claimed` and queues a backoff
         retry. The original `worker_task` stays cancelled — if it ever
-        unblocks, its `finally` chain hits `_on_worker_exit`, which is a
-        no-op on a missing entry, so this is race-safe.
+        unblocks, its `finally` chain hits `_on_worker_exit`, which verifies
+        task identity before touching any replacement entry, so this is
+        race-safe.
         """
         self._running.pop(issue_id, None)
         self._claimed.discard(issue_id)

@@ -665,6 +665,58 @@ def test_on_worker_exit_respects_auto_commit_off(monkeypatch):
     asyncio.run(_run())
 
 
+def test_stale_worker_exit_does_not_pop_replaced_running_entry():
+    """A force-ejected worker must not steal the entry from its redispatch.
+
+    Force-eject frees the slot while the old task may still be unwinding.
+    If retry dispatch installs a fresh entry first, stale cleanup must leave
+    that live worker's running row and pause event intact.
+    """
+    orch = _orch()
+    issue = _issue("MT-STALE", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+
+        async def _stale() -> None:
+            return None
+
+        async def _live() -> None:
+            await asyncio.sleep(3600)
+
+        stale_task = asyncio.create_task(_stale(), name="stale-worker")
+        await stale_task
+        live_task = asyncio.create_task(_live(), name="live-worker")
+        pause_event = asyncio.Event()
+        entry = RunningEntry(
+            issue=issue,
+            started_at=datetime.now(timezone.utc),
+            retry_attempt=1,
+            worker_task=live_task,
+            workspace_path=Path("/tmp/ws-live"),
+        )
+        orch._running[issue.id] = entry
+        orch._pause_events[issue.id] = pause_event
+        try:
+            await orch._on_worker_exit(
+                issue.id,
+                reason="normal",
+                error=None,
+                exiting_task=stale_task,
+            )
+
+            assert orch._running.get(issue.id) is entry
+            assert orch._pause_events.get(issue.id) is pause_event
+            assert issue.id not in orch._retry
+        finally:
+            live_task.cancel()
+            await asyncio.gather(live_task, return_exceptions=True)
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def _replace_agent_field(cfg, **agent_overrides):
     """Return a new ServiceConfig with `agent` swapped for an updated AgentConfig."""
     from dataclasses import replace
@@ -1211,6 +1263,35 @@ def test_normal_exit_does_not_continue_after_total_turn_budget():
         assert issue.id not in orch._retry
         assert issue.id in orch._turn_budget_exhausted
         assert not orch._eligible(issue, cfg, owning_retry=False)
+
+    asyncio.run(_run())
+
+
+def test_normal_exit_commits_before_stopping_at_total_turn_budget(monkeypatch):
+    orch = _orch()
+    issue = _issue("MT-BUDGET", state="Todo")
+    cfg = _make_config()
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=2,
+            max_total_turns=2,
+            auto_commit_on_done=True,
+        ),
+    )
+    entry = _install_running_entry(orch, issue)
+    entry.turn_count = 2
+    captured = _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+        assert len(captured) == 1
+        assert captured[0]["identifier"] == "MT-BUDGET"
+        assert issue.id not in orch._retry
+        assert issue.id in orch._turn_budget_exhausted
 
     asyncio.run(_run())
 
