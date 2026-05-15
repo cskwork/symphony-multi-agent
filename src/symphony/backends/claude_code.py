@@ -199,7 +199,7 @@ class ClaudeCodeBackend:
                 )
                 raise TurnFailed(err_msg)
 
-            if terminal.get("is_error"):
+            if _is_error_result(terminal):
                 payload = {**terminal, "stderr_tail": list(self._stderr_tail)}
                 await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(
@@ -371,3 +371,18 @@ def _extract_text(message: dict[str, Any]) -> str:
             if isinstance(text, str) and text:
                 return text
     return ""
+
+
+def _is_error_result(event: dict[str, Any]) -> bool:
+    subtype = str(event.get("subtype") or "").lower()
+    if subtype == "success":
+        return False
+    if subtype.startswith("error"):
+        return True
+
+    value = event.get("is_error")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)

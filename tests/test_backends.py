@@ -23,7 +23,7 @@ from symphony.backends import (
     BackendInit,
     build_backend,
 )
-from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text
+from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text, _is_error_result
 from symphony.backends.codex import (
     CodexAppServerBackend,
     NOTIF_ITEM_COMPLETED,
@@ -336,6 +336,13 @@ def test_claude_usage_accumulates_across_turns(tmp_path: Path) -> None:
     assert usage["input_tokens"] == 165
     assert usage["output_tokens"] == 60
     assert usage["total_tokens"] == 225
+
+
+def test_claude_success_result_with_string_false_is_not_failure() -> None:
+    assert _is_error_result({"type": "result", "subtype": "success", "is_error": "false"}) is False
+    assert _is_error_result({"type": "result", "subtype": "success", "is_error": False}) is False
+    assert _is_error_result({"type": "result", "subtype": "error_max_turns", "is_error": "false"}) is True
+    assert _is_error_result({"type": "result", "is_error": "true"}) is True
 
 
 def test_gemini_session_id_synthesized(tmp_path: Path) -> None:
