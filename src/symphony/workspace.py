@@ -202,20 +202,27 @@ class WorkspaceManager:
         rc = result.returncode or 0
         stderr_bytes = result.stderr or b""
         stdout_bytes = result.stdout or b""
+        stderr_text = _truncate(stderr_bytes.decode("utf-8", errors="replace")).strip()
+        stdout_text = _truncate(stdout_bytes.decode("utf-8", errors="replace")).strip()
         if rc != 0:
             log.error(
                 "hook_failed",
                 hook=name,
                 cwd=str(cwd),
                 returncode=rc,
-                stderr=_truncate(stderr_bytes.decode("utf-8", errors="replace")),
+                stderr=stderr_text,
             )
-            raise SymphonyError(f"hook {name} exited {rc}", hook=name, returncode=rc)
+            message = f"hook {name} exited {rc}"
+            if stderr_text:
+                message = f"{message}; stderr: {stderr_text}"
+            elif stdout_text:
+                message = f"{message}; stdout: {stdout_text}"
+            raise SymphonyError(message, hook=name, returncode=rc)
         log.info(
             "hook_completed",
             hook=name,
             cwd=str(cwd),
-            stdout=_truncate(stdout_bytes.decode("utf-8", errors="replace")),
+            stdout=stdout_text,
         )
 
 

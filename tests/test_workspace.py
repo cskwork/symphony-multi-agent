@@ -100,6 +100,21 @@ async def test_after_create_failure_aborts(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_after_create_failure_surfaces_stderr(tmp_path):
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        _hooks(after_create="echo 'requires Python >=3.12,<3.13' >&2; exit 7"),
+    )
+
+    with pytest.raises(SymphonyError) as exc_info:
+        await mgr.create_or_reuse("MT-3")
+
+    message = str(exc_info.value)
+    assert "hook after_create exited 7" in message
+    assert "requires Python >=3.12,<3.13" in message
+
+
+@pytest.mark.asyncio
 async def test_before_run_aborts_attempt(tmp_path):
     mgr = WorkspaceManager(tmp_path / "ws", _hooks(before_run="exit 9"))
     ws = await mgr.create_or_reuse("MT-4")

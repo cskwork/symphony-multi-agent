@@ -161,7 +161,12 @@ brief reflects a quiet workspace.
 4. Make sure your `before_run` / `after_create` hooks land the agent in
    a workspace where the test suite, target API, or browser harness is
    actually runnable. The QA stage is only as good as the workspace it
-   runs in.
+   runs in. For private repositories, save credentials in the local Git
+   credential helper and keep `GIT_TERMINAL_PROMPT=0` in automation so
+   failed auth exits instead of hanging. For target repos with strict
+   runtime requirements, pin the interpreter/toolchain in the hook
+   (`PYTHON_BIN`, `NODE_VERSION`, etc.) instead of relying on the host
+   default.
 5. Decide whether `llm-wiki/` lives in the same repo as the source (the
    default; Learn commits wiki edits onto the ticket's branch) or in a
    sibling repo. Either works; keep it adjacent to `kanban/` so Explore
