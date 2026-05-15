@@ -6,7 +6,9 @@ launches `symphony tui` or the headless service:
 - Port for the JSON API is bindable (catches the EADDRINUSE that crashed the
   start path with a raw OSError).
 - The agent CLI matching `agent.kind` is on `$PATH`.
-- `hooks.after_create` is not the shipped placeholder `my-org/my-repo` URL.
+- `hooks.after_create` is not a stale placeholder `my-org/my-repo` URL
+  (relevant when the operator overrode the worktree default with a
+  clone-mode hook but forgot to change the remote).
 - `workspace.root` exists and is writable.
 - File-tracker `tracker.board_root` exists; Linear-tracker `api_key` resolves.
 
@@ -26,6 +28,7 @@ import socket
 import sys
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Literal
 
 from ._shell import _is_wsl_launcher, resolve_bash
@@ -91,12 +94,38 @@ def check_agent_cli(cfg: ServiceConfig) -> CheckResult:
     binary = argv[0]
     # `python -m symphony.mock_codex` style — find the interpreter, not the module.
     located = shutil.which(binary)
+    if located is None and binary == "python":
+        located = sys.executable
     if located is None:
         return CheckResult(name, "fail", f"{binary!r} not on $PATH (configured: {command!r})")
     return CheckResult(name, "pass", f"{binary} → {located}")
 
 
 _PLACEHOLDER_TOKENS = ("my-org/my-repo", "my-org:my-repo")
+
+
+def check_pi_auth(cfg: ServiceConfig) -> CheckResult:
+    """When agent.kind=pi, warn if `~/.pi/agent/auth.json` is missing.
+
+    Without it, the first dispatched turn spawns `pi --mode json` which exits
+    immediately with an unauth error — cryptic when surfaced as a generic
+    `turn_failed`. Catching it here is non-fatal (warn) because pi can also
+    pick up auth from PI_API_KEY-style env var setups; we only flag the
+    common cached-OAuth case.
+    """
+    name = "agent.kind=pi.auth"
+    if cfg.agent.kind != "pi":
+        return CheckResult(name, "pass", "not pi (skipped)")
+    auth = Path.home() / ".pi" / "agent" / "auth.json"
+    if auth.exists():
+        return CheckResult(name, "pass", f"{auth} present")
+    return CheckResult(
+        name,
+        "warn",
+        f"{auth} not found — run `pi` and `/login` once, or ensure your"
+        " provider env var is set, otherwise every dispatch will fail at the"
+        " first turn.",
+    )
 
 
 def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
@@ -109,7 +138,8 @@ def check_after_create_hook(cfg: ServiceConfig) -> CheckResult:
                 "hooks.after_create",
                 "fail",
                 f"contains placeholder {token!r} — every dispatch will fail with rc=128. "
-                "Replace with a real clone target or `: noop`.",
+                "Switch to the worktree default (see WORKFLOW.file.example.md) "
+                "or replace with a real clone target / `: noop`.",
             )
     return CheckResult("hooks.after_create", "pass", "looks customized")
 
@@ -206,6 +236,7 @@ def run_checks(cfg: ServiceConfig, host: str = "127.0.0.1") -> list[CheckResult]
         check_port(cfg, host=host),
         check_shell(),
         check_agent_cli(cfg),
+        check_pi_auth(cfg),
         check_after_create_hook(cfg),
         check_workspace_root(cfg),
         check_tracker(cfg),

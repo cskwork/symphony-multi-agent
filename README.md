@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests: 164 passing](https://img.shields.io/badge/tests-164%20passing-brightgreen.svg)](#tests)
+[![Tests: 205 passing](https://img.shields.io/badge/tests-205%20passing-brightgreen.svg)](#tests)
 
 > Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
 > orchestrator, with a Jira-style Kanban board rendered straight in your
@@ -20,29 +20,24 @@ and accumulated tokens. Live indicators: ● running, ↻ retry queued, ✓ done
 <summary>Plain-text version (for terminals viewing raw README)</summary>
 
 ```text
-  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=2  retrying=1  generated_at
-                                                                                                          2026-05-09T03:48:09Z
+  agent=codex  tracker=linear  workflow=WORKFLOW.md  lang=en   running=2  retrying=1   │  tokens in=84,200 out=27,640 total=111,840
+                                                                                       │  rate-limits=requests_remaining=4823, tokens_remaining=1.2M
 
-╭───────────────── Todo (3) ─────────────────╮      ╭───────────── In Progress (2) ──────────────╮
-│    DEMO-120                                │      │    DEMO-104  ●                             │
-│   Migrate auth middleware to async  P1     │      │   Fix race condition in pagination cursor  │
-│   #backend  #tech-debt                     │      │     P1                                     │
-│                                            │      │   turn 4  turn_completed  20,180 tok       │
-│    DEMO-111  ↻                             │      │   Patched cursor advance; running tests... │
-│   Refactor cache invalidation helper  P2   │      │                                            │
-│   retry #2  turn_error: Turn timed out     │      │    DEMO-098  ●                             │
-│                                            │      │   Add /api/search rate limiting  P2        │
-│    DEMO-121                                │      │   turn 2  turn_completed  11,310 tok       │
-│   Wire feature flag for new dashboard  P2  │      │   Added token-bucket middleware…           │
-│   blocked by DEMO-098                      │      ╰────────────────────────────────────────────╯
-╰────────────────────────────────────────────╯
-╭──────────────── Review (1) ────────────────╮      ╭───────────────── Done (2) ─────────────────╮
-│    DEMO-122                                │      │    DEMO-088   DEMO-091                     │
-│   Doc: contributor onboarding guide  P3    │      │   chore work (deps bump, dead-code drop)   │
-│   #docs                                    │      │   #chore                                   │
-╰────────────────────────────────────────────╯      ╰────────────────────────────────────────────╯
+╭── Todo (3) ──────╮ ╭── In Progress (2) ──╮ ╭── Review (1) ──╮ ╭── Done (2) ──╮ ╭── Archive (1) ──╮ ╭── detail ───────────────────────╮
+│  DEMO-120  P1    │ │  DEMO-104  ●  P1    │ │  DEMO-122  P3  │ │  DEMO-088    │ │  DEMO-074       │ │  DEMO-104                       │
+│  Migrate auth …  │ │  Fix race condi…    │ │  Doc: contri…  │ │  Drop dead-… │ │  Old experim…   │ │  Fix race condition in pagina…  │
+│  #backend …      │ │  turn 4  20,180t    │ │  #docs         │ │  DEMO-091    │ │                 │ │                                 │
+│                  │ │  Patched cursor…    │ ╰────────────────╯ │  Bump deps…  │ ╰─────────────────╯ │  state=In Progress              │
+│  DEMO-111  ↻ P2  │ │                     │                    ╰──────────────╯                     │  runtime=running                │
+│  Refactor cach…  │ │  DEMO-098  ●  P2    │                                                         │  turn=4                         │
+│  retry #2  tur…  │ │  Add /api/sear…     │                                                         │  in=14,200  out=5,980           │
+│                  │ │  turn 2  11,310t    │                                                         │  total=20,180                   │
+│  DEMO-121  P2    │ │  Added token-bu…    │                                                         │  Patched cursor advance;        │
+│  Wire feature …  │ ╰─────────────────────╯                                                         │  running test suite...          │
+│  blocked by D…   │                                                                                 ╰─────────────────────────────────╯
+╰──────────────────╯
 
-  tokens  in=84,200  out=27,640  total=111,840   runtime=412.7s   rate-limits=requests_remaining=4823, tokens_remaining=1.2M
+q quit · r refresh · enter details · 1-9 zoom lane · t/T page lanes · d density · p detail-pane · L language · a archive · / filter · ?
 ```
 
 </details>
@@ -60,9 +55,11 @@ adds:
    - **Pi** — `pi --mode json -p ""` (JSONL events, per-turn subprocess with
      `--session` resume; supports Anthropic / OpenAI / Gemini / Bedrock backends
      under one CLI — see [pi.dev](https://pi.dev))
-2. A **Jira-style CLI Kanban TUI** built on `rich` that replaces the upstream
-   server-rendered HTML dashboard. Columns are tracker states; cards show the
-   active agent, turn count, last event, and accumulated tokens.
+2. A **Jira-style CLI Kanban TUI** built on [Textual](https://textual.textualize.io)
+   that replaces the upstream server-rendered HTML dashboard. Columns are
+   tracker states; cards show the active agent, turn count, last event, and
+   accumulated tokens. Cards are focusable, the mouse wheel scrolls each lane,
+   and pressing `enter` on a card opens a full-detail modal.
 
 The orchestrator, scheduler, retry policy, workspace manager, tracker layer,
 and prompt renderer are unchanged from upstream — this fork is a thin layer
@@ -133,7 +130,7 @@ hooks:
   after_create: ": noop"
   before_run:   ": noop"
   after_run:    "echo done"
-agent:  { kind: codex, max_concurrent_agents: 2, max_turns: 3 }
+agent:  { kind: codex, max_concurrent_agents: 2, max_turns: 3, max_total_turns: 60 }
 codex:  { command: python -m symphony.mock_codex }
 server: { port: 9999 }
 ---
@@ -172,7 +169,7 @@ Output (one line per check):
 ```
 PASS  server.port=9999              127.0.0.1:9999 is free
 PASS  agent.kind=claude             claude → /usr/local/bin/claude
-FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Replace with a real clone target or `: noop`.
+FAIL  hooks.after_create            contains placeholder 'my-org/my-repo' — every dispatch will fail with rc=128. Switch to the worktree default or replace with a real clone / `: noop`.
 PASS  workspace.root=~/symphony_workspaces  exists and is writable
 PASS  tracker.board_root            ./kanban (3 tickets)
 ```
@@ -209,7 +206,7 @@ points at Linear and needs an API key):
 cp WORKFLOW.file.example.md WORKFLOW.md
 ```
 
-Three blocks matter for first-run sanity:
+Four blocks matter for first-run sanity:
 
 ```yaml
 tracker:
@@ -223,19 +220,34 @@ workspace:
 
 hooks:
   # Each ticket gets its own workspace at workspace.root/<ID>.
-  # after_create runs once when that workspace is created.
+  # The shipped default attaches it as a `git worktree` of the host repo
+  # on a `symphony/<ID>` branch — host working tree stays untouched.
+  # Use `: noop` instead while you experiment without a host repo.
   after_create: |
-    : noop                       # ← replace with `git clone …` for real work
+    : noop                       # ← swap for the worktree default in WORKFLOW.file.example.md
   before_run: |
     : noop                       # runs before every agent turn
   after_run: |
     echo "run finished at $(date)"
+
+prompts:
+  # Symphony sends base plus only the file for the ticket's current state.
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
 ```
 
-> ⚠ The shipped `WORKFLOW.md` uses `git clone --depth=1 git@github.com:my-org/my-repo.git .`
-> as a placeholder. If left unchanged, **every dispatch fails immediately**
-> on the SSH clone (`returncode=128`, `worker_exit reason=error`). Either
-> point it at a real repo or use `: noop` while you experiment.
+> ⚠ The shipped `WORKFLOW.example.md` / `WORKFLOW.file.example.md` default to
+> attaching the per-ticket workspace as a **git worktree** of the host repo
+> (the directory containing `WORKFLOW.md`) on a `symphony/<ID>` branch. The
+> host working tree is never disturbed; merge results back with
+> `git -C <host> merge symphony/<ID>` (or open a PR from that branch) when
+> you're satisfied — explicit operator action, never automatic.
+>
+> If your code lives in a *different* remote than the WORKFLOW.md repo,
+> swap the hook for `git clone <remote> .` instead. While experimenting
+> without any repo, use `: noop`.
 
 ### 3. Add a ticket
 
@@ -306,7 +318,7 @@ symphony board mv TASK-1 Blocked         # forces a state transition
 
 The orchestrator re-evaluates on the next poll tick. Manual transitions are
 for unsticking — normally the agent transitions tickets itself per the
-prompt instructions in `WORKFLOW.md`.
+stage-specific prompt files configured by `WORKFLOW.md`.
 
 ### How dispatch works in one diagram
 
@@ -327,6 +339,28 @@ prompt instructions in `WORKFLOW.md`.
                                                                         ▼
                                                                   after_run hook
 ```
+
+## Per-ticket artefacts
+
+Every artefact a ticket produces lives under `docs/<TICKET-ID>/<stage>/`. See [`docs/PIPELINE.md`](docs/PIPELINE.md#per-ticket-artefact-root) for the layout, what to commit, and the `${LLM_WIKI_PATH:-./llm-wiki}/` carve-out.
+
+## Custom prompts
+
+`WORKFLOW.md` can point at editable prompt files under `docs/`:
+
+```yaml
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    Explore: ./docs/symphony-prompts/file/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+```
+
+Symphony sends `base` plus only the prompt file for the ticket's current
+state, keeping each turn smaller than the old all-stage prompt. If the
+`prompts` block is absent, the inline body of `WORKFLOW.md` still works as
+the legacy fallback.
 
 ---
 
@@ -365,7 +399,40 @@ runtime indicator:
 - **↻ yellow** — in retry queue, shows `retry #N` and the last error
 - **✓ green** — completed in this session
 
-Quit with `Ctrl-C` (clean shutdown drains active workers).
+Key bindings (also auto-listed in the footer):
+
+| Key                | Action                                       |
+|--------------------|----------------------------------------------|
+| `q`                | Quit (drains active workers cleanly)         |
+| `r`                | Force a refresh + re-poll the tracker        |
+| `?`                | Show all key bindings as a notification      |
+| `tab` / `shift+tab`| Move focus to next / previous card or lane   |
+| `j` / `↓`          | Scroll focused lane down one row             |
+| `k` / `↑`          | Scroll focused lane up one row               |
+| `space` / `pgdn`   | Page down                                    |
+| `b` / `pgup`       | Page up                                      |
+| `g` / `home`       | Jump to top                                  |
+| `G` / `end`        | Jump to bottom                               |
+| `enter`            | Open the focused card's full-detail modal    |
+| `esc` / `q`        | Close the modal (when one is open)           |
+
+Mouse: clicking a card focuses it, the wheel scrolls its lane.
+
+#### One-shot launchers
+
+For developers who don't want to remember the full `symphony tui` invocation,
+the repo ships two launcher scripts that prefer `.venv/bin/symphony` over
+`PATH`, run `symphony doctor` first, then open the TUI in a new terminal
+window:
+
+```bash
+./tui-open.sh                     # macOS / Linux — uses iTerm or Terminal.app
+./tui-open.sh path/to/WORKFLOW.md # explicit workflow path
+tui-open.bat                      # Windows — uses cmd /k
+```
+
+Both scripts abort the launch if `doctor` reports a FAIL so you do not paint
+the alt-screen on top of unreadable preflight output.
 
 ### File-based Kanban tracker
 
@@ -397,9 +464,11 @@ src/symphony/
   agent.py             back-compat shim re-exporting backends.* symbols
   workflow.py          typed config — adds AgentConfig.kind + Claude/Gemini/Pi configs
   orchestrator.py      unchanged scheduler; uses build_backend() factory
-  tui.py               rich Kanban TUI (replaces server.py dashboard)
+  tui.py               Textual Kanban TUI (replaces server.py dashboard)
   server.py            JSON API only (HTML root removed)
   cli.py               adds `tui` subcommand / `--tui` flag
+tui-open.sh            cross-platform launcher (macOS / Linux): doctor preflight + open TUI in a new terminal window
+tui-open.bat           Windows equivalent
   ...
 ```
 
@@ -409,9 +478,10 @@ src/symphony/
 pytest -q
 ```
 
-164 tests pass: the upstream conformance suite plus the backend unit tests
-covering the factory, event normalization, Claude / Pi usage accumulation,
-Gemini session synthesis, and Pi failure-reason detection. Subprocess-driven
+205 tests pass (2 skipped): the upstream conformance suite plus the backend
+unit tests covering the factory, event normalization, Claude / Pi usage
+accumulation, Gemini session synthesis, and Pi failure-reason detection,
+plus Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
 integration tests against real CLIs are intentionally not in CI — run them
 locally.
 
@@ -443,14 +513,26 @@ The `AgentBackend` Protocol hides these differences. The orchestrator only
 sees normalized events (`session_started`, `turn_completed`, `turn_failed`,
 …) and the latest usage / rate-limit snapshots.
 
-### What the TUI deliberately does not do
+### What the TUI does and does not do
 
-- No mouse interaction, no card drag-drop. It is a read-only board.
-- No drill-down view — use `/api/v1/<identifier>` for raw issue debug.
-- No log tailing — agent output goes to stderr/log files, not the TUI.
+The board is observer-only: cards move when the agent rewrites the underlying
+ticket file (file tracker) or transitions the issue (Linear), never as a
+direct UI action. That matches the upstream design philosophy — the
+orchestrator is the source of truth and the UI is a thin reflection.
 
-This matches the upstream design philosophy: the orchestrator is the source
-of truth, the UI is a thin observer.
+What you *can* do interactively:
+
+- Focus any card with `tab` / `shift+tab` or by clicking it.
+- Scroll a lane with the mouse wheel, `j` / `k`, or page keys.
+- Open a focused card's full description in a modal with `enter`.
+
+What is intentionally out of scope:
+
+- **No card drag-drop.** Move tickets via `symphony board mv ID State`
+  (file tracker) or in your tracker UI directly.
+- **No agent-output log pane.** Agent stdout/stderr goes to the structured
+  log; tail it with `tail -F log/symphony.log` in a side terminal.
+- **No write actions to the tracker** beyond what the agent does itself.
 
 ## What is *not* implemented
 
@@ -502,8 +584,11 @@ upstream Apache-2.0 licensed work provides the orchestrator, the scheduler,
 and the workspace lifecycle that make this fork possible. See `NOTICE` for
 attribution details.
 
-The TUI uses Will McGugan's [rich](https://github.com/Textualize/rich)
-library for terminal rendering.
+The TUI is built on Will McGugan's [Textual](https://textual.textualize.io)
+framework, with [rich](https://github.com/Textualize/rich) used directly for
+text styling inside cards.
+
+Pipeline stage rules adapt the evidence-first ideas of [cskwork/backend-dev-skills](https://github.com/cskwork/backend-dev-skills) (MIT).
 
 ## License
 

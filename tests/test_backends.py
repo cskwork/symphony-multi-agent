@@ -13,6 +13,9 @@ from pathlib import Path
 
 import pytest
 
+import symphony.backends.codex as codex_module
+import symphony.backends.gemini as gemini_module
+import symphony.backends.pi as pi_module
 from symphony.backends import (
     EVENT_OTHER_MESSAGE,
     EVENT_TURN_COMPLETED,
@@ -20,7 +23,7 @@ from symphony.backends import (
     BackendInit,
     build_backend,
 )
-from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text
+from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text, _is_error_result
 from symphony.backends.codex import (
     CodexAppServerBackend,
     NOTIF_ITEM_COMPLETED,
@@ -111,6 +114,26 @@ def _noop_event(_: dict) -> "asyncio.Future[None]":
     return fut
 
 
+class _FakeProcess:
+    """Process double that fails if raw ``proc.wait()`` is used."""
+
+    pid = 123456
+    returncode = None
+
+    def __init__(self) -> None:
+        self.terminated = False
+        self.killed = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+    async def wait(self) -> int:
+        raise AssertionError("raw proc.wait() should not be used")
+
+
 def test_factory_returns_codex_backend(tmp_path: Path) -> None:
     cfg = _make_cfg("codex", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
@@ -182,6 +205,93 @@ def test_factory_rejects_unknown_kind(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_codex_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._process = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(codex_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
+@pytest.mark.asyncio
+async def test_gemini_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gemini shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._active_proc = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(gemini_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
+@pytest.mark.asyncio
+async def test_pi_stop_reaps_with_safe_proc_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pi shutdown must bypass asyncio child watchers when reaping."""
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    proc = _FakeProcess()
+    backend._active_proc = proc  # type: ignore[assignment]
+    calls: list[int] = []
+
+    async def fake_safe_proc_wait(process, *, timeout=None):
+        calls.append(process.pid)
+        process.returncode = 0
+        return 0
+
+    monkeypatch.setattr(pi_module, "safe_proc_wait", fake_safe_proc_wait, raising=False)
+
+    await backend.stop()
+
+    assert proc.terminated is True
+    assert proc.killed is False
+    assert calls == [proc.pid]
+
+
 def test_codex_event_name_normalization() -> None:
     assert _normalize_event_name("thread/turn/completed") == EVENT_TURN_COMPLETED
     assert _normalize_event_name("thread/turn/failed") == EVENT_TURN_FAILED
@@ -228,6 +338,13 @@ def test_claude_usage_accumulates_across_turns(tmp_path: Path) -> None:
     assert usage["total_tokens"] == 225
 
 
+def test_claude_success_result_with_string_false_is_not_failure() -> None:
+    assert _is_error_result({"type": "result", "subtype": "success", "is_error": "false"}) is False
+    assert _is_error_result({"type": "result", "subtype": "success", "is_error": False}) is False
+    assert _is_error_result({"type": "result", "subtype": "error_max_turns", "is_error": "false"}) is True
+    assert _is_error_result({"type": "result", "is_error": "true"}) is True
+
+
 def test_gemini_session_id_synthesized(tmp_path: Path) -> None:
     cfg = _make_cfg("gemini", workspace_root=tmp_path)
     cwd = tmp_path / "ws"
@@ -235,7 +352,7 @@ def test_gemini_session_id_synthesized(tmp_path: Path) -> None:
     backend = GeminiBackend(
         BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
     )
-    asyncio.get_event_loop().run_until_complete(
+    asyncio.run(
         backend.start_session(initial_prompt="hi", issue_title="Fix login")
     )
     sid = backend.session_id
@@ -596,3 +713,236 @@ pi:
     cfg = build_service_config(wf)
     assert "--no-session" in cfg.pi.command
     assert cfg.pi.resume_across_turns is False
+
+
+# --- stderr ring buffer + compaction event surfacing (improve/observability) ---
+
+def test_pi_stderr_blob_handles_empty_buffer(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend._stderr_blob() == ""
+
+
+def test_pi_stderr_blob_truncates_long_tail(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    for i in range(40):
+        backend._stderr_tail.append("x" * 60 + str(i))
+    blob = backend._stderr_blob()
+    assert len(blob) <= 400
+    # Ring buffer is bounded — only the last 20 lines survive even before
+    # blob-level truncation kicks in.
+    assert len(backend._stderr_tail) == 20
+
+
+def test_claude_stderr_blob_present(tmp_path: Path) -> None:
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    backend._stderr_tail.append("Error: bad token")
+    backend._stderr_tail.append("Retrying once")
+    blob = backend._stderr_blob()
+    assert "bad token" in blob
+    assert "Retrying" in blob
+    assert " | " in blob  # joiner
+
+
+def test_pi_consume_stream_surfaces_compaction_events(tmp_path: Path) -> None:
+    """`compaction_start` / `compaction_end` events flow through to
+    EVENT_COMPACTION with phase + reason fields normalized."""
+    from symphony.backends import EVENT_COMPACTION, EVENT_AGENT_RETRY
+
+    captured: list[dict] = []
+
+    async def collect(ev):
+        captured.append(ev)
+
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=collect)
+    )
+
+    # Fake stream: session, compaction_start, compaction_end, auto_retry_*, agent_end.
+    lines = [
+        b'{"type":"session","version":3,"id":"abc"}\n',
+        b'{"type":"compaction_start","reason":"threshold"}\n',
+        b'{"type":"compaction_end","reason":"threshold","aborted":false,'
+        b'"willRetry":false,"result":{"tokensBefore":48000,'
+        b'"firstKeptEntryId":"x1"}}\n',
+        b'{"type":"auto_retry_start","attempt":1,"maxAttempts":3,'
+        b'"delayMs":1000,"errorMessage":"upstream 503"}\n',
+        b'{"type":"auto_retry_end","success":true,"attempt":1}\n',
+        b'{"type":"agent_end","messages":[]}\n',
+    ]
+
+    class _FakeStdout:
+        def __init__(self, lines):
+            self._lines = list(lines)
+        async def readline(self):
+            return self._lines.pop(0) if self._lines else b""
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = _FakeStdout(lines)
+            self.stderr = None
+            self.returncode = 0
+
+    asyncio.run(
+        backend._consume_stream(_FakeProc())
+    )
+    kinds = [c["event"] for c in captured]
+    # We expect: session_started, compaction(start), compaction(end),
+    # agent_retry(start), agent_retry(end). agent_end is terminal — handler
+    # returns it but doesn't emit.
+    assert EVENT_COMPACTION in kinds
+    assert kinds.count(EVENT_COMPACTION) == 2
+    assert EVENT_AGENT_RETRY in kinds
+    assert kinds.count(EVENT_AGENT_RETRY) == 2
+
+    compaction_events = [c for c in captured if c["event"] == EVENT_COMPACTION]
+    assert compaction_events[0]["payload"]["phase"] == "start"
+    assert compaction_events[0]["payload"]["reason"] == "threshold"
+    assert compaction_events[1]["payload"]["phase"] == "end"
+    assert compaction_events[1]["payload"]["tokens_before"] == 48000
+    assert compaction_events[1]["payload"]["first_kept_entry_id"] == "x1"
+
+    retry_events = [c for c in captured if c["event"] == EVENT_AGENT_RETRY]
+    assert retry_events[0]["payload"]["phase"] == "start"
+    assert retry_events[0]["payload"]["attempt"] == 1
+    assert retry_events[0]["payload"]["max_attempts"] == 3
+    assert retry_events[1]["payload"]["phase"] == "end"
+    assert retry_events[1]["payload"]["success"] is True
+
+
+# --- Codex 0.130+ thread/tokenUsage/updated v2 schema (telemetry-bug regression) ---
+
+@pytest.mark.asyncio
+async def test_codex_handles_v2_token_usage_camelcase_shape(tmp_path: Path) -> None:
+    """Regression: codex 0.130 changed the `thread/tokenUsage/updated`
+    payload schema. Before this fix, every codex turn reported 0 tokens
+    because the dispatcher only knew the legacy `params.totals.{snake_case}`
+    shape, while codex now sends `params.tokenUsage.total.{camelCase}`.
+
+    Probe shape captured from a real symphony+codex run:
+      {method: thread/tokenUsage/updated, params: {threadId, turnId,
+        tokenUsage: {total: {totalTokens, inputTokens, cachedInputTokens,
+                              outputTokens, reasoningOutputTokens},
+                     last: {...}, modelContextWindow: 258400}}}
+    """
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "threadId": "019e0f77-db36-7183-b09c-da8e511f56a5",
+                "turnId": "019e0f77-e068-7572-84ad-575586b5c63b",
+                "tokenUsage": {
+                    "total": {
+                        "totalTokens": 32595,
+                        "inputTokens": 32325,
+                        "cachedInputTokens": 3456,
+                        "outputTokens": 270,
+                        "reasoningOutputTokens": 170,
+                    },
+                    "last": {
+                        "totalTokens": 999,  # ignored — total wins
+                        "inputTokens": 999,
+                        "outputTokens": 99,
+                    },
+                    "modelContextWindow": 258400,
+                },
+            },
+        }
+    )
+    # cachedInputTokens folds into input_tokens; reasoningOutputTokens folds
+    # into output_tokens. total_tokens is recomputed as folded_in + folded_out
+    # so the invariant `total_tokens == input_tokens + output_tokens` holds
+    # — codex's own narrower `totalTokens` (32595, which excludes cache and
+    # reasoning) is intentionally ignored.
+    assert backend.latest_usage == {
+        "input_tokens": 32325 + 3456,             # 35781
+        "output_tokens": 270 + 170,               # 440
+        "total_tokens": (32325 + 3456) + (270 + 170),  # 36221, NOT 32595
+    }
+    # Three-bucket invariant.
+    assert (
+        backend.latest_usage["total_tokens"]
+        == backend.latest_usage["input_tokens"] + backend.latest_usage["output_tokens"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_codex_v2_falls_back_to_last_when_total_absent(tmp_path: Path) -> None:
+    """When `tokenUsage.total` is missing, fall back to `tokenUsage.last`."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "tokenUsage": {
+                    "last": {
+                        "inputTokens": 100,
+                        "outputTokens": 20,
+                        "totalTokens": 120,
+                    }
+                },
+            },
+        }
+    )
+    assert backend.latest_usage == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120,
+    }
+
+
+@pytest.mark.asyncio
+async def test_codex_legacy_totals_path_still_works(tmp_path: Path) -> None:
+    """Legacy snake_case `params.totals.*` shape must still parse — covers
+    older codex builds and the upstream mock_codex test fixture."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    await backend._handle_notification(
+        {
+            "method": NOTIF_THREAD_TOKEN_USAGE,
+            "params": {
+                "totals": {
+                    "input_tokens": 50,
+                    "output_tokens": 10,
+                    "total_tokens": 60,
+                }
+            },
+        }
+    )
+    assert backend.latest_usage == {
+        "input_tokens": 50,
+        "output_tokens": 10,
+        "total_tokens": 60,
+    }

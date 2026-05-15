@@ -4,16 +4,23 @@ tracker:
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
   active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
-  terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done]
+  terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done, Archive]
+  # Auto-archive sweep — terminal-state issues whose `updated_at` is older
+  # than `archive_after_days` move to `archive_state` on each poll tick.
+  # Set `archive_after_days: 0` to disable the sweep (TUI `a` hotkey still
+  # works). 30 days is a safe default for visible projects.
+  archive_state: Archive
+  archive_after_days: 30
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
     Todo: "Triage; route to Explore"
     Explore: "Brief from llm-wiki + git + code"
     "In Progress": "TDD loop, draft PR"
-    Review: "Read diff, fix CRITICAL/HIGH"
+    Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
     Learn: "Distill learnings, update llm-wiki"
     Done: "As-Is -> To-Be report"
+    Archive: "Auto-archived after 30 days idle"
 
 polling:
   interval_ms: 30000
@@ -22,18 +29,80 @@ workspace:
   root: ~/symphony_workspaces
 
 hooks:
+  # Default: attach the per-ticket workspace as a git worktree of the
+  # host repo on a symphony/<ID> branch. The host working tree is never
+  # touched. Operator merges back via `git -C <HOST_REPO> merge symphony/<ID>`
+  # (or PR from that branch) — explicit, never automatic.
+  #
+  # If your code lives in a *different* remote than where WORKFLOW.md
+  # sits (common with Linear setups where the config repo is config-only),
+  # replace the worktree commands with a `git clone <remote> .` instead.
   after_create: |
-    git clone --depth=1 git@github.com:my-org/my-repo.git .
+    set -euo pipefail
+    ISSUE_ID="$(basename "$PWD")"
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
+    WORKTREE_PATH="$PWD"
+    BRANCH="symphony/${ISSUE_ID}"
+    cd "$HOST_REPO"
+    [ -d "$WORKTREE_PATH" ] && rmdir "$WORKTREE_PATH"
+    if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+      git worktree add "$WORKTREE_PATH" "$BRANCH"
+    else
+      git worktree add "$WORKTREE_PATH" -b "$BRANCH"
+    fi
+    # Record the fork point so commit_workspace_on_done can `git reset --soft`
+    # back to it and squash all per-turn work into a single ticket commit.
+    git -C "$WORKTREE_PATH" config symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
+    # Linear tracker reads from its API, not the file system, so no
+    # symlink-back step is needed. (For tracker.kind=file, also symlink
+    # kanban/docs/llm-wiki back to $HOST_REPO — see WORKFLOW.file.example.md.)
   before_run: |
-    git fetch origin main
-    git reset --hard origin/main
+    # NEVER `git reset --hard` inside a worktree — it discards in-progress
+    # work between turns. Just refresh remotes; let the agent decide if/when
+    # to rebase.
+    set -uo pipefail
+    git fetch origin main --quiet || true
   after_run: |
+    # Per-turn commit-or-amend. The branch stays at the same number of
+    # commits across turns (amends in place when HEAD is already a `wip:`
+    # commit), but every completed turn is durably written to .git/objects
+    # so even a hard crash (SIGKILL, host reboot) won't lose work. The
+    # orchestrator squashes everything into a single `<ID>: <title>` commit
+    # on exit — see auto_commit_on_done.
+    set -uo pipefail
+    git add -A 2>/dev/null || true
+    if git diff --cached --quiet 2>/dev/null; then
+      echo "run finished at $(date) (no changes)"
+      exit 0
+    fi
+    # Honors any pre-commit hooks in the host repo — if they fail, this
+    # turn's snapshot fails and the next turn picks up where files are.
+    LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
+    if [ "${LAST#wip:}" != "$LAST" ]; then
+      git -c user.email=symphony@local -c user.name=symphony \
+          commit --amend --no-edit >/dev/null 2>&1 || true
+    else
+      git -c user.email=symphony@local -c user.name=symphony \
+          commit -m "wip: turn $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+    fi
     echo "run finished at $(date)"
+  before_remove: |
+    # Detach the worktree before Symphony rmtree's the dir, otherwise
+    # `.git/worktrees/<ID>` lingers until `git worktree prune`. By this
+    # point the orchestrator has already auto-committed any leftover
+    # changes (see agent.auto_commit_on_done).
+    set -uo pipefail
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?}"
+    WORKTREE_PATH="$PWD"
+    git -C "$HOST_REPO" worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
 
 agent:
   kind: codex          # codex | claude | gemini | pi
   max_concurrent_agents: 4
   max_turns: 20
+  # Hard per-ticket budget across continuation attempts. Prevents an
+  # active-state ticket from restarting forever and wasting tokens.
+  max_total_turns: 60
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     Todo: 2
@@ -42,6 +111,12 @@ agent:
     Review: 2
     QA: 2
     Learn: 2
+  # When a ticket reaches Done cleanly, snapshot the workspace into one
+  # git commit (`<identifier>: <title>`). If the workspace is nested
+  # inside an existing repo, the commit lands there; otherwise `git init`
+  # runs first. Set to false if your workspace is an existing repo with
+  # strict commit-style rules you don't want auto-touched.
+  auto_commit_on_done: true
 
 codex:
   command: codex app-server
@@ -84,218 +159,29 @@ server:
 
 tui:
   language: en               # `en` (default) or `ko`. SYMPHONY_LANG env overrides.
-  max_cards_per_column: 6    # cap each column at N cards; rest collapses to "+M more"
+                             # Also drives artefact language: every prompt is
+                             # prefixed with a one-line directive so kanban
+                             # comments and docs/<id>/<stage>/*.md come back in
+                             # the chosen language. `{{ language }}` is also
+                             # exposed to this template for `{% if %}` branches.
+
+prompts:
+  base: ./docs/symphony-prompts/linear/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/linear/stages/todo.md
+    Explore: ./docs/symphony-prompts/linear/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/linear/stages/in-progress.md
+    Review: ./docs/symphony-prompts/linear/stages/review.md
+    QA: ./docs/symphony-prompts/linear/stages/qa.md
+    Learn: ./docs/symphony-prompts/linear/stages/learn.md
+    Done: ./docs/symphony-prompts/linear/stages/done.md
+
 ---
 
-You are picking up issue {{ issue.identifier }}: {{ issue.title }}.
+This workflow uses stage-specific prompt files configured under `prompts`.
+Customize `docs/symphony-prompts/linear/` to change the agent instructions.
+If the `prompts` block is removed, Symphony falls back to this short legacy body.
+
+You are working on {{ issue.identifier }}: {{ issue.title }}.
 Current state: {{ issue.state }}.
-{% if attempt %}This is retry attempt {{ attempt }}. Read the previous Linear
-comment thread first and address the root cause from the prior failure, not the
-symptom.{% endif %}
-
-{% if issue.description %}
-## Description
-
-{{ issue.description }}
-{% endif %}
-
-{% if issue.labels %}Labels: {{ issue.labels | join: ", " }}{% endif %}
-
-{% if issue.blocked_by %}
-This issue depends on:
-{% for blocker in issue.blocked_by %}- {{ blocker.identifier }} ({{ blocker.state }})
-{% endfor %}
-{% endif %}
-
-## Production pipeline (seven stages, no skipping)
-
-Every issue flows through the same gates. Honour the gate that matches
-`{{ issue.state }}`. Each stage owns one transition; never jump ahead.
-
-```
-  Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
-                              \                       \                    ^
-                               +-> Blocked             +-> Blocked          |
-                                                                            |
-                              (QA failure rewinds to In Progress)
-```
-
-`llm-wiki/` is the project's domain knowledge base — one Markdown entry per
-topic, plus an `INDEX.md` that lists them. Explore reads it before any new
-work; Learn writes back to it after QA passes. Treat it as a living memory
-that future tickets depend on. If the directory does not yet exist, the
-first Learn stage that runs creates it.
-
-State transitions and stage notes are written via the `linear_graphql` tool:
-`issueUpdate` for state changes, `commentCreate` for the per-stage notes
-described below. Each stage produces one comment.
-
-## Stage rules
-
-### TRIAGE  -- when state is `Todo`
-
-1. Read the ticket end-to-end. Confirm there is enough information
-   (description, acceptance criteria, blocking links) to start exploring.
-2. If the ticket is under-specified or ambiguous, post a Triage comment
-   listing the missing inputs and transition state to `Blocked`.
-3. Otherwise post a one-line Triage comment ("ticket is actionable; routing
-   to Explore") and transition state to `Explore`. Do no implementation in
-   `Todo` — research belongs in `Explore`.
-
-### EXPLORE  -- when state is `Explore`
-
-You are a domain-knowing researcher walking three lenses in one turn:
-**domain expert** (what does this code mean?), **implementer** (smallest
-sustainable change?), **risk reviewer** (what could go wrong?).
-
-1. Open `llm-wiki/INDEX.md`. Read every entry whose topic plausibly relates
-   to the ticket. Follow links into the entry files. If `llm-wiki/` does
-   not exist yet, note that and continue — Learn will seed it later.
-2. Skim git history for prior work in adjacent areas: for each file the
-   ticket likely touches, run `git log --oneline -- <path>` and read the
-   one or two most relevant commits in full (`git show <sha>`). Capture
-   why prior changes were made, not just what they did.
-3. Read the actual source files end-to-end (not just hunks) so the brief
-   reflects current state, not stale memory.
-4. Apply each lens explicitly and produce one consolidated Explore
-   comment with three sections:
-   - `## Domain Brief` — key facts, invariants, and references
-     (`path:line`, wiki entry titles, commit SHAs) the implementer must
-     know before writing code.
-   - `## Plan Candidates` — 2-3 concrete approaches with trade-offs
-     (complexity, blast radius, reversibility). Be specific about files
-     touched and tests added per option.
-   - `## Recommendation` — the option you choose, the rationale (why
-     this lens won), the risks accepted, and the first failing test
-     the implementer should write.
-5. Transition state to `In Progress`.
-
-### IMPLEMENT  -- when state is `In Progress`
-
-1. Read the Explore Recommendation comment first. Implement the chosen
-   option; do not reopen the plan unless you find a fact the brief got
-   wrong (in which case post a one-line note and proceed).
-2. TDD loop: write the failing test the brief specified, make it pass,
-   refactor. No production code without a test exercising it.
-3. Open a draft PR. Post an Implementation comment with the PR link, the
-   touched files, and the commit-style intent of each change.
-4. Transition state to `Review`.
-
-### REVIEW  -- when state is `Review`
-
-1. Read the diff on the PR (`git diff origin/main...HEAD`). Re-read the
-   touched files end-to-end, not just the hunks.
-2. Apply the checklist: clarity, naming, error handling, security,
-   performance, simplicity, no dead code, no debug prints, no secrets.
-3. Fix every CRITICAL and HIGH issue. Post a Review comment with one
-   bullet per finding (`severity | file:line | fix`).
-4. If unfixable / out of scope: transition state to `Blocked`, post a
-   Blocker comment with what is needed and stop.
-5. Otherwise transition state to `QA`.
-
-### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
-
-A QA pass that only inspects code is a failed QA. Run something and
-capture its output as evidence.
-
-1. Detect the project type and execute the matching real-world check:
-   - **Tests**: run the full suite (`pytest -q`, `npm test`, etc.).
-   - **HTTP API**: capture the As-Is response by hitting the baseline
-     build and the To-Be response by hitting the new build (curl /
-     httpie / `requests`). Diff the two.
-   - **Web UI**: run or author a Playwright / Cypress script that walks
-     the flow end-to-end. Attach screenshots / traces to the PR.
-   - **CLI / script**: run the command and assert exit code plus
-     observable stdout/stderr / file output.
-2. Post a QA Evidence comment listing:
-   - the exact commands run,
-   - their exit codes,
-   - a short excerpt of relevant output (3-10 lines),
-   - links to PR-attached artefacts (screenshots, logs, traces).
-3. If anything fails: transition state back to `In Progress`, post a QA
-   Failure comment describing what regressed, and stop. Do NOT silence,
-   retry, or skip the failing check.
-4. If everything passes: transition state to `Learn`.
-
-### LEARN  -- when state is `Learn`
-
-The point of Learn is to make the next ticket cheaper. Distill what this
-ticket actually taught the team and write it back into `llm-wiki/` so
-future Explore stages can find it.
-
-1. Compare the Explore brief against reality:
-   - Which assumptions held? Which were wrong? Why?
-   - Which constraint, gotcha, or invariant only became visible during
-     implementation, review, or QA?
-   - Which prior wiki entry (if any) was incomplete or misleading?
-2. For each non-trivial finding, update `llm-wiki/`:
-   - If a relevant entry exists, edit it in place. Append to its
-     **Decision log** with a `YYYY-MM-DD | <issue.identifier> | note`
-     line and refresh **Last updated**.
-   - Otherwise create `llm-wiki/<topic-slug>.md` with this exact shape:
-
-     ```
-     # <Topic Title>
-
-     **Summary:** one-paragraph overview (what this domain area is and
-     why a coding agent would need to know it).
-
-     **Invariants & Constraints:**
-     - ...
-
-     **Files of interest:**
-     - `path/to/file.py:123` — what the line region does.
-
-     **Decision log:**
-     - YYYY-MM-DD | <issue.identifier> | what changed and why.
-
-     **Last updated:** YYYY-MM-DD by <issue.identifier>.
-     ```
-
-   - Add or refresh the matching row in `llm-wiki/INDEX.md`
-     (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
-     Create `INDEX.md` with a header row if it does not yet exist.
-3. Commit the wiki edits onto the ticket's PR (same branch — wiki updates
-   are part of the change). Do not push wiki edits in a separate PR.
-4. Post a Learn comment with two sections:
-   - `## Learnings` — bullets of new facts, constraints, or surprises
-     this ticket exposed.
-   - `## Wiki Updates` — list of `llm-wiki/<file>.md` paths created or
-     modified, one line each with a brief changelog.
-5. Transition state to `Done`. If you found nothing genuinely new, say
-   so explicitly in the Learn comment ("no new wiki entries; existing
-   coverage was correct") and still transition.
-
-### DONE  -- when state is `Done`
-
-Terminal. Post a final As-Is -> To-Be Report comment with this exact
-structure:
-
-```
-## As-Is -> To-Be Report
-
-### As-Is
-- <prior behaviour, with evidence: response payload, log line, screenshot link>
-
-### To-Be
-- <new behaviour, with the matching piece of evidence>
-
-### Reasoning
-- Why this approach over the alternatives considered.
-- Trade-offs accepted (performance, complexity, scope).
-- Follow-ups intentionally deferred (with linked tickets).
-
-### Evidence
-- Commands run during QA, with exit codes.
-- Test names, PR-attached artefacts.
-- Links to log lines or dashboards.
-```
-
-Leave the state as `Done` and stop.
-
-## Hard rules
-
-- Never skip a stage. Never mark `Done` without a QA Evidence comment.
-- Never silence failing tests or hide errors. Fix the root cause or move
-  to `Blocked`.
-- Touch only what the issue requires. No drive-by refactors.
+Follow the board state instructions configured for this workflow.

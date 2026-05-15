@@ -1,0 +1,94 @@
+Warning: tools.exclude in settings.json is deprecated and will be removed in 1.0. Migrate to Policy Engine: https://geminicli.com/docs/core/policy-engine/
+Ripgrep is not available. Falling back to GrepTool.
+Tool with name "mcp_context7_resolve-library-id" is already registered. Overwriting.
+Tool with name "mcp_context7_query-docs" is already registered. Overwriting.
+Failed to compile MCP tool output schema (<no $id>): can't resolve reference #/$defs/ScreenInstance from id #. Skipping output validation for this tool.
+{
+  "session_id": "bc0bbf7d-844b-48a8-9f31-8185a0b8efd0",
+  "response": "pong",
+  "stats": {
+    "models": {
+      "gemini-2.5-flash-lite": {
+        "api": {
+          "totalRequests": 1,
+          "totalErrors": 0,
+          "totalLatencyMs": 1405
+        },
+        "tokens": {
+          "input": 4613,
+          "prompt": 4613,
+          "candidates": 35,
+          "total": 4733,
+          "cached": 0,
+          "thoughts": 85,
+          "tool": 0
+        },
+        "roles": {
+          "utility_router": {
+            "totalRequests": 1,
+            "totalErrors": 0,
+            "totalLatencyMs": 1405,
+            "tokens": {
+              "input": 4613,
+              "prompt": 4613,
+              "candidates": 35,
+              "total": 4733,
+              "cached": 0,
+              "thoughts": 85,
+              "tool": 0
+            }
+          }
+        }
+      },
+      "gemini-3-flash-preview": {
+        "api": {
+          "totalRequests": 1,
+          "totalErrors": 0,
+          "totalLatencyMs": 1968
+        },
+        "tokens": {
+          "input": 14269,
+          "prompt": 14269,
+          "candidates": 1,
+          "total": 14291,
+          "cached": 0,
+          "thoughts": 21,
+          "tool": 0
+        },
+        "roles": {
+          "main": {
+            "totalRequests": 1,
+            "totalErrors": 0,
+            "totalLatencyMs": 1968,
+            "tokens": {
+              "input": 14269,
+              "prompt": 14269,
+              "candidates": 1,
+              "total": 14291,
+              "cached": 0,
+              "thoughts": 21,
+              "tool": 0
+            }
+          }
+        }
+      }
+    },
+    "tools": {
+      "totalCalls": 0,
+      "totalSuccess": 0,
+      "totalFail": 0,
+      "totalDurationMs": 0,
+      "totalDecisions": {
+        "accept": 0,
+        "reject": 0,
+        "modify": 0,
+        "auto_accept": 0
+      },
+      "byName": {}
+    },
+    "files": {
+      "totalLinesAdded": 0,
+      "totalLinesRemoved": 0
+    }
+  }
+}

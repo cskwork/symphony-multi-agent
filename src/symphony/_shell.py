@@ -18,10 +18,13 @@ binary. Set ``SYMPHONY_BASH`` to override.
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import os
 import shutil
 import sys
 from functools import lru_cache
+from typing import Any
 
 
 # Common Git for Windows install locations. Scoop and Winget installs land
@@ -87,3 +90,50 @@ def resolve_bash() -> str:
     # the doctor's ``check_shell`` failure (instead of failing at the first
     # hook dispatch with an opaque ``FileNotFoundError``).
     return "bash"
+
+
+async def safe_proc_wait(proc: Any, *, timeout: float | None = None) -> int | None:
+    """Reap an asyncio subprocess without depending on the child watcher.
+
+    Background: Python 3.12 + asyncio + Textual on macOS sometimes leaves the
+    child watcher unable to observe SIGCHLD for processes spawned via
+    ``asyncio.create_subprocess_exec``. The visible symptom is a zombie
+    ``<defunct>`` child plus an ``await proc.wait()`` that never returns.
+
+    Workaround: do the wait in a worker thread via ``os.waitpid``. The thread
+    blocks in the kernel until the child exits — independent of any asyncio
+    watcher state — and yields back to the loop the moment the kernel hands
+    over the exit status.
+
+    `timeout` is in seconds. Returns the exit code, or ``None`` on timeout
+    (caller is responsible for sending SIGKILL and retrying).
+    """
+    pid = proc.pid
+    if pid is None:
+        return None
+    if proc.returncode is not None:
+        return proc.returncode
+
+    def _blocking_wait() -> int | None:
+        try:
+            _, status = os.waitpid(pid, 0)
+        except ChildProcessError:
+            # Already reaped (asyncio watcher won the race, or never
+            # registered). Either way, nothing more to do.
+            return None
+        except OSError as exc:
+            if exc.errno == errno.ECHILD:
+                return None
+            raise
+        if os.WIFEXITED(status):
+            return os.WEXITSTATUS(status)
+        if os.WIFSIGNALED(status):
+            return -os.WTERMSIG(status)
+        return None
+
+    if timeout is None:
+        return await asyncio.to_thread(_blocking_wait)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_blocking_wait), timeout=timeout)
+    except asyncio.TimeoutError:
+        return None

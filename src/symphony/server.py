@@ -14,6 +14,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from aiohttp import web
@@ -27,7 +28,8 @@ log = get_logger()
 ROOT_HINT = (
     "symphony-multi-agent JSON API.\n"
     "The HTML dashboard was replaced by a CLI Kanban — run `symphony tui`.\n"
-    "API: GET /api/v1/state, GET /api/v1/<identifier>, POST /api/v1/refresh\n"
+    "API: GET /api/v1/state, GET /api/v1/<identifier>, POST /api/v1/refresh,\n"
+    "     POST /api/v1/<identifier>/pause, POST /api/v1/<identifier>/resume\n"
 )
 
 
@@ -70,13 +72,74 @@ def build_app(orchestrator: Orchestrator) -> web.Application:
             status=202,
         )
 
+    async def handle_pause(request: web.Request) -> web.Response:
+        identifier = request.match_info.get("identifier", "")
+        issue_id = orchestrator.find_running_issue_id(identifier)
+        if issue_id is None:
+            return _error_response(
+                404, "issue_not_running", f"no running worker for {identifier}"
+            )
+        already = orchestrator.is_paused(issue_id)
+        changed = orchestrator.pause_worker(issue_id)
+        return web.json_response(
+            {
+                "issue_identifier": identifier,
+                "issue_id": issue_id,
+                "paused": True,
+                "changed": changed,
+                "already_paused": already,
+            }
+        )
+
+    async def handle_resume(request: web.Request) -> web.Response:
+        identifier = request.match_info.get("identifier", "")
+        issue_id = orchestrator.find_running_issue_id(identifier)
+        if issue_id is None:
+            return _error_response(
+                404, "issue_not_running", f"no running worker for {identifier}"
+            )
+        changed = orchestrator.resume_worker(issue_id)
+        return web.json_response(
+            {
+                "issue_identifier": identifier,
+                "issue_id": issue_id,
+                "paused": False,
+                "changed": changed,
+            }
+        )
+
     async def handle_method_not_allowed(request: web.Request) -> web.Response:
         return _error_response(405, "method_not_allowed", request.method)
+
+    async def handle_debug_tasks(_request: web.Request) -> web.Response:
+        # Dump every live asyncio task with its suspended coroutine stack.
+        # `Task.get_stack()` returns the deepest frame the task is parked
+        # at — exactly what py-spy can't show us across the await boundary.
+        out = []
+        for t in asyncio.all_tasks():
+            stack_frames = []
+            for frame in t.get_stack():
+                stack_frames.append(
+                    f"{frame.f_code.co_filename}:{frame.f_lineno} in {frame.f_code.co_name}"
+                )
+            out.append(
+                {
+                    "name": t.get_name(),
+                    "done": t.done(),
+                    "cancelled": t.cancelled() if t.done() else False,
+                    "coro_repr": repr(t.get_coro()),
+                    "stack": stack_frames,
+                }
+            )
+        return web.json_response({"tasks": out})
 
     app.router.add_get("/", handle_root)
     app.router.add_get("/api/v1/state", handle_state)
     app.router.add_get("/api/v1/refresh", handle_method_not_allowed)
     app.router.add_post("/api/v1/refresh", handle_refresh)
+    app.router.add_get("/api/v1/_debug/tasks", handle_debug_tasks)
+    app.router.add_post("/api/v1/{identifier}/pause", handle_pause)
+    app.router.add_post("/api/v1/{identifier}/resume", handle_resume)
     app.router.add_get("/api/v1/{identifier}", handle_issue)
 
     return app

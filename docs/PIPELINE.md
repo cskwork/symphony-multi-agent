@@ -1,11 +1,12 @@
 # Production pipeline
 
-Symphony's default task (the prompt template in `WORKFLOW.md`) drives every
-ticket through seven gated stages. The harness picks the ticket up on each
-poll tick; the agent moves it from one stage to the next by editing the
-ticket file's `state` field. The orchestrator only reads, so this stage
-machine is intentionally implemented in the prompt rather than the Python
-core.
+Symphony's default task drives every ticket through seven gated stages.
+`WORKFLOW.md` remains the orchestration manifest, while the default agent
+instructions live in `docs/symphony-prompts/`. The harness picks the
+ticket up on each poll tick; the agent moves it from one stage to the next
+by editing the ticket file's `state` field. The orchestrator only reads, so
+this stage machine is intentionally implemented in prompt files rather
+than the Python core.
 
 ```
   Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
@@ -20,7 +21,7 @@ core.
 | Todo           | triager                     | `## Triage` line, route to Explore (or `Blocked`)                     |
 | Explore        | researcher (3 lenses)       | `## Domain Brief` + `## Plan Candidates` + `## Recommendation`        |
 | In Progress    | implementer                 | `## Implementation` (TDD), transition to Review                       |
-| Review         | reviewer                    | `## Review`, fix CRITICAL/HIGH, transition to QA                      |
+| Review         | reviewer                    | `## Review`; CRITICAL/HIGH/MEDIUM rewinds to In Progress, LOW-only transitions to QA |
 | QA             | qa runner (executes code)   | `## QA Evidence` (real exit codes), -> Learn                          |
 | Learn          | distiller                   | `llm-wiki/` updates + `## Learnings` + `## Wiki Updates`              |
 | Done           | reporter                    | `## As-Is -> To-Be Report` (structured)                               |
@@ -32,12 +33,14 @@ Implementation that starts from whatever stale context the agent happens to
 have produces drive-by refactors and missed invariants. Explore forces a
 single, structured pass over three sources before any code changes:
 
-- **`llm-wiki/`** — domain knowledge written by prior tickets (read first).
+- **`llm-wiki/`**
 - **git history** — `git log --oneline -- <path>` for files the ticket
   likely touches, then `git show <sha>` on the relevant commits to
   recover the *why* behind prior changes.
 - **the source files themselves**, end-to-end, so the brief reflects
   current state and not stale memory.
+
+Source 1 (llm-wiki) is documented in [The llm-wiki/ knowledge base](#the-llm-wiki-knowledge-base) below.
 
 The agent applies three lenses in one turn — domain expert, implementer,
 risk reviewer — and writes `## Domain Brief`, `## Plan Candidates`, and
@@ -71,12 +74,7 @@ QA passes, the agent compares the Explore brief against reality — which
 assumptions held, which were wrong, what only became visible during
 implementation — and persists the delta to `llm-wiki/`:
 
-- If a relevant entry exists, it is edited in place. A new line is
-  appended to its **Decision log** (`YYYY-MM-DD | <issue.identifier> |
-  note`) and **Last updated** is refreshed.
-- Otherwise a new `llm-wiki/<topic-slug>.md` is created with a fixed
-  shape (Summary / Invariants & Constraints / Files of interest /
-  Decision log / Last updated) and a row is added to `llm-wiki/INDEX.md`.
+See the LEARN stage rule in WORKFLOW.file.example.md for the canonical wiki-entry template.
 
 The agent then writes `## Learnings` (bullets of new facts and
 surprises) and `## Wiki Updates` (paths created or modified) into the
@@ -110,14 +108,41 @@ completed ticket carries an `## As-Is -> To-Be Report` block that captures:
 The block lives in the ticket body so future readers (and future agent
 runs) get the full story without spelunking through git or chat history.
 
+## Stage prompts
+
+The example workflows use a stage-specific prompt manifest:
+
+```yaml
+prompts:
+  base: ./docs/symphony-prompts/file/base.md
+  stages:
+    Todo: ./docs/symphony-prompts/file/stages/todo.md
+    Explore: ./docs/symphony-prompts/file/stages/explore.md
+    "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
+    Review: ./docs/symphony-prompts/file/stages/review.md
+    QA: ./docs/symphony-prompts/file/stages/qa.md
+    Learn: ./docs/symphony-prompts/file/stages/learn.md
+    Done: ./docs/symphony-prompts/file/stages/done.md
+```
+
+At runtime Symphony assembles `base` plus the one file matching
+`{{ issue.state }}`. A `Todo` ticket receives the triage prompt, an
+`Explore` ticket receives the Explore prompt, and so on; unrelated stage
+rules are not sent on that turn. If `prompts.stages` is omitted, Symphony
+falls back to the legacy inline body of `WORKFLOW.md`.
+
+Use `docs/symphony-prompts/file/` for the Markdown-file Kanban tracker and
+`docs/symphony-prompts/linear/` for Linear. Customize those files directly
+when a board needs different agent behavior.
+
 ## Stage transitions and the orchestrator
 
 `active_states` in `WORKFLOW.md` is `[Todo, Explore, "In Progress", Review, QA, Learn]`.
 The orchestrator dispatches a worker for any ticket whose state is in
-that set, regardless of which stage it is on. Each turn the agent reads
-`{{ issue.state }}` from the prompt and applies the matching stage rule.
-That keeps the Python core simple: states are just strings; the pipeline
-is policy expressed in the prompt.
+that set, regardless of which stage it is on. Each phase starts with a
+fresh first-turn prompt assembled from `prompts.base` and the current
+state's `prompts.stages` file. That keeps the Python core simple: states
+are just strings; the pipeline policy lives in editable Markdown.
 
 `max_concurrent_agents_by_state` lets you cap how many tickets can sit
 in each stage in parallel — useful when QA runs are expensive (real
@@ -130,17 +155,36 @@ brief reflects a quiet workspace.
    (Linear) to `WORKFLOW.md` and customize.
 2. Confirm `tracker.active_states` includes `Explore`, `Review`, `QA`,
    and `Learn` (in addition to `Todo` and `In Progress`).
-3. Make sure your `before_run` / `after_create` hooks land the agent in
+3. Confirm the `prompts:` block points at the prompt directory you want
+   to customize. The shipped examples use `docs/symphony-prompts/file/`
+   and `docs/symphony-prompts/linear/`.
+4. Make sure your `before_run` / `after_create` hooks land the agent in
    a workspace where the test suite, target API, or browser harness is
    actually runnable. The QA stage is only as good as the workspace it
-   runs in.
-4. Decide whether `llm-wiki/` lives in the same repo as the source (the
+   runs in. For private repositories, save credentials in the local Git
+   credential helper and keep `GIT_TERMINAL_PROMPT=0` in automation so
+   failed auth exits instead of hanging. For target repos with strict
+   runtime requirements, pin the interpreter/toolchain in the hook
+   (`PYTHON_BIN`, `NODE_VERSION`, etc.) instead of relying on the host
+   default.
+5. Decide whether `llm-wiki/` lives in the same repo as the source (the
    default; Learn commits wiki edits onto the ticket's branch) or in a
    sibling repo. Either works; keep it adjacent to `kanban/` so Explore
    can reach it without extra configuration.
-5. Run `symphony doctor ./WORKFLOW.md` before launching to catch the
+6. Run `symphony doctor ./WORKFLOW.md` before launching to catch the
    common first-run failures (port collision, missing CLI on PATH,
    placeholder clone URL).
+
+## Per-ticket artefact root
+
+Every artefact a pipeline ticket produces lives under a single root:
+`docs/<TICKET-ID>/<stage>/`. Triage drops bug reproductions into
+`reproduce/` (bug-labeled tickets only); Explore drops citations and
+reuse inventory into `explore/`; Implement writes user-facing docs into
+`work/`; Review writes HTTP baseline/PR/diff/curl logs into `verify/`;
+QA writes durable e2e specs and traces/videos/HAR into `qa/`. Workers
+create folders themselves with `mkdir -p`. Learn is the only stage that
+writes outside this root — its target is `${LLM_WIKI_PATH:-./llm-wiki}/`.
 
 ## Reference ticket
 
@@ -149,3 +193,5 @@ It carries every section a finished pipeline ticket should have
 (`## Plan`, `## Implementation`, `## Review`, `## QA Evidence`, and the
 `## As-Is -> To-Be Report` block). Copy its structure when authoring a
 real ticket — the test suite asserts this exact shape stays consistent.
+
+Evidence-first stage rules (reproduce/work/verify/qa-engineer) adapt ideas from cskwork/backend-dev-skills (MIT).

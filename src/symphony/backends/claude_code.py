@@ -25,9 +25,10 @@ import json
 import os
 import shlex
 import time
+from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     PortExit,
     ResponseError,
@@ -74,6 +75,8 @@ class ClaudeCodeBackend:
         }
         self._latest_rate_limits: dict[str, Any] | None = None
         self._last_message: str = ""
+        # Bounded stderr ring buffer — see PiBackend for the rationale.
+        self._stderr_tail: deque[str] = deque(maxlen=20)
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
@@ -93,14 +96,13 @@ class ClaudeCodeBackend:
                 proc.terminate()
             except ProcessLookupError:
                 pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            rc = await safe_proc_wait(proc, timeout=2.0)
+            if rc is None and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
-                await proc.wait()
+                await safe_proc_wait(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -183,15 +185,23 @@ class ClaudeCodeBackend:
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("claude turn timed out") from exc
 
-            await proc.wait()
+            await safe_proc_wait(proc)
             if terminal is None:
                 # Stream ended without a `result` event — treat as failure.
-                err_msg = f"claude exited with no result event (rc={proc.returncode})"
-                await self._emit(EVENT_TURN_FAILED, {"reason": err_msg})
+                stderr_blob = self._stderr_blob()
+                err_msg = (
+                    f"claude exited with no result event (rc={proc.returncode})"
+                    + (f"; stderr: {stderr_blob}" if stderr_blob else "")
+                )
+                await self._emit(
+                    EVENT_TURN_FAILED,
+                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
+                )
                 raise TurnFailed(err_msg)
 
-            if terminal.get("is_error"):
-                await self._emit(EVENT_TURN_FAILED, terminal)
+            if _is_error_result(terminal):
+                payload = {**terminal, "stderr_tail": list(self._stderr_tail)}
+                await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(
                     str(terminal.get("subtype") or terminal.get("error") or "claude turn failed")
                 )
@@ -286,7 +296,17 @@ class ClaudeCodeBackend:
                 break
             if not line:
                 break
-            log.debug("claude_stderr", line=line.decode("utf-8", errors="replace").rstrip())
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if text:
+                self._stderr_tail.append(text)
+            log.debug("claude_stderr", line=text)
+
+    def _stderr_blob(self) -> str:
+        """Compact stderr tail for failure messages (≤400 chars)."""
+        if not self._stderr_tail:
+            return ""
+        joined = " | ".join(self._stderr_tail)
+        return joined if len(joined) <= 400 else joined[-400:]
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
         """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
@@ -296,14 +316,13 @@ class ClaudeCodeBackend:
             proc.terminate()
         except ProcessLookupError:
             return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        rc = await safe_proc_wait(proc, timeout=2.0)
+        if rc is None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            await proc.wait()
+            await safe_proc_wait(proc)
 
     def _update_usage_absolute(self, usage: dict[str, Any]) -> None:
         # Each `result` event reports usage for that one turn — accumulate.
@@ -352,3 +371,18 @@ def _extract_text(message: dict[str, Any]) -> str:
             if isinstance(text, str) and text:
                 return text
     return ""
+
+
+def _is_error_result(event: dict[str, Any]) -> bool:
+    subtype = str(event.get("subtype") or "").lower()
+    if subtype == "success":
+        return False
+    if subtype.startswith("error"):
+        return True
+
+    value = event.get("is_error")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return bool(value)

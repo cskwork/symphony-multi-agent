@@ -1,14 +1,22 @@
-"""TUI string localization.
+"""TUI string localization + agent doc-language preamble.
 
-A minimal i18n layer for the Kanban TUI. Tracker state names, ticket titles,
-and labels in `tracker.state_descriptions` come from user data and are not
-translated — only the chrome (column placeholder, header / footer field
-labels, card meta verbs) is.
+Two related but distinct surfaces share this module:
 
-Add a new language by appending a key to `STRINGS` and adding the same
-keys you find under `STRINGS["en"]`. Keys that go untranslated fall back
-to the English value silently — never raise on a missing key, since a
-missing string would crash the TUI on every render.
+1. **TUI chrome** — `STRINGS` + `t()` translate ~24 short labels rendered
+   by the Kanban TUI (column placeholder, header / footer field labels,
+   card meta verbs). Tracker state names, ticket titles, and labels in
+   `tracker.state_descriptions` come from user data and are not translated.
+
+2. **Agent doc-language preamble** — `DOC_LANG_PREAMBLE` + `doc_language_preamble()`
+   produce a one-line directive prepended to every prompt the orchestrator
+   sends to a worker, so artefacts (kanban sections, comments, docs/) end up
+   in the same language the operator chose for the TUI. The preamble follows
+   the same `tui.language` / `SYMPHONY_LANG` resolution as chrome strings.
+
+Add a new language by appending a key to `STRINGS` (and ideally
+`DOC_LANG_PREAMBLE`) and adding the same keys you find under `STRINGS["en"]`.
+Keys that go untranslated fall back to English silently — never raise on a
+missing key, since a missing string would crash the TUI on every render.
 
 Tech-y tokens that look the same across locales (`in=`, `out=`, `total=`,
 `agent=`, `P1`, `#label`) deliberately do not pass through this layer.
@@ -47,14 +55,14 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "turn",
         "card.retry": "retry #",
         "card.blocked_by": "blocked by",
+        "card.paused": "paused",
+        "header.paused": "paused=",
         # language switch hint shown in the header
         "header.lang": "lang=",
         "header.lang_hint": "(SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)",
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n} more",
         "column.more_above": "↑ {n} above",
-        # controls hint shown in the header of the TUI
-        "header.controls": "controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap={n}",
     },
     "ko": {
         # header
@@ -74,14 +82,14 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "card.turn": "턴",
         "card.retry": "재시도 #",
         "card.blocked_by": "차단:",
+        "card.paused": "일시정지",
+        "header.paused": "일시정지=",
         # language switch hint shown in the header
         "header.lang": "언어=",
         "header.lang_hint": "(SYMPHONY_LANG=en 또는 WORKFLOW.md tui.language 수정 후 재시작)",
         # column overflow indicator. {n} is replaced at format time.
         "column.more": "+{n}개 더",
         "column.more_above": "↑ 위로 {n}개",
-        # controls hint shown in the header of the TUI
-        "header.controls": "조작: j/↓ 다음 · k/↑ 이전 · PgDn/PgUp 페이지 · g/G 처음/끝 · q 종료 · cap={n}",
     },
 }
 
@@ -127,3 +135,39 @@ def resolve_language(config_value: str | None) -> str:
     if env_value:
         return normalize_language(env_value)
     return normalize_language(config_value)
+
+
+# ---------------------------------------------------------------------------
+# Agent doc-language preamble
+# ---------------------------------------------------------------------------
+
+# A one-line directive prepended to every prompt the orchestrator sends to a
+# worker (first turn AND continuations). The goal: keep artefact language
+# (kanban comments, docs/<id>/<stage>/*.md) in lockstep with the operator's
+# chosen TUI language without forcing them to maintain two WORKFLOW.md files.
+#
+# Keep each entry to a single line and make it unmistakable to the model —
+# "ALL artefacts" / "*every* section" — since it competes with whatever the
+# WORKFLOW.md prompt body already says about language.
+DOC_LANG_PREAMBLE: Final[dict[str, str]] = {
+    "en": (
+        "Write ALL artefacts (kanban section bodies, ticket comments, "
+        "docs/<id>/<stage>/*.md) in English. Keep section *headers* "
+        "(e.g. ## Triage, ## Implementation) and code identifiers unchanged."
+    ),
+    "ko": (
+        "모든 산출물(칸반 섹션 본문, 티켓 코멘트, docs/<id>/<stage>/*.md)을 "
+        "한국어로 작성하세요. 섹션 *헤더*(예: ## Triage, ## Implementation)와 "
+        "코드 식별자는 그대로 둡니다."
+    ),
+}
+
+
+def doc_language_preamble(language: str | None) -> str:
+    """Return the doc-language directive for `language`, falling back to EN.
+
+    Unknown / blank language codes resolve to English so a misconfigured
+    operator still gets a coherent prompt instead of a silent no-op.
+    """
+    lang = normalize_language(language)
+    return DOC_LANG_PREAMBLE.get(lang, DOC_LANG_PREAMBLE[DEFAULT_LANGUAGE])

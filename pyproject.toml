@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "symphony-multi-agent"
-version = "0.2.0"
+version = "0.3.4"
 description = "Multi-agent fork of OpenAI Symphony — supports Codex CLI, Claude Code CLI, Gemini CLI, and Pi CLI behind a single orchestrator with a Jira-style CLI Kanban TUI."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -16,6 +16,7 @@ dependencies = [
     "watchdog>=4.0",
     "aiohttp>=3.9",
     "rich>=13.7",
+    "textual>=0.85",
 ]
 
 [project.optional-dependencies]

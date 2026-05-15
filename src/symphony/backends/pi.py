@@ -38,9 +38,10 @@ import json
 import os
 import shlex
 import time
+from collections import deque
 from typing import Any
 
-from .._shell import resolve_bash
+from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
     PortExit,
     ResponseError,
@@ -50,6 +51,8 @@ from ..errors import (
 from ..logging import get_logger
 from ..workspace import validate_agent_cwd
 from . import (
+    EVENT_AGENT_RETRY,
+    EVENT_COMPACTION,
     EVENT_MALFORMED,
     EVENT_OTHER_MESSAGE,
     EVENT_SESSION_STARTED,
@@ -86,6 +89,10 @@ class PiBackend:
             "total_tokens": 0,
         }
         self._last_message: str = ""
+        # Bounded ring buffer of stderr lines so a TurnFailed exception can
+        # carry the actual reason (auth error, network, ratelimit, ...) up to
+        # the orchestrator instead of the opaque "no agent_end event" string.
+        self._stderr_tail: deque[str] = deque(maxlen=20)
 
     # ------------------------------------------------------------------
     # AgentBackend lifecycle
@@ -104,14 +111,13 @@ class PiBackend:
                 proc.terminate()
             except ProcessLookupError:
                 pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-            except asyncio.TimeoutError:
+            rc = await safe_proc_wait(proc, timeout=2.0)
+            if rc is None and proc.returncode is None:
                 try:
                     proc.kill()
                 except ProcessLookupError:
                     pass
-                await proc.wait()
+                await safe_proc_wait(proc)
 
     @property
     def session_id(self) -> str | None:
@@ -197,15 +203,30 @@ class PiBackend:
                 await self._emit(EVENT_TURN_FAILED, {"reason": "turn_timeout"})
                 raise TurnTimeout("pi turn timed out") from exc
 
-            await proc.wait()
+            safe_rc = await safe_proc_wait(proc)
             if terminal is None:
-                err_msg = f"pi exited with no agent_end event (rc={proc.returncode})"
-                await self._emit(EVENT_TURN_FAILED, {"reason": err_msg})
+                stderr_blob = self._stderr_blob()
+                rc = safe_rc if safe_rc is not None else proc.returncode
+                err_msg = (
+                    f"pi exited with no agent_end event (rc={rc})"
+                    + (f"; stderr: {stderr_blob}" if stderr_blob else "")
+                )
+                await self._emit(
+                    EVENT_TURN_FAILED,
+                    {"reason": err_msg, "stderr_tail": list(self._stderr_tail)},
+                )
                 raise TurnFailed(err_msg)
 
             failure_reason = _extract_failure_reason(terminal)
             if failure_reason is not None:
-                payload = {"reason": failure_reason, **terminal}
+                stderr_blob = self._stderr_blob()
+                if stderr_blob:
+                    failure_reason = f"{failure_reason}; stderr: {stderr_blob}"
+                payload = {
+                    "reason": failure_reason,
+                    "stderr_tail": list(self._stderr_tail),
+                    **terminal,
+                }
                 await self._emit(EVENT_TURN_FAILED, payload)
                 raise TurnFailed(failure_reason)
 
@@ -279,6 +300,61 @@ class PiBackend:
                     await self._emit(EVENT_OTHER_MESSAGE, msg)
                 elif kind == "agent_end":
                     terminal = msg
+                elif kind == "compaction_start":
+                    # Pi auto-compacts when the conversation approaches the
+                    # model's context window (or on `/compact`). Surface as a
+                    # normalized event so symphony can log it once at INFO
+                    # — a sudden token drop on the next turn would otherwise
+                    # be unattributable.
+                    await self._emit(
+                        EVENT_COMPACTION,
+                        {
+                            "phase": "start",
+                            "reason": msg.get("reason"),
+                        },
+                    )
+                elif kind == "compaction_end":
+                    result = msg.get("result") or {}
+                    payload = {
+                        "phase": "end",
+                        "reason": msg.get("reason"),
+                        "aborted": bool(msg.get("aborted")),
+                        "will_retry": bool(msg.get("willRetry")),
+                    }
+                    if isinstance(result, dict):
+                        # Best-effort: surface tokensBefore from the
+                        # CompactionEntry summary if pi includes it.
+                        for src, dst in (
+                            ("tokensBefore", "tokens_before"),
+                            ("firstKeptEntryId", "first_kept_entry_id"),
+                        ):
+                            if src in result:
+                                payload[dst] = result[src]
+                    err = msg.get("errorMessage")
+                    if isinstance(err, str) and err:
+                        payload["error"] = err
+                    await self._emit(EVENT_COMPACTION, payload)
+                elif kind == "auto_retry_start":
+                    await self._emit(
+                        EVENT_AGENT_RETRY,
+                        {
+                            "phase": "start",
+                            "attempt": msg.get("attempt"),
+                            "max_attempts": msg.get("maxAttempts"),
+                            "delay_ms": msg.get("delayMs"),
+                            "error": msg.get("errorMessage"),
+                        },
+                    )
+                elif kind == "auto_retry_end":
+                    await self._emit(
+                        EVENT_AGENT_RETRY,
+                        {
+                            "phase": "end",
+                            "attempt": msg.get("attempt"),
+                            "success": bool(msg.get("success")),
+                            "final_error": msg.get("finalError"),
+                        },
+                    )
                 else:
                     await self._emit(EVENT_OTHER_MESSAGE, msg)
         finally:
@@ -299,7 +375,17 @@ class PiBackend:
                 break
             if not line:
                 break
-            log.debug("pi_stderr", line=line.decode("utf-8", errors="replace").rstrip())
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if text:
+                self._stderr_tail.append(text)
+            log.debug("pi_stderr", line=text)
+
+    def _stderr_blob(self) -> str:
+        """Compact stderr tail for inclusion in failure messages (≤400 chars)."""
+        if not self._stderr_tail:
+            return ""
+        joined = " | ".join(self._stderr_tail)
+        return joined if len(joined) <= 400 else joined[-400:]
 
     async def _reap(self, proc: asyncio.subprocess.Process) -> None:
         """Best-effort terminate→wait→kill ladder; mirrors `stop()`."""
@@ -309,14 +395,13 @@ class PiBackend:
             proc.terminate()
         except ProcessLookupError:
             return
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except asyncio.TimeoutError:
+        rc = await safe_proc_wait(proc, timeout=2.0)
+        if rc is None and proc.returncode is None:
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            await proc.wait()
+            await safe_proc_wait(proc)
 
     def _update_usage(self, usage: dict[str, Any]) -> None:
         """Accumulate Pi's per-message Usage into the running totals."""

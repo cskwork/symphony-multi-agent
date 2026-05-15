@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,9 +68,10 @@ class Workspace:
 class WorkspaceManager:
     """§9.1, §9.2 — sanitized per-issue workspace directories."""
 
-    def __init__(self, root: Path, hooks: HooksConfig) -> None:
+    def __init__(self, root: Path, hooks: HooksConfig, *, workflow_dir: Path | None = None) -> None:
         self._root = root.resolve()
         self._hooks = hooks
+        self._workflow_dir = workflow_dir
         self._root.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -118,6 +120,13 @@ class WorkspaceManager:
     async def after_run_best_effort(self, path: Path) -> None:
         if not self._hooks.after_run:
             return
+        # If the agent (or an external process) removed the workspace before we
+        # got here, skip the hook — spawning bash with a missing cwd raises an
+        # opaque FileNotFoundError that callers cannot act on. Logging at
+        # INFO keeps the trail without the false-alarm warning.
+        if not path.exists():
+            log.info("hook_after_run_skipped_missing_cwd", path=str(path))
+            return
         try:
             await self._run_hook("after_run", self._hooks.after_run, path)
         except Exception as exc:  # §9.4 — log and ignore.
@@ -156,41 +165,64 @@ class WorkspaceManager:
         timeout_s = max(self._hooks.timeout_ms, 0) / 1000.0
         log.info("hook_start", hook=name, cwd=str(cwd))
         # §9.4 — run script via `bash -lc` with workspace cwd.
-        process = await asyncio.create_subprocess_exec(
-            resolve_bash(),
-            "-lc",
-            script,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
-        )
+        #
+        # We deliberately route through a worker thread + blocking
+        # `subprocess.run` instead of `asyncio.create_subprocess_exec`. The
+        # asyncio child-watcher is fragile under Textual on macOS (Python
+        # 3.12): subprocesses spawn fine, exit fine, but `await proc.wait()`
+        # never resolves because the watcher never observes the SIGCHLD
+        # / waitpid event. The symptom is a zombie `<defunct>` child and a
+        # worker stuck forever inside the timeout-cleanup `await
+        # process.wait()`. Using `subprocess.run` in a thread bypasses the
+        # watcher entirely — `os.waitpid` runs in the worker thread and
+        # returns deterministically.
+        env = {
+            **os.environ,
+            "SYMPHONY_WORKFLOW_DIR": str(self._workflow_dir)
+            if self._workflow_dir
+            else "",
+        }
+
+        def _do_run() -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [resolve_bash(), "-lc", script],
+                cwd=str(cwd),
+                capture_output=True,
+                timeout=timeout_s if timeout_s > 0 else None,
+                env=env,
+                check=False,
+            )
+
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-            await process.wait()
+            result = await asyncio.to_thread(_do_run)
+        except subprocess.TimeoutExpired:
             log.error("hook_timeout", hook=name, cwd=str(cwd))
             raise SymphonyError(f"hook {name} timed out", hook=name)
 
-        rc = process.returncode or 0
+        rc = result.returncode or 0
+        stderr_bytes = result.stderr or b""
+        stdout_bytes = result.stdout or b""
+        stderr_text = _truncate(stderr_bytes.decode("utf-8", errors="replace")).strip()
+        stdout_text = _truncate(stdout_bytes.decode("utf-8", errors="replace")).strip()
         if rc != 0:
             log.error(
                 "hook_failed",
                 hook=name,
                 cwd=str(cwd),
                 returncode=rc,
-                stderr=_truncate(stderr.decode("utf-8", errors="replace")),
+                stderr=stderr_text,
             )
-            raise SymphonyError(f"hook {name} exited {rc}", hook=name, returncode=rc)
+            message = f"hook {name} exited {rc}"
+            if stderr_text:
+                message = f"{message}; stderr: {stderr_text}"
+            elif stdout_text:
+                message = f"{message}; stdout: {stdout_text}"
+            raise SymphonyError(message, hook=name, returncode=rc)
         log.info(
             "hook_completed",
             hook=name,
             cwd=str(cwd),
-            stdout=_truncate(stdout.decode("utf-8", errors="replace")),
+            stdout=stdout_text,
         )
 
 
@@ -198,6 +230,140 @@ def _truncate(value: str, limit: int = 400) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...(truncated)"
+
+
+async def commit_workspace_on_done(
+    path: Path,
+    *,
+    identifier: str,
+    title: str,
+    exit_reason: str | None = None,
+    state: str | None = None,
+    timeout_s: float = 60.0,
+) -> None:
+    """Snapshot the per-ticket workspace into one git commit on worker exit.
+
+    Always called before `WorkspaceManager.remove()` — the goal is that no
+    work the agent left in the worktree gets discarded by `git worktree
+    remove --force`. Fires for every exit (Done, Cancelled, Blocked,
+    error, timeout, reconcile-terminated) when `auto_commit_on_done` is
+    on; the commit message includes the exit reason / state for non-Done
+    cases so a quick `git log` makes the situation obvious.
+
+    Lenient by design — every failure (missing path, no diffs, pre-commit
+    rejection, signing error, timeout) logs a warning and returns. We
+    never raise out of the worker exit path; a failed auto-commit is a
+    housekeeping miss surfaced by the warning, not a regression that
+    blocks the queue.
+
+    Reuses any enclosing git repo (`git -C path rev-parse --git-dir`).
+    Only initialises a new repo when the workspace has no git ancestor,
+    so workspaces nested inside an existing project repo just add a
+    commit to that project's history rather than creating a nested
+    `.git`. With the worktree-default hooks the commit lands on the
+    `symphony/<ID>` branch the worktree is checked out on.
+    """
+    if not path.exists():
+        log.info("auto_commit_skipped_missing_workspace", path=str(path))
+        return
+
+    safe_title = (title or "").replace("\n", " ").strip()[:200] or "(no title)"
+    normalized_state = (state or "").strip().lower()
+    suffix = ""
+    if normalized_state == "done":
+        # Work reached Done — message stays clean even when the cleanup
+        # path (reconcile / startup) supplied an exit_reason.
+        suffix = ""
+    elif normalized_state:
+        suffix = f" [state: {state}]"
+    elif exit_reason and exit_reason != "normal":
+        suffix = f" [exit: {exit_reason}]"
+    msg = f"{identifier}: {safe_title}{suffix}"
+
+    # One-commit-per-ticket: if the worktree's `after_create` recorded a
+    # fork point in `git config symphony.basesha`, soft-reset to that base
+    # so all per-turn commits + still-uncommitted changes collapse into a
+    # single commit with the ticket subject. When no base is recorded
+    # (legacy workspaces, non-worktree setups), fall back to a plain
+    # commit-on-top — preserves correctness without forcing operators to
+    # re-bootstrap.
+    script = (
+        'set -u\n'
+        'if ! git rev-parse --git-dir >/dev/null 2>&1; then\n'
+        '  git init -q || exit 41\n'
+        'fi\n'
+        'BASE="$(git config --get symphony.basesha 2>/dev/null || true)"\n'
+        'git add -A || exit 42\n'
+        'HAS_STAGED=1\n'
+        'git diff --cached --quiet && HAS_STAGED=0\n'
+        'HAS_NEW_COMMITS=0\n'
+        'if [ -n "$BASE" ] && git rev-parse --verify "$BASE" >/dev/null 2>&1; then\n'
+        '  HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"\n'
+        '  if [ -n "$HEAD_SHA" ] && [ "$HEAD_SHA" != "$BASE" ]; then\n'
+        '    HAS_NEW_COMMITS=1\n'
+        '  fi\n'
+        'fi\n'
+        'if [ "$HAS_STAGED" -eq 0 ] && [ "$HAS_NEW_COMMITS" -eq 0 ]; then\n'
+        '  echo "auto_commit: nothing to commit"\n'
+        '  exit 0\n'
+        'fi\n'
+        'if [ "$HAS_NEW_COMMITS" -eq 1 ]; then\n'
+        '  # Collapse every commit since the recorded fork point + any\n'
+        '  # currently-staged changes into one. --soft preserves the index\n'
+        '  # and working tree so the final `git commit` captures everything.\n'
+        '  git reset --soft "$BASE" || exit 44\n'
+        'fi\n'
+        'git commit -m "$SYMPHONY_AUTO_COMMIT_MSG" || exit 43\n'
+    )
+    env = {
+        **os.environ,
+        "SYMPHONY_AUTO_COMMIT_MSG": msg,
+    }
+
+    def _do_run() -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [resolve_bash(), "-lc", script],
+            cwd=str(path),
+            capture_output=True,
+            timeout=timeout_s if timeout_s > 0 else None,
+            env=env,
+            check=False,
+        )
+
+    log.info("auto_commit_start", path=str(path), identifier=identifier)
+    try:
+        result = await asyncio.to_thread(_do_run)
+    except subprocess.TimeoutExpired:
+        log.warning("auto_commit_timeout", path=str(path), identifier=identifier)
+        return
+    except Exception as exc:
+        log.warning(
+            "auto_commit_spawn_failed",
+            path=str(path),
+            identifier=identifier,
+            error=str(exc),
+        )
+        return
+
+    rc = result.returncode or 0
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    if rc == 0:
+        log.info(
+            "auto_commit_completed",
+            path=str(path),
+            identifier=identifier,
+            stdout=_truncate(stdout),
+        )
+        return
+    log.warning(
+        "auto_commit_failed",
+        path=str(path),
+        identifier=identifier,
+        returncode=rc,
+        stdout=_truncate(stdout),
+        stderr=_truncate(stderr),
+    )
 
 
 def validate_agent_cwd(cwd: Path, workspace_root: Path) -> None:

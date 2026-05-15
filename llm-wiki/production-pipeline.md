@@ -70,5 +70,6 @@ cannot detect (states are just opaque strings to the Python core).
   the subset that survived the rename, so the demo is a known partial
   example. Leaving its full conversion to a separate ticket avoids
   drive-by scope creep.
+- 2026-05-09 | (this ticket) | Absorbed evidence-first ideas from cskwork/backend-dev-skills (MIT): bug-label reproduce sub-block in Triage, durable HTTP/e2e proofs in Review/QA, per-ticket docs/<id>/<stage>/ artefact root, LLM_WIKI_PATH env override.
 
-**Last updated:** 2026-05-09 by SMK-1.
+**Last updated:** 2026-05-09 by (this ticket).

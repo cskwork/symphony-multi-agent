@@ -52,6 +52,7 @@ class Issue:
 
 
 _WORKSPACE_KEY_INVALID = re.compile(r"[^A-Za-z0-9._-]")
+_IDENTIFIER_REGISTRATION_SUFFIX = re.compile(r"^(?P<prefix>.*?)(?P<number>\d+)$")
 
 
 def workspace_key(identifier: str) -> str:
@@ -89,6 +90,32 @@ def coerce_priority(value: Any) -> int | None:
     return None
 
 
+def registration_order_key(issue: Issue) -> tuple[int, str, int, float, str]:
+    """Stable ticket-registration order.
+
+    Trackers commonly expose human IDs like ``OLV-061`` / ``OLV-131`` where
+    the trailing number is the registration sequence. Use that before mutable
+    fields such as priority or updated_at, so editing an old ticket cannot let
+    newer work jump the queue.
+    """
+    identifier = issue.identifier or issue.id
+    created_ts = (
+        issue.created_at.timestamp()
+        if issue.created_at is not None
+        else float("inf")
+    )
+    match = _IDENTIFIER_REGISTRATION_SUFFIX.match(identifier)
+    if match is not None:
+        return (
+            0,
+            match.group("prefix").casefold(),
+            int(match.group("number")),
+            created_ts,
+            identifier.casefold(),
+        )
+    return (1, "", 0, created_ts, identifier.casefold())
+
+
 def normalize_labels(labels: Any) -> tuple[str, ...]:
     """§11.3 — labels lowercased."""
     if not isinstance(labels, list):
@@ -103,20 +130,6 @@ def normalize_labels(labels: Any) -> tuple[str, ...]:
 
 
 def sort_for_dispatch(issues: list[Issue]) -> list[Issue]:
-    """§8.2 — priority asc (null last), created_at oldest first, identifier lex tie-break."""
+    """§8.2 — ticket-registration order, with created_at fallback."""
 
-    def key(issue: Issue) -> tuple[int, int, float, str]:
-        if issue.priority is None or issue.priority == 0:
-            prio_bucket = 1  # null/unknown sorts last
-            prio_value = 0
-        else:
-            prio_bucket = 0
-            prio_value = issue.priority
-        created_ts = (
-            issue.created_at.timestamp()
-            if issue.created_at is not None
-            else float("inf")
-        )
-        return (prio_bucket, prio_value, created_ts, issue.identifier)
-
-    return sorted(issues, key=key)
+    return sorted(issues, key=registration_order_key)

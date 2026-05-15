@@ -1,0 +1,332 @@
+                                                                                                                        
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=1  retrying=0  generated_at  
+  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                  2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                         
+                                                                                                                        
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Explore (1) ──────────────────────────────╮                                              
+│    SMA-101                                                             │                                              
+│   Lane wrap design brief  P3                                           │                                              
+│   Investigate ergonomic wrap thresholds.                               │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                                              
+│    SMA-100  ●                                                          │                                              
+│   Wire dim badge  P2                                                   │                                              
+│   Surface silence as a yellow badge on running cards.                  │                                              
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                              
+│   implementing _lane_rows()                                            │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Review (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────── Learn (0) ─────────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭───────────────────────────── Done (1) ─────────────────────────────╮                                                  
+│    SMA-99  ●                                                       │                                                  
+│   Persist token totals  P2                                         │                                                  
+│   Card retains in/out/total in dim style after Done.               │                                                  
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234   │                                                  
+│   wrapped up; tokens preserved                                     │                                                  
+│                                                                    │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭────────────────────────── Cancelled (0) ───────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭─────────────────────────── Blocked (0) ────────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+                                                                                                                        
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                           
+  [j/k] scroll   [q] quit                                                                                               
+                                                                                                                        
+                                                                                                                                                                
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md  lang=en  (SYMPHONY_LANG=ko or                    running=1  retrying=0  generated_at  
+  set tui.language in WORKFLOW.md)                                                                                                        2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                                                                 
+                                                                                                                                                                
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                          ╭────────────────────── Explore (1) ───────────────────────╮
+│                               — empty —                                │                          │    SMA-101                                               │
+╰────────────────────────────────────────────────────────────────────────╯                          │   Lane wrap design brief  P3                             │
+                                                                                                    │   Investigate ergonomic wrap thresholds.                 │
+                                                                                                    │                                                          │
+                                                                                                    ╰──────────────────────────────────────────────────────────╯
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                          ╭─────────────────────── Review (0) ───────────────────────╮
+│    SMA-100  ●                                                          │                          │                        — empty —                         │
+│   Wire dim badge  P2                                                   │                          ╰──────────────────────────────────────────────────────────╯
+│   Surface silence as a yellow badge on running cards.                  │                                                                                      
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                                                                      
+│   implementing _lane_rows()                                            │                                                                                      
+│                                                                        │                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                      
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                                                                      
+│                               — empty —                                │                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                      
+╭─────────── Learn (0) ───────────╮ ╭───────────────────────────── Done (1) ─────────────────────────────╮                                                      
+│            — empty —            │ │    SMA-99  ●                                                       │                                                      
+╰─────────────────────────────────╯ │   Persist token totals  P2                                         │                                                      
+                                    │   Card retains in/out/total in dim style after Done.               │                                                      
+                                    │   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234   │                                                      
+                                    │   wrapped up; tokens preserved                                     │                                                      
+                                    │                                                                    │                                                      
+                                    ╰────────────────────────────────────────────────────────────────────╯                                                      
+╭───────── Cancelled (0) ─────────╮ ╭─────────────────────────── Blocked (0) ────────────────────────────╮                                                      
+│            — empty —            │ │                             — empty —                              │                                                      
+╰─────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────╯                                                      
+                                                                                                                                                                
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                                                                   
+  [j/k] scroll   [q] quit                                                                                                                                       
+                                                                                                                                                                
+                                                                                                                                                                                                                                                
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                              running=1  retrying=0  generated_at 2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                                                                                                                                                 
+                                                                                                                                                                                                                                                
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮               ╭───────────────────── Explore (1) ──────────────────────╮ ╭─────────────────────────── In Progress (1) ────────────────────────────╮                  
+│                               — empty —                                │               │    SMA-101                                             │ │    SMA-100  ●                                                          │                  
+╰────────────────────────────────────────────────────────────────────────╯               │   Lane wrap design brief  P3                           │ │   Wire dim badge  P2                                                   │                  
+                                                                                         │   Investigate ergonomic wrap thresholds.               │ │   Surface silence as a yellow badge on running cards.                  │                  
+                                                                                         │                                                        │ │   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                  
+                                                                                         ╰────────────────────────────────────────────────────────╯ │   implementing _lane_rows()                                            │                  
+                                                                                                                                                    │                                                                        │                  
+                                                                                                                                                    ╰────────────────────────────────────────────────────────────────────────╯                  
+╭────────────────────────────── Review (0) ──────────────────────────────╮               ╭──────────────────────── QA (0) ────────────────────────╮ ╭────────────────────────────── Learn (0) ───────────────────────────────╮                  
+│                               — empty —                                │               │                       — empty —                        │ │                               — empty —                                │                  
+╰────────────────────────────────────────────────────────────────────────╯               ╰────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────╯                  
+╭─────────────────────────────── Done (1) ───────────────────────────────╮               ╭──────────────────── Cancelled (0) ─────────────────────╮ ╭───────────────────────────── Blocked (0) ──────────────────────────────╮                  
+│    SMA-99  ●                                                           │               │                       — empty —                        │ │                               — empty —                                │                  
+│   Persist token totals  P2                                             │               ╰────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────╯                  
+│   Card retains in/out/total in dim style after Done.                   │                                                                                                                                                                      
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234       │                                                                                                                                                                      
+│   wrapped up; tokens preserved                                         │                                                                                                                                                                      
+│                                                                        │                                                                                                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                                                                                                      
+                                                                                                                                                                                                                                                
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                                                                                                                                                   
+  [j/k] scroll   [q] quit                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                
+                                                                                                                        
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=1  retrying=0  generated_at  
+  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                  2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                         
+                                                                                                                        
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Explore (1) ──────────────────────────────╮                                              
+│    SMA-101                                                             │                                              
+│   Lane wrap design brief  P3                                           │                                              
+│   Investigate ergonomic wrap thresholds.                               │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                                              
+│    SMA-100  ●                                                          │                                              
+│   Wire dim badge  P2                                                   │                                              
+│   Surface silence as a yellow badge on running cards.                  │                                              
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                              
+│   implementing _lane_rows()                                            │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Review (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Learn (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────────── Done (1) ───────────────────────────────╮                                              
+│    SMA-99  ●                                                           │                                              
+│   Persist token totals  P2                                             │                                              
+│   Card retains in/out/total in dim style after Done.                   │                                              
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234       │                                              
+│   wrapped up; tokens preserved                                         │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────── Cancelled (0) ─────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Blocked (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+                                                                                                                        
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                           
+  [j/k] scroll   [q] quit                                                                                               
+                                                                                                                        
+=== narrow / default threshold (width=120, lane_wrap_width=200) ===
+                                                                                                                        
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=1  retrying=0  generated_at  
+  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                  2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                         
+                                                                                                                        
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Explore (1) ──────────────────────────────╮                                              
+│    SMA-101                                                             │                                              
+│   Lane wrap design brief  P3                                           │                                              
+│   Investigate ergonomic wrap thresholds.                               │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                                              
+│    SMA-100  ●                                                          │                                              
+│   Wire dim badge  P2                                                   │                                              
+│   Surface silence as a yellow badge on running cards.                  │                                              
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                              
+│   implementing _lane_rows()                                            │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Review (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────── Learn (0) ─────────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭───────────────────────────── Done (1) ─────────────────────────────╮                                                  
+│    SMA-99  ●                                                       │                                                  
+│   Persist token totals  P2                                         │                                                  
+│   Card retains in/out/total in dim style after Done.               │                                                  
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234   │                                                  
+│   wrapped up; tokens preserved                                     │                                                  
+│                                                                    │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭────────────────────────── Cancelled (0) ───────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+╭─────────────────────────── Blocked (0) ────────────────────────────╮                                                  
+│                             — empty —                              │                                                  
+╰────────────────────────────────────────────────────────────────────╯                                                  
+                                                                                                                        
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                           
+  [j/k] scroll   [q] quit                                                                                               
+                                                                                                                        
+
+=== medium / wraps cleanly (width=160, lane_wrap_width=200) ===
+                                                                                                                                                                
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md  lang=en  (SYMPHONY_LANG=ko or                    running=1  retrying=0  generated_at  
+  set tui.language in WORKFLOW.md)                                                                                                        2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                                                                 
+                                                                                                                                                                
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                          ╭────────────────────── Explore (1) ───────────────────────╮
+│                               — empty —                                │                          │    SMA-101                                               │
+╰────────────────────────────────────────────────────────────────────────╯                          │   Lane wrap design brief  P3                             │
+                                                                                                    │   Investigate ergonomic wrap thresholds.                 │
+                                                                                                    │                                                          │
+                                                                                                    ╰──────────────────────────────────────────────────────────╯
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                          ╭─────────────────────── Review (0) ───────────────────────╮
+│    SMA-100  ●                                                          │                          │                        — empty —                         │
+│   Wire dim badge  P2                                                   │                          ╰──────────────────────────────────────────────────────────╯
+│   Surface silence as a yellow badge on running cards.                  │                                                                                      
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                                                                      
+│   implementing _lane_rows()                                            │                                                                                      
+│                                                                        │                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                      
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                                                                      
+│                               — empty —                                │                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                      
+╭─────────── Learn (0) ───────────╮ ╭───────────────────────────── Done (1) ─────────────────────────────╮                                                      
+│            — empty —            │ │    SMA-99  ●                                                       │                                                      
+╰─────────────────────────────────╯ │   Persist token totals  P2                                         │                                                      
+                                    │   Card retains in/out/total in dim style after Done.               │                                                      
+                                    │   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234   │                                                      
+                                    │   wrapped up; tokens preserved                                     │                                                      
+                                    │                                                                    │                                                      
+                                    ╰────────────────────────────────────────────────────────────────────╯                                                      
+╭───────── Cancelled (0) ─────────╮ ╭─────────────────────────── Blocked (0) ────────────────────────────╮                                                      
+│            — empty —            │ │                             — empty —                              │                                                      
+╰─────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────╯                                                      
+                                                                                                                                                                
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                                                                   
+  [j/k] scroll   [q] quit                                                                                                                                       
+                                                                                                                                                                
+
+=== wide / single row (width=240, lane_wrap_width=200) ===
+                                                                                                                                                                                                                                                
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                              running=1  retrying=0  generated_at 2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                                                                                                                                                 
+                                                                                                                                                                                                                                                
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮               ╭───────────────────── Explore (1) ──────────────────────╮ ╭─────────────────────────── In Progress (1) ────────────────────────────╮                  
+│                               — empty —                                │               │    SMA-101                                             │ │    SMA-100  ●                                                          │                  
+╰────────────────────────────────────────────────────────────────────────╯               │   Lane wrap design brief  P3                           │ │   Wire dim badge  P2                                                   │                  
+                                                                                         │   Investigate ergonomic wrap thresholds.               │ │   Surface silence as a yellow badge on running cards.                  │                  
+                                                                                         │                                                        │ │   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                  
+                                                                                         ╰────────────────────────────────────────────────────────╯ │   implementing _lane_rows()                                            │                  
+                                                                                                                                                    │                                                                        │                  
+                                                                                                                                                    ╰────────────────────────────────────────────────────────────────────────╯                  
+╭────────────────────────────── Review (0) ──────────────────────────────╮               ╭──────────────────────── QA (0) ────────────────────────╮ ╭────────────────────────────── Learn (0) ───────────────────────────────╮                  
+│                               — empty —                                │               │                       — empty —                        │ │                               — empty —                                │                  
+╰────────────────────────────────────────────────────────────────────────╯               ╰────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────╯                  
+╭─────────────────────────────── Done (1) ───────────────────────────────╮               ╭──────────────────── Cancelled (0) ─────────────────────╮ ╭───────────────────────────── Blocked (0) ──────────────────────────────╮                  
+│    SMA-99  ●                                                           │               │                       — empty —                        │ │                               — empty —                                │                  
+│   Persist token totals  P2                                             │               ╰────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────────────────────────╯                  
+│   Card retains in/out/total in dim style after Done.                   │                                                                                                                                                                      
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234       │                                                                                                                                                                      
+│   wrapped up; tokens preserved                                         │                                                                                                                                                                      
+│                                                                        │                                                                                                                                                                      
+╰────────────────────────────────────────────────────────────────────────╯                                                                                                                                                                      
+                                                                                                                                                                                                                                                
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                                                                                                                                                   
+  [j/k] scroll   [q] quit                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                
+
+=== narrow / wrap disabled (sentinel) (width=120, lane_wrap_width=0) ===
+                                                                                                                        
+  symphony-multi-agent  agent=claude  tracker=file  workflow=WORKFLOW.md           running=1  retrying=0  generated_at  
+  lang=en  (SYMPHONY_LANG=ko or set tui.language in WORKFLOW.md)                                  2026-05-10T13:00:00Z  
+  controls: j/↓ down · k/↑ up · PgDn/PgUp page · g/G top/bot · q quit · cap=off                                         
+                                                                                                                        
+╭─────────────────────────────── Todo (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Explore (1) ──────────────────────────────╮                                              
+│    SMA-101                                                             │                                              
+│   Lane wrap design brief  P3                                           │                                              
+│   Investigate ergonomic wrap thresholds.                               │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────── In Progress (1) ────────────────────────────╮                                              
+│    SMA-100  ●                                                          │                                              
+│   Wire dim badge  P2                                                   │                                              
+│   Surface silence as a yellow badge on running cards.                  │                                              
+│   turn 4  agent_turn_completed  in=12,300 / out=2,100 / total=14,400   │                                              
+│   implementing _lane_rows()                                            │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Review (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────────── QA (0) ────────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭────────────────────────────── Learn (0) ───────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭─────────────────────────────── Done (1) ───────────────────────────────╮                                              
+│    SMA-99  ●                                                           │                                              
+│   Persist token totals  P2                                             │                                              
+│   Card retains in/out/total in dim style after Done.                   │                                              
+│   turn 8  agent_turn_completed  in=1,000 / out=234 / total=1,234       │                                              
+│   wrapped up; tokens preserved                                         │                                              
+│                                                                        │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭──────────────────────────── Cancelled (0) ─────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+╭───────────────────────────── Blocked (0) ──────────────────────────────╮                                              
+│                               — empty —                                │                                              
+╰────────────────────────────────────────────────────────────────────────╯                                              
+                                                                                                                        
+  tokens  in=13,300  out=2,334  total=15,634    runtime=90.0s                                                           
+  [j/k] scroll   [q] quit                                                                                               
+                                                                                                                        
+

@@ -1,0 +1,11 @@
+loaded pi.py from: /Users/danny/Documents/PARA/Resource/symphony-multi-agent/src/symphony/backends/pi.py
+{
+  "session_id": "019e1016-158f-7200-af8b-69d8c689bc7a",
+  "usage": {
+    "cache_input_tokens": 0,
+    "input_tokens": 16569,
+    "output_tokens": 5,
+    "total_tokens": 16574
+  }
+}
+OK: 4 buckets present; invariant total = in + out + cache holds

@@ -78,3 +78,63 @@ def test_windows_picks_git_bash_when_available(
         (str(fake_git_bash),),
     )
     assert resolve_bash() == str(fake_git_bash)
+
+
+# ---------------------------------------------------------------------------
+# safe_proc_wait — bypass for asyncio's broken child watcher under Textual
+# ---------------------------------------------------------------------------
+
+
+import asyncio
+import subprocess as _subprocess
+from types import SimpleNamespace
+
+from symphony._shell import safe_proc_wait
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
+def test_safe_proc_wait_reaps_via_thread() -> None:
+    """Reaps a child the asyncio watcher never saw — the actual prod scenario.
+
+    Symphony's bug surfaces when asyncio's child watcher silently fails to
+    reap a child (Textual + macOS + 3.12). We simulate that by spawning via
+    plain ``subprocess.Popen`` so asyncio never registers the PID. The
+    fallback path through ``os.waitpid`` in a worker thread should still
+    return the real exit code.
+    """
+    popen = _subprocess.Popen(
+        ["bash", "-c", "exit 7"],
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
+    )
+    # Wrap to look like an asyncio Process for our helper's interface — we
+    # only need `pid` and `returncode`.
+    fake = SimpleNamespace(pid=popen.pid, returncode=None)
+
+    rc = asyncio.run(safe_proc_wait(fake, timeout=5.0))
+    assert rc == 7
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
+def test_safe_proc_wait_short_circuits_when_returncode_set() -> None:
+    """If the asyncio watcher already reaped, we trust ``proc.returncode``."""
+    fake = SimpleNamespace(pid=99999, returncode=0)
+    rc = asyncio.run(safe_proc_wait(fake, timeout=1.0))
+    assert rc == 0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX waitpid semantics")
+def test_safe_proc_wait_timeout_returns_none() -> None:
+    """Long-running child past the timeout returns None instead of blocking."""
+    popen = _subprocess.Popen(
+        ["bash", "-c", "sleep 5"],
+        stdout=_subprocess.DEVNULL,
+        stderr=_subprocess.DEVNULL,
+    )
+    fake = SimpleNamespace(pid=popen.pid, returncode=None)
+    try:
+        rc = asyncio.run(safe_proc_wait(fake, timeout=0.2))
+        assert rc is None
+    finally:
+        popen.kill()
+        popen.wait(timeout=2.0)

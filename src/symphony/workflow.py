@@ -28,12 +28,13 @@ LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql"
 LINEAR_API_KEY_ENV = "LINEAR_API_KEY"
 
 DEFAULT_ACTIVE_STATES = ("Todo", "In Progress")
-DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
+DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Archive")
 DEFAULT_BOARD_ROOT_NAME = "board"
 DEFAULT_POLL_INTERVAL_MS = 30_000
 DEFAULT_HOOK_TIMEOUT_MS = 60_000
 DEFAULT_MAX_CONCURRENT_AGENTS = 10
 DEFAULT_MAX_TURNS = 20
+DEFAULT_MAX_TOTAL_TURNS = 60
 DEFAULT_MAX_RETRY_BACKOFF_MS = 300_000
 DEFAULT_CODEX_COMMAND = "codex app-server"
 DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
@@ -176,6 +177,13 @@ class TrackerConfig:
     # active_states / terminal_states); values are short human-readable
     # explanations of what work happens in that lane.
     state_descriptions: dict[str, str] = field(default_factory=dict)
+    # Auto-archive sweep — every poll tick, terminal-state issues whose
+    # `updated_at` is older than `archive_after_days` get moved to the
+    # `archive_state` lane. Set `archive_after_days` to 0 to disable
+    # sweep entirely (the manual TUI hotkey still works). The `archive_state`
+    # name must also appear in `terminal_states` so the lane renders.
+    archive_state: str = "Archive"
+    archive_after_days: int = 30
 
 
 @dataclass(frozen=True)
@@ -194,6 +202,14 @@ class AgentConfig:
     max_turns: int
     max_retry_backoff_ms: int
     max_concurrent_agents_by_state: dict[str, int]
+    max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
+    # When a ticket reaches the Done state cleanly, snapshot the workspace
+    # into a single git commit (`git init` if no enclosing repo found).
+    # Default ON so a fresh `pip install symphony-multi-agent` plus a
+    # WORKFLOW.md is enough to get a per-ticket commit trail without
+    # wiring an after_run hook. Set to false in WORKFLOW.md when the
+    # workspace is e.g. an existing repo with strict commit-style rules.
+    auto_commit_on_done: bool = True
 
 
 @dataclass(frozen=True)
@@ -264,11 +280,30 @@ class TuiConfig:
     # user data and are never translated. Defaults to "en".
     language: str = "en"
 
-    # Cap how many cards each column renders before collapsing the rest into
-    # a single "+N more" indicator. None / 0 / negative = render every card.
-    # `rich.live.Live(screen=True)` clips overflow silently — capping the
-    # count is the cheap fix for boards that have outgrown one terminal page.
-    max_cards_per_column: int | None = None
+    # How many Kanban lanes show simultaneously in the board. The remaining
+    # lanes are paged off-screen — `t` cycles to the next window of lanes,
+    # `shift+t` to the previous, `+`/`-` grow/shrink the window at runtime.
+    # Default 5 keeps each card column wide enough to read on a 120-col
+    # terminal even with the default detail pane visible. The TUI clamps
+    # values <1 up to 1 so a malformed config doesn't blank the board.
+    visible_lanes: int = 5
+
+
+@dataclass(frozen=True)
+class PromptConfig:
+    """External prompt files configured from WORKFLOW.md.
+
+    `base_template` is shared across all states. `stage_templates` is keyed
+    by normalized tracker state and contains only the current-stage rule body.
+    """
+
+    base_template: str = ""
+    base_path: Path | None = None
+    stage_templates: dict[str, str] = field(default_factory=dict)
+    stage_paths: dict[str, Path] = field(default_factory=dict)
+
+    def has_stage_prompts(self) -> bool:
+        return bool(self.stage_templates)
 
 
 @dataclass(frozen=True)
@@ -285,8 +320,18 @@ class ServiceConfig:
     pi: PiConfig
     server: ServerConfig
     tui: TuiConfig = field(default_factory=TuiConfig)
+    prompts: PromptConfig = field(default_factory=PromptConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
+
+    def prompt_template_for_state(self, state: str) -> str:
+        """Return the runtime prompt template for one tracker state."""
+        key = _normalize_state_key(state)
+        stage_template = self.prompts.stage_templates.get(key)
+        if stage_template is None:
+            return self.prompt_template
+        parts = [self.prompts.base_template, stage_template]
+        return "\n\n".join(part for part in parts if part)
 
     def backend_timeouts(self) -> tuple[int, int, int]:
         """Return `(turn_ms, read_ms, stall_ms)` for the active backend."""
@@ -341,6 +386,10 @@ def _as_str(value: Any, default: str = "") -> str:
     return default
 
 
+def _normalize_state_key(value: str) -> str:
+    return value.strip().lower()
+
+
 def _normalize_state_map(value: Any) -> dict[str, int]:
     """§5.3.5 — keys lowercased, invalid entries dropped."""
     if not isinstance(value, dict):
@@ -376,6 +425,60 @@ def _normalize_state_description_map(value: Any) -> dict[str, str]:
             continue
         out[key.lower()] = text
     return out
+
+
+def _resolve_config_path(base_dir: Path, value: str) -> Path:
+    resolved = resolve_var_indirection(value) if value.startswith("$") else value
+    if not isinstance(resolved, str) or not resolved:
+        return base_dir
+    path = Path(expand_path_value(resolved))
+    if not path.is_absolute():
+        return (base_dir / path).resolve()
+    return path.resolve()
+
+
+def _read_prompt_file(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise ConfigValidationError("prompt file not found", path=str(path)) from exc
+    except OSError as exc:
+        raise ConfigValidationError(
+            "prompt file unreadable", path=str(path), error=str(exc)
+        ) from exc
+
+
+def _build_prompt_config(raw: Any, base_dir: Path) -> PromptConfig:
+    if not isinstance(raw, dict):
+        return PromptConfig()
+
+    base_template = ""
+    base_path: Path | None = None
+    raw_base = raw.get("base")
+    if isinstance(raw_base, str) and raw_base.strip():
+        base_path = _resolve_config_path(base_dir, raw_base.strip())
+        base_template = _read_prompt_file(base_path)
+
+    stage_templates: dict[str, str] = {}
+    stage_paths: dict[str, Path] = {}
+    raw_stages = raw.get("stages")
+    if isinstance(raw_stages, dict):
+        for raw_state, raw_path in raw_stages.items():
+            if not isinstance(raw_state, str):
+                continue
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            key = _normalize_state_key(raw_state)
+            path = _resolve_config_path(base_dir, raw_path.strip())
+            stage_paths[key] = path
+            stage_templates[key] = _read_prompt_file(path)
+
+    return PromptConfig(
+        base_template=base_template,
+        base_path=base_path,
+        stage_templates=stage_templates,
+        stage_paths=stage_paths,
+    )
 
 
 def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
@@ -418,6 +521,31 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     else:
         board_path = (base_dir / DEFAULT_BOARD_ROOT_NAME).resolve() if tracker_kind == "file" else None
 
+    archive_after_raw = tracker_raw.get("archive_after_days")
+    if archive_after_raw is None:
+        archive_after_days = 30
+    elif isinstance(archive_after_raw, bool) or not isinstance(archive_after_raw, int):
+        # Reject bools (which `int` accepts) and non-int types up front so
+        # `archive_after_days: true` doesn't silently mean 1 day.
+        raise ConfigValidationError(
+            "tracker.archive_after_days must be a non-negative integer",
+            value=archive_after_raw,
+        )
+    elif archive_after_raw < 0:
+        raise ConfigValidationError(
+            "tracker.archive_after_days must be a non-negative integer",
+            value=archive_after_raw,
+        )
+    else:
+        archive_after_days = archive_after_raw
+
+    archive_state_raw = tracker_raw.get("archive_state")
+    archive_state = (
+        archive_state_raw.strip()
+        if isinstance(archive_state_raw, str) and archive_state_raw.strip()
+        else "Archive"
+    )
+
     tracker = TrackerConfig(
         kind=tracker_kind,
         endpoint=tracker_endpoint,
@@ -431,12 +559,16 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         state_descriptions=_normalize_state_description_map(
             tracker_raw.get("state_descriptions")
         ),
+        archive_state=archive_state,
+        archive_after_days=archive_after_days,
     )
 
     polling_raw = cfg.get("polling") or {}
     if not isinstance(polling_raw, dict):
         polling_raw = {}
-    poll_interval_ms = _as_int(polling_raw.get("interval_ms"), DEFAULT_POLL_INTERVAL_MS)
+    poll_interval_ms = _validated_positive_or_default(
+        polling_raw.get("interval_ms"), DEFAULT_POLL_INTERVAL_MS, name="polling.interval_ms"
+    )
 
     workspace_raw = cfg.get("workspace") or {}
     if not isinstance(workspace_raw, dict):
@@ -476,6 +608,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     max_turns = _validated_positive_or_default(
         agent_raw.get("max_turns"), DEFAULT_MAX_TURNS, name="agent.max_turns"
     )
+    max_total_turns = _validated_positive_or_default(
+        agent_raw.get("max_total_turns"),
+        DEFAULT_MAX_TOTAL_TURNS,
+        name="agent.max_total_turns",
+    )
     agent_kind = _as_str(agent_raw.get("kind"), DEFAULT_AGENT_KIND).strip().lower() or DEFAULT_AGENT_KIND
     if agent_kind not in SUPPORTED_AGENT_KINDS:
         raise ConfigValidationError(
@@ -484,15 +621,23 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         )
     agent = AgentConfig(
         kind=agent_kind,
-        max_concurrent_agents=_as_int(
-            agent_raw.get("max_concurrent_agents"), DEFAULT_MAX_CONCURRENT_AGENTS
+        max_concurrent_agents=_validated_positive_or_default(
+            agent_raw.get("max_concurrent_agents"),
+            DEFAULT_MAX_CONCURRENT_AGENTS,
+            name="agent.max_concurrent_agents",
         ),
         max_turns=max_turns,
-        max_retry_backoff_ms=_as_int(
-            agent_raw.get("max_retry_backoff_ms"), DEFAULT_MAX_RETRY_BACKOFF_MS
+        max_retry_backoff_ms=_validated_positive_or_default(
+            agent_raw.get("max_retry_backoff_ms"),
+            DEFAULT_MAX_RETRY_BACKOFF_MS,
+            name="agent.max_retry_backoff_ms",
         ),
         max_concurrent_agents_by_state=_normalize_state_map(
             agent_raw.get("max_concurrent_agents_by_state")
+        ),
+        max_total_turns=max_total_turns,
+        auto_commit_on_done=bool(
+            agent_raw.get("auto_commit_on_done", True)
         ),
     )
 
@@ -504,9 +649,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         approval_policy=codex_raw.get("approval_policy"),
         thread_sandbox=codex_raw.get("thread_sandbox"),
         turn_sandbox_policy=codex_raw.get("turn_sandbox_policy"),
-        turn_timeout_ms=_as_int(codex_raw.get("turn_timeout_ms"), DEFAULT_CODEX_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(codex_raw.get("read_timeout_ms"), DEFAULT_CODEX_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("turn_timeout_ms"), DEFAULT_CODEX_TURN_TIMEOUT_MS, name="codex.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("read_timeout_ms"), DEFAULT_CODEX_READ_TIMEOUT_MS, name="codex.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS, name="codex.stall_timeout_ms"
+        ),
     )
 
     claude_raw = cfg.get("claude") or {}
@@ -514,9 +665,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         claude_raw = {}
     claude = ClaudeConfig(
         command=_as_str(claude_raw.get("command"), DEFAULT_CLAUDE_COMMAND) or DEFAULT_CLAUDE_COMMAND,
-        turn_timeout_ms=_as_int(claude_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(claude_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(claude_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="claude.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="claude.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            claude_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="claude.stall_timeout_ms"
+        ),
         resume_across_turns=bool(claude_raw.get("resume_across_turns", True)),
     )
 
@@ -525,9 +682,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         gemini_raw = {}
     gemini = GeminiConfig(
         command=_as_str(gemini_raw.get("command"), DEFAULT_GEMINI_COMMAND) or DEFAULT_GEMINI_COMMAND,
-        turn_timeout_ms=_as_int(gemini_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(gemini_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="gemini.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="gemini.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            gemini_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="gemini.stall_timeout_ms"
+        ),
     )
 
     pi_raw = cfg.get("pi") or {}
@@ -535,9 +698,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         pi_raw = {}
     pi = PiConfig(
         command=_as_str(pi_raw.get("command"), DEFAULT_PI_COMMAND) or DEFAULT_PI_COMMAND,
-        turn_timeout_ms=_as_int(pi_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS),
-        read_timeout_ms=_as_int(pi_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS),
-        stall_timeout_ms=_as_int(pi_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS),
+        turn_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("turn_timeout_ms"), DEFAULT_BACKEND_TURN_TIMEOUT_MS, name="pi.turn_timeout_ms"
+        ),
+        read_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("read_timeout_ms"), DEFAULT_BACKEND_READ_TIMEOUT_MS, name="pi.read_timeout_ms"
+        ),
+        stall_timeout_ms=_validated_positive_or_default(
+            pi_raw.get("stall_timeout_ms"), DEFAULT_BACKEND_STALL_TIMEOUT_MS, name="pi.stall_timeout_ms"
+        ),
         resume_across_turns=bool(pi_raw.get("resume_across_turns", True)),
     )
 
@@ -559,19 +728,18 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     from .i18n import resolve_language
     # SYMPHONY_LANG env var takes precedence over WORKFLOW.md so a single
     # operator can flip without editing the shared workflow file.
-    raw_max = tui_raw.get("max_cards_per_column")
-    if isinstance(raw_max, bool):
-        max_cards: int | None = None
-    elif isinstance(raw_max, int) and raw_max > 0:
-        max_cards = raw_max
-    else:
-        max_cards = None
+    # `_as_int(..., allow_zero=False)` rejects 0/negative as invalid → falls
+    # back to default 5. Belt-and-suspenders `max(1, ...)` covers the case
+    # where a user sets `visible_lanes: 0` deliberately and the helper still
+    # returns it through the allow_zero path elsewhere.
+    visible_lanes = max(1, _as_int(tui_raw.get("visible_lanes"), 5, allow_zero=False))
     tui = TuiConfig(
         language=resolve_language(tui_raw.get("language")),
-        max_cards_per_column=max_cards,
+        visible_lanes=visible_lanes,
     )
 
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
+    prompts = _build_prompt_config(cfg.get("prompts"), base_dir)
 
     return ServiceConfig(
         workflow_path=workflow.source_path,
@@ -586,6 +754,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         pi=pi,
         server=server,
         tui=tui,
+        prompts=prompts,
         raw=dict(cfg),
         prompt_template=prompt_template,
     )

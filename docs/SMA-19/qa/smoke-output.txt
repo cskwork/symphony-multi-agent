@@ -1,0 +1,18 @@
+  event=session_started usage={'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0} pid=None
+  event=turn_completed usage={'input_tokens': 16945, 'output_tokens': 202, 'total_tokens': 17147} pid=98996
+  event=turn_completed usage={'input_tokens': 33936, 'output_tokens': 403, 'total_tokens': 34339} pid=99498
+
+=== minted session_id: 5fc48cf3-ce64-4ef6-887b-274993db10c0 ===
+
+>>> turn 1 prompt: Memorize the secret memo word: 'okra'. Reply with exactly: 'memo received'. Nothing else.
+<<< turn 1 last_message: 'memo received'
+    usage after turn 1: {'input_tokens': 16945, 'output_tokens': 202, 'total_tokens': 17147}
+
+>>> turn 2 prompt: What was the secret memo word I asked you to memorize? Reply with the single word and nothing else.
+<<< turn 2 last_message: 'okra'
+    usage after turn 2: {'input_tokens': 33936, 'output_tokens': 403, 'total_tokens': 34339}
+
+PASS: turn 2 recalled memo word 'okra' (in 'okra').
+PASS: three-bucket invariant holds and totals are non-zero.
+
+Session id stable across turns: 5fc48cf3-ce64-4ef6-887b-274993db10c0
