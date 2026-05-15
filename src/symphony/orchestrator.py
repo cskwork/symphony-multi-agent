@@ -1673,6 +1673,12 @@ class Orchestrator:
                             exit_reason="reconcile_terminate_terminal",
                             state=issue.state,
                         )
+                    if (issue.state or "").strip().lower() == "done":
+                        await self._workspace_manager.after_done_best_effort(
+                            entry.workspace_path,
+                            identifier=entry.issue.identifier,
+                            title=entry.issue.title,
+                        )
                     await self._workspace_manager.remove(entry.workspace_path)
             elif state in active:
                 # Update in-memory issue snapshot.
@@ -1757,6 +1763,12 @@ class Orchestrator:
                         title=issue.title,
                         exit_reason="startup_terminal_cleanup",
                         state=issue.state,
+                    )
+                if (issue.state or "").strip().lower() == "done":
+                    await self._workspace_manager.after_done_best_effort(
+                        path,
+                        identifier=issue.identifier,
+                        title=issue.title,
                     )
                 await self._workspace_manager.remove(path)
 

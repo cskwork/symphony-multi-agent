@@ -193,6 +193,13 @@ class HooksConfig:
     after_run: str | None
     before_remove: str | None
     timeout_ms: int
+    # Fires once per ticket immediately after `commit_workspace_on_done`
+    # succeeds AND the ticket reached `Done`. Receives the standard hook
+    # env plus `SYMPHONY_ISSUE_ID` and `SYMPHONY_ISSUE_TITLE`. Lenient —
+    # failures only log a warning and never block worker cleanup. Default
+    # None preserves legacy behaviour and keeps existing positional
+    # `HooksConfig(...)` callers source-compatible.
+    after_done: str | None = None
 
 
 @dataclass(frozen=True)
@@ -600,6 +607,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         timeout_ms=_validated_positive_or_default(
             hooks_raw.get("timeout_ms"), DEFAULT_HOOK_TIMEOUT_MS, name="hooks.timeout_ms"
         ),
+        after_done=hooks_raw.get("after_done") if isinstance(hooks_raw.get("after_done"), str) else None,
     )
 
     agent_raw = cfg.get("agent") or {}

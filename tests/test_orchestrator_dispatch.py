@@ -1054,6 +1054,9 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
                 async def remove(self, p):
                     calls.append(f"remove:{p}")
 
+                async def after_done_best_effort(self, p, *, identifier, title):
+                    pass
+
                 def path_for(self, ident):
                     return Path("/tmp/ws-rc")
 
@@ -1062,9 +1065,8 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
 
             await orch._reconcile_running(cfg)
 
-            assert calls == ["commit:MT-RC", "remove:/tmp/ws-rc"], (
-                f"commit must precede remove; got {calls}"
-            )
+            expected = ["commit:MT-RC", f"remove:{Path('/tmp/ws-rc')}"]
+            assert calls == expected, f"commit must precede remove; got {calls}"
         finally:
             worker_task.cancel()
             try:
@@ -1128,6 +1130,9 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 async def remove(self, p):
                     remove_calls.append(str(p))
 
+                async def after_done_best_effort(self, p, *, identifier, title):
+                    pass
+
                 def path_for(self, ident):
                     return Path("/tmp/ws-off")
 
@@ -1137,7 +1142,7 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
             await orch._reconcile_running(cfg_off)
 
             assert commit_calls == [], "auto_commit_on_done=False must skip commit"
-            assert remove_calls == ["/tmp/ws-off"], "remove must still happen"
+            assert remove_calls == [str(Path("/tmp/ws-off"))], "remove must still happen"
         finally:
             worker_task.cancel()
             try:

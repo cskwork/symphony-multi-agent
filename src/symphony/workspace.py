@@ -132,6 +132,33 @@ class WorkspaceManager:
         except Exception as exc:  # §9.4 — log and ignore.
             log.warning("hook_after_run_failed", path=str(path), error=str(exc))
 
+    async def after_done_best_effort(
+        self, path: Path, *, identifier: str, title: str
+    ) -> None:
+        """Fire `hooks.after_done` once when a ticket reached `Done`.
+
+        Called by the orchestrator after `commit_workspace_on_done` and
+        before `remove`. Lenient — failures log a warning and return so
+        a broken push/PR script never blocks the queue.
+        """
+        if not self._hooks.after_done:
+            return
+        if not path.exists():
+            log.info("hook_after_done_skipped_missing_cwd", path=str(path))
+            return
+        try:
+            await self._run_hook(
+                "after_done",
+                self._hooks.after_done,
+                path,
+                extra_env={
+                    "SYMPHONY_ISSUE_ID": identifier,
+                    "SYMPHONY_ISSUE_TITLE": title or "",
+                },
+            )
+        except Exception as exc:
+            log.warning("hook_after_done_failed", path=str(path), error=str(exc))
+
     async def remove(self, path: Path) -> None:
         path = path.resolve()
         try:
@@ -161,7 +188,14 @@ class WorkspaceManager:
                 root=str(self._root),
             ) from exc
 
-    async def _run_hook(self, name: str, script: str, cwd: Path) -> None:
+    async def _run_hook(
+        self,
+        name: str,
+        script: str,
+        cwd: Path,
+        *,
+        extra_env: dict[str, str] | None = None,
+    ) -> None:
         timeout_s = max(self._hooks.timeout_ms, 0) / 1000.0
         log.info("hook_start", hook=name, cwd=str(cwd))
         # §9.4 — run script via `bash -lc` with workspace cwd.
@@ -182,6 +216,8 @@ class WorkspaceManager:
             if self._workflow_dir
             else "",
         }
+        if extra_env:
+            env.update(extra_env)
 
         def _do_run() -> subprocess.CompletedProcess[bytes]:
             return subprocess.run(
