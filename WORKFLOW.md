@@ -71,11 +71,38 @@ hooks:
     # Record the fork point so commit_workspace_on_done can `git reset --soft`
     # back to it and squash all per-turn work into a single ticket commit.
     git config symphony.basesha "$(git rev-parse HEAD)"
-    # Symlink shared directories back to host so agent edits are visible
-    # to Symphony's file tracker (which reads from the host's board_root).
+    # Link shared directories back to host so agent edits are visible to
+    # Symphony's file tracker (which reads from the host's board_root).
+    #
+    # Cross-platform: on POSIX use `ln -s`; on Windows Git Bash without
+    # admin / Developer Mode, `ln -s` silently *copies* the source, leaving
+    # the worktree's kanban/ as a divergent real directory — the tracker
+    # never sees the agent's Done transition and dispatches forever. The
+    # portable fix is a Windows directory junction (`mklink /J`), which
+    # behaves like a real directory to every tool, works cross-volume, and
+    # needs no elevation.
+    _symphony_link_dir() {
+      local target="$1" source="$2"
+      rm -rf "$target"
+      if [ "${OS:-}" = "Windows_NT" ] && command -v cmd.exe >/dev/null 2>&1; then
+        # MSYS bash mangles backslashes inside `cmd.exe //c "..."` argument
+        # strings (e.g. `\U` in `\Users` becomes garbled), so route through
+        # a tiny .bat that takes %1/%2 — bat files receive properly quoted
+        # args untouched. Also handles paths containing spaces.
+        local target_win source_win bat bat_win
+        target_win="$(cygpath -w "$(realpath -m "$target")")"
+        source_win="$(cygpath -w "$source")"
+        bat="${TEMP:-/tmp}/symphony-link-$$-$RANDOM.bat"
+        printf '@echo off\r\nmklink /J %%1 %%2\r\n' > "$bat"
+        bat_win="$(cygpath -w "$bat")"
+        cmd.exe //c "$bat_win" "$target_win" "$source_win" >/dev/null
+        rm -f "$bat"
+      else
+        ln -s "$source" "$target"
+      fi
+    }
     for dir in kanban docs llm-wiki; do
-      rm -rf "$dir"
-      ln -s "$HOST_REPO/$dir" "$dir"
+      _symphony_link_dir "$dir" "$HOST_REPO/$dir"
     done
     # Pick the first available Python interpreter. `python3.11` is preferred
     # because the project pins to >= 3.11, but we tolerate any newer 3.x so
@@ -174,7 +201,14 @@ agent:
     Learn: 3
 
 claude:
-  command: claude -p --output-format stream-json --verbose --permission-mode acceptEdits
+  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` (etc.) extends Claude
+  # Code's write scope to the host directories that after_create
+  # junctioned into the worktree. Without these, the agent silently
+  # fails to flip ticket state to Done because the resolved path lands
+  # outside its cwd, and Symphony's tracker keeps re-dispatching it.
+  # Symphony injects SYMPHONY_WORKFLOW_DIR before spawning each turn
+  # (see Orchestrator.start).
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs" --add-dir "$SYMPHONY_WORKFLOW_DIR/llm-wiki"'
   resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000

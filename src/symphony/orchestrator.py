@@ -216,6 +216,13 @@ class Orchestrator:
             if err is not None or cfg is None:
                 raise err or SymphonyError("workflow not loaded")
         validate_for_dispatch(cfg)
+        # Surface the workflow dir to every subprocess spawned afterwards
+        # (hooks and agent backends inherit via os.environ). WORKFLOW.md
+        # authors can then reference it from `claude.command` etc., e.g.
+        # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` so Claude Code accepts
+        # writes through the host-board junction installed by after_create.
+        import os as _os
+        _os.environ["SYMPHONY_WORKFLOW_DIR"] = str(cfg.workflow_path.parent)
         self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")

@@ -116,6 +116,81 @@ async def test_after_create_failure_surfaces_stderr(tmp_path):
     assert "requires Python >=3.12,<3.13" in message
 
 
+# Regression guard for the cross-platform symlink helper embedded in
+# WORKFLOW.md / WORKFLOW.file.example.md / WORKFLOW.smoke.md. On Windows
+# Git Bash without admin/Developer Mode, `ln -s` silently copies the
+# source; the agent's edits then never propagate to the host board and
+# the tracker re-dispatches forever. The helper falls back to a Windows
+# directory junction (mklink /J) which all programs treat as a real dir.
+_LINK_DIR_HELPER = r"""
+set -euo pipefail
+_symphony_link_dir() {
+  local target="$1" source="$2"
+  rm -rf "$target"
+  if [ "${OS:-}" = "Windows_NT" ] && command -v cmd.exe >/dev/null 2>&1; then
+    # MSYS bash mangles backslashes inside `cmd.exe //c "..."` argument
+    # strings (e.g. `\U` in `\Users` becomes garbled), so route through a
+    # tiny .bat that takes %1/%2 — bat files receive properly quoted args
+    # untouched. Also handles paths containing spaces.
+    local target_win source_win bat bat_win
+    target_win="$(cygpath -w "$(realpath -m "$target")")"
+    source_win="$(cygpath -w "$source")"
+    bat="${TEMP:-/tmp}/symphony-link-$$-$RANDOM.bat"
+    printf '@echo off\r\nmklink /J %%1 %%2\r\n' > "$bat"
+    bat_win="$(cygpath -w "$bat")"
+    cmd.exe //c "$bat_win" "$target_win" "$source_win" >/dev/null
+    rm -f "$bat"
+  else
+    ln -s "$source" "$target"
+  fi
+}
+_symphony_link_dir "$TARGET_NAME" "$SOURCE_PATH"
+"""
+
+
+def test_symphony_link_dir_propagates_writes_back_to_source(tmp_path):
+    """The after_create symlink helper must make agent writes inside the
+    workspace appear in the host's board directory. Regression guard for
+    the Windows-only silent-copy defect where `ln -s` left the workspace
+    with an isolated real directory."""
+    host = tmp_path / "host_repo"
+    host.mkdir()
+    board = host / "kanban_smoke"
+    board.mkdir()
+    (board / "DEMO-1.md").write_text("state: Todo\n", encoding="utf-8")
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    # Pre-create the target as an empty directory (Symphony does this
+    # before the hook runs, so the helper has to delete it first).
+    (workspace / "kanban_smoke").mkdir()
+
+    subprocess.run(
+        [_BASH, "-lc", _LINK_DIR_HELPER],
+        cwd=str(workspace),
+        check=True,
+        env={
+            **os.environ,
+            "TARGET_NAME": "kanban_smoke",
+            "SOURCE_PATH": str(board),
+        },
+    )
+
+    linked = workspace / "kanban_smoke"
+    # Existing host file is visible through the link.
+    assert (linked / "DEMO-1.md").read_text(encoding="utf-8") == "state: Todo\n"
+
+    # Writes through the link reach the host board — this is the property
+    # the silent-copy bug breaks.
+    (linked / "DEMO-1.md").write_text("state: Done\n", encoding="utf-8")
+    assert (board / "DEMO-1.md").read_text(encoding="utf-8") == "state: Done\n"
+
+    # New file created through the link must also appear at the host.
+    (linked / "DEMO-2.md").write_text("state: Todo\n", encoding="utf-8")
+    assert (board / "DEMO-2.md").exists()
+
+
 @pytest.mark.asyncio
 async def test_before_run_aborts_attempt(tmp_path):
     mgr = WorkspaceManager(tmp_path / "ws", _hooks(before_run="exit 9"))

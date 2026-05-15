@@ -62,12 +62,39 @@ hooks:
     # Record the fork point so commit_workspace_on_done can `git reset --soft`
     # back to it and squash all per-turn work into a single ticket commit.
     git config symphony.basesha "$(git rev-parse HEAD)"
-    # Symlink tracker-managed directories back to host so agent state
+    # Link tracker-managed directories back to host so agent state
     # transitions are visible to Symphony's FileBoardTracker (which reads
     # board_root from the host repo, not from this worktree's checkout).
+    #
+    # Cross-platform: on POSIX use `ln -s`; on Windows Git Bash without
+    # admin / Developer Mode, `ln -s` silently *copies* the source, leaving
+    # the worktree's kanban/ as a divergent real directory — the tracker
+    # never sees the agent's Done transition and dispatches forever. The
+    # portable fix is a Windows directory junction (`mklink /J`), which
+    # behaves like a real directory to every tool, works cross-volume, and
+    # needs no elevation.
+    _symphony_link_dir() {
+      local target="$1" source="$2"
+      rm -rf "$target"
+      if [ "${OS:-}" = "Windows_NT" ] && command -v cmd.exe >/dev/null 2>&1; then
+        # MSYS bash mangles backslashes inside `cmd.exe //c "..."` argument
+        # strings (e.g. `\U` in `\Users` becomes garbled), so route through
+        # a tiny .bat that takes %1/%2 — bat files receive properly quoted
+        # args untouched. Also handles paths containing spaces.
+        local target_win source_win bat bat_win
+        target_win="$(cygpath -w "$(realpath -m "$target")")"
+        source_win="$(cygpath -w "$source")"
+        bat="${TEMP:-/tmp}/symphony-link-$$-$RANDOM.bat"
+        printf '@echo off\r\nmklink /J %%1 %%2\r\n' > "$bat"
+        bat_win="$(cygpath -w "$bat")"
+        cmd.exe //c "$bat_win" "$target_win" "$source_win" >/dev/null
+        rm -f "$bat"
+      else
+        ln -s "$source" "$target"
+      fi
+    }
     for dir in kanban docs llm-wiki; do
-      rm -rf "$dir"
-      ln -s "$HOST_REPO/$dir" "$dir"
+      _symphony_link_dir "$dir" "$HOST_REPO/$dir"
     done
   before_run: |
     # NEVER `git reset --hard` inside a worktree — it discards in-progress
@@ -135,7 +162,12 @@ codex:
   turn_sandbox_policy: workspace-write
 
 claude:
-  command: claude -p --output-format stream-json --verbose
+  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` (etc.) extends Claude
+  # Code's write scope to the host directories that after_create
+  # junctioned into the worktree. Without these, the agent silently
+  # fails to flip ticket state to Done because the resolved path lands
+  # outside its cwd, and Symphony's tracker keeps re-dispatching it.
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs" --add-dir "$SYMPHONY_WORKFLOW_DIR/llm-wiki"'
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
