@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from symphony._shell import resolve_bash
 from symphony.errors import InvalidWorkspaceCwd, SymphonyError
 from symphony.workflow import HooksConfig
 from symphony.workspace import (
@@ -18,6 +19,7 @@ from symphony.workspace import (
 
 
 _HAS_GIT = shutil.which("git") is not None
+_BASH = resolve_bash()
 
 
 def _git(cwd, *args):
@@ -317,7 +319,7 @@ def test_after_run_amend_keeps_branch_at_one_wip_commit(tmp_path, monkeypatch):
 
     def _run_hook() -> None:
         subprocess.run(
-            ["bash", "-lc", _AFTER_RUN_HOOK],
+            [_BASH, "-lc", _AFTER_RUN_HOOK],
             cwd=str(repo),
             check=True,
             env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
@@ -383,7 +385,7 @@ def test_after_run_does_not_amend_agent_authored_commit(tmp_path, monkeypatch):
     (repo / "more.txt").write_text("more work")
     import subprocess
     subprocess.run(
-        ["bash", "-lc", _AFTER_RUN_HOOK],
+        [_BASH, "-lc", _AFTER_RUN_HOOK],
         cwd=str(repo), check=True,
         env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
              "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},

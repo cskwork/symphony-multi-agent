@@ -47,7 +47,19 @@ hooks:
     # Symphony pre-creates the workspace dir; git worktree add refuses to
     # populate an existing path, so drop the empty dir first.
     cd "$HOST_REPO"
-    [ -d "$WORKTREE_PATH" ] && rmdir "$WORKTREE_PATH"
+    # Windows note: the file indexer / AV may hold a transient handle on the
+    # just-created dir, so rmdir can hit `Device or resource busy` for tens of
+    # ms. Retry up to 5x with backoff; fail loudly if the handle persists.
+    i=0
+    while [ -d "$WORKTREE_PATH" ] && [ $i -lt 5 ]; do
+      rmdir "$WORKTREE_PATH" 2>/dev/null && break
+      sleep 0.2
+      i=$((i+1))
+    done
+    if [ -d "$WORKTREE_PATH" ]; then
+      echo "after_create: $WORKTREE_PATH still present after 5 rmdir retries (Windows file lock?); aborting." >&2
+      exit 1
+    fi
     # Reuse the branch if a prior worktree was reaped without prune.
     if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$BRANCH"

@@ -215,8 +215,20 @@ def test_pi_auth_skipped_for_non_pi(tmp_path: Path) -> None:
     assert "skipped" in result.message
 
 
+def _isolate_home(monkeypatch, home: Path) -> None:
+    """Make Path.home() resolve to ``home`` on every platform.
+
+    POSIX reads HOME; Windows reads USERPROFILE first and falls back to
+    HOMEDRIVE+HOMEPATH. Setting all three keeps the tests platform-neutral.
+    """
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOMEDRIVE", home.drive or "")
+    monkeypatch.setenv("HOMEPATH", str(home)[len(home.drive):] if home.drive else str(home))
+
+
 def test_pi_auth_warns_when_missing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))  # ~ resolves to a clean dir
+    _isolate_home(monkeypatch, tmp_path)
     cfg = _build_cfg(
         tmp_path,
         """
@@ -231,7 +243,7 @@ def test_pi_auth_warns_when_missing(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_pi_auth_passes_when_present(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    _isolate_home(monkeypatch, tmp_path)
     auth = tmp_path / ".pi" / "agent" / "auth.json"
     auth.parent.mkdir(parents=True)
     auth.write_text("{}")
