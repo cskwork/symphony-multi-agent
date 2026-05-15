@@ -1073,7 +1073,10 @@ class Orchestrator:
             )
             current_task = asyncio.current_task()
             entry = self._running.get(running_issue_id)
-            if entry is not None and entry.worker_task is current_task:
+            if (
+                entry is not None
+                and (entry.worker_task is None or entry.worker_task is current_task)
+            ):
                 entry.exit_started_at = datetime.now(timezone.utc)
             await asyncio.shield(
                 self._on_worker_exit(
@@ -1344,6 +1347,7 @@ class Orchestrator:
         if (
             entry is not None
             and exiting_task is not None
+            and entry.worker_task is not None
             and entry.worker_task is not exiting_task
         ):
             log.warning(
