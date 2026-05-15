@@ -323,15 +323,21 @@ async def commit_workspace_on_done(
     # (legacy workspaces, non-worktree setups), fall back to a plain
     # commit-on-top — preserves correctness without forcing operators to
     # re-bootstrap.
+    # `git add -A .` (note the explicit pathspec) scopes the snapshot to the
+    # workspace path. Without the `.`, `git add -A` walks the entire
+    # enclosing repo and would sweep in unrelated host-side changes when the
+    # workspace is a subdir of an existing project (the file-tracker smoke
+    # configuration is the canonical example). Stays equivalent to `-A`
+    # alone in the worktree case where cwd is the worktree root.
     script = (
         'set -u\n'
         'if ! git rev-parse --git-dir >/dev/null 2>&1; then\n'
         '  git init -q || exit 41\n'
         'fi\n'
         'BASE="$(git config --get symphony.basesha 2>/dev/null || true)"\n'
-        'git add -A || exit 42\n'
+        'git add -A . || exit 42\n'
         'HAS_STAGED=1\n'
-        'git diff --cached --quiet && HAS_STAGED=0\n'
+        'git diff --cached --quiet -- . && HAS_STAGED=0\n'
         'HAS_NEW_COMMITS=0\n'
         'if [ -n "$BASE" ] && git rev-parse --verify "$BASE" >/dev/null 2>&1; then\n'
         '  HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"\n'

@@ -61,7 +61,11 @@ hooks:
     cd "$WORKTREE_PATH"
     # Record the fork point so commit_workspace_on_done can `git reset --soft`
     # back to it and squash all per-turn work into a single ticket commit.
-    git config symphony.basesha "$(git rev-parse HEAD)"
+    # Use --worktree so the value is scoped to .git/worktrees/<ID>/config.gitwt;
+    # writing without the flag leaks into the host repo's shared .git/config
+    # and corrupts auto_commit for unrelated workspaces nested in the host.
+    git config extensions.worktreeConfig true
+    git config --worktree symphony.basesha "$(git rev-parse HEAD)"
     # Link tracker-managed directories back to host so agent state
     # transitions are visible to Symphony's FileBoardTracker (which reads
     # board_root from the host repo, not from this worktree's checkout).

@@ -62,7 +62,11 @@ hooks:
     fi
     # Record the fork point so commit_workspace_on_done can `git reset --soft`
     # back to it and squash all per-turn work into a single ticket commit.
-    git -C "$WORKTREE_PATH" config symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
+    # Use --worktree so the value is scoped to .git/worktrees/<ID>/config.gitwt;
+    # writing without the flag leaks into the host repo's shared .git/config
+    # and corrupts auto_commit for unrelated workspaces nested in the host.
+    git -C "$WORKTREE_PATH" config extensions.worktreeConfig true
+    git -C "$WORKTREE_PATH" config --worktree symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
     # Linear tracker reads from its API, not the file system, so no
     # symlink-back step is needed. (For tracker.kind=file, also symlink
     # kanban/docs/llm-wiki back to $HOST_REPO — see WORKFLOW.file.example.md.)

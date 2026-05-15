@@ -316,6 +316,46 @@ async def test_commit_workspace_on_done_reuses_parent_repo(
 
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
+async def test_commit_workspace_on_done_ignores_host_untracked(
+    tmp_path, monkeypatch
+):
+    """When the workspace is nested in a host repo with unrelated untracked
+    files, auto-commit must only snapshot the workspace tree. A prior
+    smoke run on Windows discovered this surface: the file-tracker
+    workspace at `tmp_workspaces/iso2/ISO-1/` lived inside the symphony
+    repo, and `git add -A` (no pathspec) swept in every untracked file
+    at the repo root — including unrelated drafts and config — bundling
+    them into the ticket commit. Pin the scope to the workspace path."""
+    _git_id_env(monkeypatch, tmp_path)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    _git(parent, "init", "-q", "-b", "main")
+    (parent / "seed.txt").write_text("seed")
+    _git(parent, "add", "-A")
+    _git(parent, "commit", "-q", "-m", "seed")
+
+    # Unrelated untracked files at the host repo root — these MUST NOT
+    # land in the auto-commit.
+    (parent / "draft.md").write_text("operator draft, not a ticket artefact")
+    (parent / "secret-notes.md").write_text("private")
+
+    nested = parent / "tmp_workspaces" / "ISO-A"
+    nested.mkdir(parents=True)
+    (nested / "out.txt").write_text("the only thing this ticket produced")
+
+    await commit_workspace_on_done(nested, identifier="ISO-A", title="scoped")
+
+    tree = _git(parent, "ls-tree", "-r", "--name-only", "HEAD").stdout.split()
+    assert "tmp_workspaces/ISO-A/out.txt" in tree
+    for leaked in ("draft.md", "secret-notes.md"):
+        assert leaked not in tree, (
+            f"{leaked!r} leaked into the auto-commit — `git add -A` must use "
+            "the workspace pathspec, not the repo-wide default"
+        )
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
 async def test_commit_workspace_on_done_skips_when_nothing_to_commit(
     tmp_path, monkeypatch
 ):
