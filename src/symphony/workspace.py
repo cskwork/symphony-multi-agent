@@ -134,18 +134,20 @@ class WorkspaceManager:
 
     async def after_done_best_effort(
         self, path: Path, *, identifier: str, title: str
-    ) -> None:
+    ) -> bool:
         """Fire `hooks.after_done` once when a ticket reached `Done`.
 
         Called by the orchestrator after `commit_workspace_on_done` and
-        before `remove`. Lenient — failures log a warning and return so
-        a broken push/PR script never blocks the queue.
+        before `remove`. Lenient by default — failures log a warning and
+        return False so the caller can apply a policy (warn-and-continue
+        vs preserve-and-block). Returns True when the hook ran cleanly
+        or was a no-op (no hook configured, missing path).
         """
         if not self._hooks.after_done:
-            return
+            return True
         if not path.exists():
             log.info("hook_after_done_skipped_missing_cwd", path=str(path))
-            return
+            return True
         try:
             await self._run_hook(
                 "after_done",
@@ -156,8 +158,10 @@ class WorkspaceManager:
                     "SYMPHONY_ISSUE_TITLE": title or "",
                 },
             )
+            return True
         except Exception as exc:
             log.warning("hook_after_done_failed", path=str(path), error=str(exc))
+            return False
 
     async def remove(self, path: Path) -> None:
         path = path.resolve()

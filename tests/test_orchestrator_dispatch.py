@@ -887,6 +887,222 @@ def test_reconcile_skips_stall_detection_for_paused_worker():
     asyncio.run(_run())
 
 
+def test_max_total_tokens_cap_cancels_worker(monkeypatch):
+    """A per-ticket token cap cancels the worker on breach.
+
+    Codex review 2026-05-16: stall predicate can't see the runaway case
+    where codex completes each turn but the conversation history re-send
+    accumulates 1.6M tokens per turn — IB-006 burned 30M+ tokens in 18
+    turns this way. New `agent.max_total_tokens` cap catches that
+    explicitly: as soon as `codex_total_tokens` crosses the cap, the
+    worker_task is cancelled and `last_error` records the reason.
+    """
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(base_cfg, max_total_tokens=1_000)
+    orch = _orch()
+    issue = _issue("MT-CAP", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg_capped  # type: ignore[assignment]
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+            assert entry.cancelled_at is None
+
+            # Fire a single event whose usage pushes total over the cap.
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 1_500,
+                        "output_tokens": 200,
+                        "total_tokens": 1_700,  # > cap (1000)
+                    },
+                    "rate_limits": None,
+                },
+            )
+
+            assert entry.cancelled_at is not None, (
+                "breaching max_total_tokens must record cancelled_at"
+            )
+            assert worker_task.cancelled() or worker_task.cancelling() > 0, (
+                "worker_task.cancel() must have been called"
+            )
+            debug = orch._issue_debug.get(issue.id)
+            assert debug is not None
+            assert "token budget exceeded" in (debug.last_error or "")
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_max_total_tokens_cap_disabled_lets_worker_run(monkeypatch):
+    """`max_total_tokens=0` (default) preserves legacy unbounded behaviour."""
+    cfg = _make_config(max_concurrent=1)
+    assert cfg.agent.max_total_tokens == 0, "precondition: default is disabled"
+    orch = _orch()
+    issue = _issue("MT-NOCAP", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[issue.id] = entry
+
+            # Massive usage — would breach any reasonable cap.
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 100_000_000,
+                        "output_tokens": 1_000_000,
+                        "total_tokens": 101_000_000,
+                    },
+                    "rate_limits": None,
+                },
+            )
+
+            assert entry.cancelled_at is None, (
+                "cap=0 must not cancel even on enormous totals"
+            )
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
+def test_after_done_failure_policy_block_preserves_workspace(monkeypatch):
+    """policy='block' + after_done hook failure → workspace NOT removed, last_error set.
+
+    Codex review 2026-05-16: critical `after_done` scripts (deploy /
+    apply-to-host) silently complete the ticket when the hook fails,
+    because legacy behaviour is warning-only and the workspace is reaped
+    immediately. New `agent.after_done_failure_policy=block` preserves
+    the worktree and records the failure on the debug entry so an
+    operator must intervene before the ticket looks Done.
+    """
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_block = _replace_agent_field(base_cfg, after_done_failure_policy="block")
+    orch = _orch()
+    issue = _issue("MT-AD-BLOCK", state="Done")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg_block, monkeypatch)
+
+        removes: list[Path] = []
+
+        class _StubWS:
+            async def after_done_best_effort(self, p, *, identifier, title):
+                return False  # hook failed
+
+            async def remove(self, p):
+                removes.append(p)
+
+            def path_for(self, ident):
+                return Path("/tmp/ws-fake")
+
+        orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert removes == [], (
+                "policy=block must NOT remove workspace when after_done failed"
+            )
+            debug = orch._issue_debug.get(issue.id)
+            assert debug is not None
+            assert "after_done failed" in (debug.last_error or "")
+            assert "workspace preserved" in (debug.last_error or "")
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
+    """policy='warn' (legacy default) + hook failure → workspace still removed.
+
+    Confirms the new policy gate doesn't accidentally suppress the
+    legacy behaviour. Operators on non-critical hooks should see no
+    change after upgrading.
+    """
+    cfg = _make_config(max_concurrent=1)
+    assert cfg.agent.after_done_failure_policy == "warn", "precondition"
+    orch = _orch()
+    issue = _issue("MT-AD-WARN", state="Done")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+        removes: list[Path] = []
+
+        class _StubWS:
+            async def after_done_best_effort(self, p, *, identifier, title):
+                return False  # hook failed
+
+            async def remove(self, p):
+                removes.append(p)
+
+            def path_for(self, ident):
+                return Path("/tmp/ws-fake")
+
+        orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert len(removes) == 1, (
+                "policy=warn must remove workspace even when after_done failed"
+            )
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_on_worker_exit_hit_max_turns_skips_continuation(monkeypatch):
     """Per-attempt `max_turns` exhaustion must NOT auto-schedule a continuation.
 

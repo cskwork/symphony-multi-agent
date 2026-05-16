@@ -251,6 +251,25 @@ class AgentConfig:
     # is orthogonal to `auto_merge_exclude_paths` — those skip checkout of
     # branch-side blobs; this captures host-side filesystem state.
     auto_merge_capture_untracked: tuple[str, ...] = ()
+    # What to do when the `after_done` hook fails. "warn" (default,
+    # legacy) just logs `hook_after_done_failed` and the orchestrator
+    # removes the workspace as usual — a failed dev/prod-apply script
+    # then looks like a clean Done. "block" preserves the workspace,
+    # marks the ticket with `last_error`, and skips workspace removal so
+    # an operator can investigate before the worktree is reaped. Pair
+    # with a production-critical `after_done` (deploy / apply-to-host)
+    # to avoid silent partial completions.
+    after_done_failure_policy: str = "warn"
+    # Hard cap on cumulative `total_tokens` per dispatched ticket
+    # (input + output across all turns). 0 = disabled (legacy). When set,
+    # `_on_codex_event` cancels the worker the moment the running total
+    # crosses the cap and marks `last_error="token budget exceeded"` so
+    # an operator sees the brake reason without log-diving. Pair with a
+    # generous `max_turns` to catch runaway-reasoning loops (e.g. codex
+    # accumulating 1.6M tokens / turn over a dozen turns) that the
+    # progress-timestamp stall predicate can't see because turns ARE
+    # completing.
+    max_total_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -716,6 +735,14 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("auto_merge_capture_untracked"),
             (),
         ),
+        after_done_failure_policy=_validated_after_done_failure_policy(
+            agent_raw.get("after_done_failure_policy"),
+        ),
+        max_total_tokens=_validated_nonnegative_or_default(
+            agent_raw.get("max_total_tokens"),
+            0,
+            name="agent.max_total_tokens",
+        ),
     )
 
     codex_raw = cfg.get("codex") or {}
@@ -915,6 +942,22 @@ def _validated_nonnegative_or_default(value: Any, default: int, *, name: str) ->
     if ivalue < 0:
         raise ConfigValidationError(f"{name} must be a non-negative integer", value=value)
     return ivalue
+
+
+_AFTER_DONE_FAILURE_POLICIES = ("warn", "block")
+
+
+def _validated_after_done_failure_policy(value: Any) -> str:
+    """Accept 'warn' (default) or 'block'. Anything else is a config error."""
+    if value is None:
+        return "warn"
+    if not isinstance(value, str) or value not in _AFTER_DONE_FAILURE_POLICIES:
+        raise ConfigValidationError(
+            "agent.after_done_failure_policy must be one of "
+            f"{list(_AFTER_DONE_FAILURE_POLICIES)}",
+            value=value,
+        )
+    return value
 
 
 # ---------------------------------------------------------------------------

@@ -526,6 +526,43 @@ class Orchestrator:
             "paused": self.is_paused(entry.issue_id),
         }
 
+    async def _after_done_then_remove_per_policy(
+        self,
+        cfg: "ServiceConfig",
+        path: Path,
+        *,
+        identifier: str,
+        title: str,
+        debug_target: "_IssueDebug | None",
+    ) -> None:
+        """Fire `after_done` hook and remove the workspace per failure policy.
+
+        Default policy `warn`: hook failure logs and the workspace is
+        removed anyway (legacy behaviour — a failed hook can look like a
+        clean Done). Policy `block`: hook failure preserves the workspace
+        and records `last_error` on the debug entry so the operator can
+        investigate before the worktree is reaped. Pair `block` with a
+        production-critical `after_done` script (deploy, host-apply).
+        """
+        if self._workspace_manager is None:
+            return
+        ok = await self._workspace_manager.after_done_best_effort(
+            path, identifier=identifier, title=title
+        )
+        if not ok and cfg.agent.after_done_failure_policy == "block":
+            log.warning(
+                "after_done_block_workspace_preserved",
+                identifier=identifier,
+                path=str(path),
+            )
+            if debug_target is not None:
+                debug_target.last_error = (
+                    "after_done failed; workspace preserved (policy=block) "
+                    "— operator action required"
+                )
+            return
+        await self._workspace_manager.remove(path)
+
     # ------------------------------------------------------------------
     # tick loop (§16.2)
     # ------------------------------------------------------------------
@@ -1297,6 +1334,34 @@ class Orchestrator:
         delta_out = 0
         if isinstance(usage, dict):
             _, delta_out = self._apply_token_totals(entry, usage)
+        # Hard token-budget cap. Catches the runaway-reasoning case the
+        # stall predicate can't see: codex completes each turn but
+        # accumulates 1.6M tokens per turn (history re-send) and burns
+        # through dozens of megatokens before max_turns ends the attempt.
+        # 0 = disabled (legacy default). On breach: cancel the worker and
+        # record the reason so the operator finds out without log-diving.
+        cfg = self._workflow_state.current()
+        cap = cfg.agent.max_total_tokens if cfg is not None else 0
+        if (
+            cap > 0
+            and entry.cancelled_at is None
+            and entry.codex_total_tokens >= cap
+        ):
+            log.warning(
+                "token_budget_exceeded",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                total_tokens=entry.codex_total_tokens,
+                cap=cap,
+            )
+            debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
+            debug.last_error = (
+                f"token budget exceeded "
+                f"({entry.codex_total_tokens}/{cap}) — worker cancelled"
+            )
+            if entry.worker_task is not None:
+                entry.worker_task.cancel()
+            entry.cancelled_at = datetime.now(timezone.utc)
         # Progress predicate — see RunningEntry.last_progress_timestamp.
         # `EVENT_OTHER_MESSAGE` is a catch-all that the claude backend fires
         # for both `assistant` (real model output) and `user` (tool_result
@@ -1530,12 +1595,13 @@ class Orchestrator:
                         exclude_paths=cfg.agent.auto_merge_exclude_paths,
                         capture_untracked=cfg.agent.auto_merge_capture_untracked,
                     )
-                await self._workspace_manager.after_done_best_effort(
+                await self._after_done_then_remove_per_policy(
+                    cfg,
                     entry.workspace_path,
                     identifier=entry.issue.identifier,
                     title=entry.issue.title,
+                    debug_target=debug,
                 )
-                await self._workspace_manager.remove(entry.workspace_path)
                 # Don't schedule a continuation — a Done ticket has nothing
                 # to continue. Skip straight to the worker_exit emit below.
             elif not is_terminal and not entry.hit_max_turns:
@@ -1850,12 +1916,17 @@ class Orchestrator:
                                 exclude_paths=cfg.agent.auto_merge_exclude_paths,
                                 capture_untracked=cfg.agent.auto_merge_capture_untracked,
                             )
-                        await self._workspace_manager.after_done_best_effort(
+                        await self._after_done_then_remove_per_policy(
+                            cfg,
                             entry.workspace_path,
                             identifier=entry.issue.identifier,
                             title=entry.issue.title,
+                            debug_target=self._issue_debug.get(issue.id),
                         )
-                    await self._workspace_manager.remove(entry.workspace_path)
+                    else:
+                        # Non-Done terminal state (e.g. Cancelled, Blocked):
+                        # no after_done hook, just reap the workspace.
+                        await self._workspace_manager.remove(entry.workspace_path)
             elif state in active:
                 # Update in-memory issue snapshot.
                 entry.issue = Issue(
@@ -1951,12 +2022,15 @@ class Orchestrator:
                             exclude_paths=cfg.agent.auto_merge_exclude_paths,
                             capture_untracked=cfg.agent.auto_merge_capture_untracked,
                         )
-                    await self._workspace_manager.after_done_best_effort(
+                    await self._after_done_then_remove_per_policy(
+                        cfg,
                         path,
                         identifier=issue.identifier,
                         title=issue.title,
+                        debug_target=self._issue_debug.get(issue.id),
                     )
-                await self._workspace_manager.remove(path)
+                else:
+                    await self._workspace_manager.remove(path)
 
 
 # ---------------------------------------------------------------------------
