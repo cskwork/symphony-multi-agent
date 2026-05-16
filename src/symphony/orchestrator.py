@@ -1276,23 +1276,32 @@ class Orchestrator:
                 entry.last_codex_message = msg[:400]
         # Token deltas (§13.5).
         usage = event.get("usage") or {}
-        delta_total = 0
+        delta_out = 0
         if isinstance(usage, dict):
-            delta_total = self._apply_token_totals(entry, usage)
+            _, delta_out = self._apply_token_totals(entry, usage)
         # Progress predicate — see RunningEntry.last_progress_timestamp.
         # `EVENT_OTHER_MESSAGE` is a catch-all that the claude backend fires
         # for both `assistant` (real model output) and `user` (tool_result
         # echo) stream-json messages. Treating every one as progress lets
         # the 5-min stall threshold get reset by tool_result echoes alone,
         # so a turn that produces no model output for 18 min still looks
-        # alive. Filter: lifecycle events count, token movement counts, and
-        # `EVENT_OTHER_MESSAGE` counts only when the payload's `type` is
-        # `assistant` (matches claude_code stream-json shape; harmless for
-        # other backends that don't set `type`).
+        # alive. Filter: lifecycle events count, OUTPUT token movement
+        # counts, and `EVENT_OTHER_MESSAGE` counts only when the payload's
+        # `type` is `assistant` (matches claude_code stream-json shape;
+        # harmless for other backends that don't set `type`).
+        #
+        # NOTE on `delta_out` (not `delta_total`): codex app-server attaches
+        # `_latest_usage` to every emitted event, including catch-all
+        # `EVENT_OTHER_MESSAGE` frames between turns. Codex inflates
+        # `input_tokens` by re-sending conversation history each turn, so
+        # `delta_total > 0` is true even when the model has produced no
+        # output — that masked a real 18-turn / 30M-token reasoning loop
+        # (IB-006, 2026-05-16). `output_tokens` only advances when the
+        # model actually emits content, which is the signal we need.
         is_progress = ev_name != EVENT_OTHER_MESSAGE
         if not is_progress and isinstance(payload, dict):
             is_progress = payload.get("type") == "assistant"
-        if delta_total > 0:
+        if delta_out > 0:
             is_progress = True
         if is_progress:
             entry.last_progress_timestamp = entry.last_codex_timestamp
@@ -1383,7 +1392,9 @@ class Orchestrator:
         if len(debug.recent_events) > 50:
             debug.recent_events = debug.recent_events[-50:]
 
-    def _apply_token_totals(self, entry: RunningEntry, totals: dict[str, Any]) -> int:
+    def _apply_token_totals(
+        self, entry: RunningEntry, totals: dict[str, Any]
+    ) -> tuple[int, int]:
         in_tok = int(totals.get("input_tokens") or 0)
         out_tok = int(totals.get("output_tokens") or 0)
         tot_tok = int(totals.get("total_tokens") or (in_tok + out_tok))
@@ -1400,7 +1411,7 @@ class Orchestrator:
         self._totals.input_tokens += delta_in
         self._totals.output_tokens += delta_out
         self._totals.total_tokens += delta_total
-        return delta_total
+        return delta_total, delta_out
 
     # ------------------------------------------------------------------
     # worker exit handling (§16.6)

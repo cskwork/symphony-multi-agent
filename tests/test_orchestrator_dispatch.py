@@ -552,6 +552,88 @@ def test_on_codex_event_user_role_other_message_does_not_advance_progress():
     asyncio.run(_run())
 
 
+def test_codex_other_message_with_input_only_token_growth_does_not_advance_progress():
+    """Codex `EVENT_OTHER_MESSAGE` + input-token growth must NOT count as progress.
+
+    Reproduces IB-006 (dograh-demo, 2026-05-16): codex app-server attaches
+    `usage` to every emitted event, including catch-all OTHER_MESSAGE
+    frames. Each codex turn re-sends conversation history, so
+    `input_tokens` (and therefore `total_tokens`) grows on every meta
+    event even while `output_tokens` stays flat. The old predicate
+    (`delta_total > 0` → progress) treated that as progress and reset
+    the 5-min stall clock indefinitely. Fix gates progress on
+    `delta_out > 0` so only real model output advances the clock.
+    """
+    orch = _orch()
+    issue = _issue("MT-1", state="In Progress")
+
+    async def _run() -> None:
+        baseline = datetime.now(timezone.utc) - timedelta(minutes=10)
+        entry = RunningEntry(
+            issue=issue,
+            started_at=baseline,
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+            last_codex_timestamp=baseline,
+            last_progress_timestamp=baseline,
+            last_reported_input_tokens=1_000_000,
+            last_reported_output_tokens=500,
+            last_reported_total_tokens=1_000_500,
+        )
+        orch._running[issue.id] = entry
+
+        # OTHER_MESSAGE with usage showing only input/total growth — exactly
+        # what codex emits when it's reasoning between turns without
+        # producing user-visible model output. No payload `type` field
+        # (codex never sets stream-json `type`).
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"message": "reasoning..."},
+                "usage": {
+                    "input_tokens": 1_100_000,   # +100k (history re-send)
+                    "output_tokens": 500,        # unchanged — no model output
+                    "total_tokens": 1_100_500,
+                },
+                "rate_limits": None,
+            },
+        )
+
+        # UI activity timestamp moved, but stall clock must not.
+        assert entry.last_codex_timestamp is not None
+        assert entry.last_codex_timestamp > baseline
+        assert entry.last_progress_timestamp == baseline, (
+            "input-only token growth on OTHER_MESSAGE must not reset stall clock"
+        )
+        # Token aggregation still happens (delta_in is real).
+        assert entry.codex_input_tokens == 100_000
+        assert entry.codex_output_tokens == 0
+
+        # Now an OTHER_MESSAGE with real output_tokens growth — DOES count.
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"message": "model output"},
+                "usage": {
+                    "input_tokens": 1_100_000,
+                    "output_tokens": 750,        # +250 — real output
+                    "total_tokens": 1_100_750,
+                },
+                "rate_limits": None,
+            },
+        )
+
+        assert entry.last_progress_timestamp is not None
+        assert entry.last_progress_timestamp > baseline
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # Auto-commit at Done — see workspace.commit_workspace_on_done.
 # ---------------------------------------------------------------------------

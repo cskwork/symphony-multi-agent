@@ -124,6 +124,16 @@ async def _run(args: argparse.Namespace) -> int:
         app = build_app(orchestrator)
         runner, bound = await run_server(app, args.host, server_port)
         log.info("http_extension_active", host=args.host, port=bound)
+    else:
+        # Surfaces the silent-no-HTTP case so the operator immediately sees
+        # why board-viewer / API consumers can't reach this instance.
+        # Common cause: `server.port` lives outside frontmatter (embedded
+        # `---` fence in a YAML literal truncated the workflow header) —
+        # see workflow.parse_workflow_text greedy end detection.
+        log.info(
+            "http_extension_disabled",
+            reason="no server.port in WORKFLOW.md frontmatter",
+        )
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
