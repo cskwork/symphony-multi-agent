@@ -50,7 +50,7 @@ State transitions and stage notes are written via the `linear_graphql` tool:
 described below. Each stage produces one comment.
 
 ## Audience & writing style (applies to every comment you post)
-
+{% if language == 'ko' %}
 Comments are read by **non-developers as well as developers** (PMs /
 기획자 included). Every stage comment must let a non-dev grasp "what
 changed, why, and how" in ~30 seconds. Code-level detail is fine, but
@@ -105,6 +105,61 @@ line at the end: `_세부: docs/<id>/<stage>/details.md_`.
 - Show, don't tell. "200 passed" beats "all tests passed".
 - A reviewer who reads only the Plain-Korean headers (skipping every
   technical body) must still understand the entire ticket end-to-end.
+{% else %}
+Comments are read by **non-developers as well as developers** (PMs
+and product managers included). Every stage comment must let a non-dev
+grasp "what changed, why, and how" in ~30 seconds. Code-level detail
+is fine, but it must come *after* a plain-language header.
+
+**Plain-language header (mandatory, first lines of every stage comment
+except the one-line Triage):**
+
+```
+**What**: <one line, understandable by a non-developer>
+**Why**: <one line, what value or risk this carries for the user/system>
+**As-Is → To-Be**:
+- As-Is: <one line, state before this stage>
+- To-Be: <one line, state after this stage>
+```
+
+After the header, write the stage-specific technical body — but obey
+the **length caps**. Push everything that would push you over the cap
+into `docs/{{ issue.identifier }}/<stage>/details.md` and add one link
+line at the end: `_details: docs/<id>/<stage>/details.md_`.
+
+| Comment / Stage section | Body cap (after header)                | What goes in details.md            |
+|-------------------------|----------------------------------------|-------------------------------------|
+| Triage comment          | 1-2 lines total (no header needed)     | n/a                                 |
+| `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs, full file walks |
+| `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches, deep trade-offs |
+| `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text         |
+| Implementation comment  | ≤ 10 lines (PR link + touched files)   | per-file change list, helper names, dataclass shapes |
+| Review comment          | ≤ 6 rows in severity table (1 line each) | full check-list reasoning, fix diffs |
+| Review Findings comment | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
+| QA Evidence comment     | header + commands + 1-line `**Verdict**` + AC table | raw pytest/curl/Playwright output |
+| `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
+| `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
+| As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
+
+**Style rules:**
+
+- **Lean on code references, don't reproduce them.** The reader can read
+  the code directly. Keep code-level detail in stage comments light:
+  cite the top 1-3 `path:line` anchors that pin the change, but skip
+  function signatures, dataclass field lists, diff hunks, and per-line
+  walks. Push extra citations or raw command output into
+  `docs/{{ issue.identifier }}/<stage>/details.md` (or the per-stage
+  artefact folders) instead of the comment.
+- Write the Plain-language header and human-readable summary lines in
+  English. English is always fine inside code spans (`path:line`,
+  identifiers, command output) — don't translate code symbols.
+- No drive-by jargon. If a term needs context for a non-developer, give
+  one short parenthetical inline. Longer explanations belong in `details.md`.
+- One thing per bullet. No nested bullets. No multi-paragraph items.
+- Show, don't tell. "200 passed" beats "all tests passed".
+- A reviewer who reads only the Plain-language headers (skipping every
+  technical body) must still understand the entire ticket end-to-end.
+{% endif %}
 
 ## Hard rules
 

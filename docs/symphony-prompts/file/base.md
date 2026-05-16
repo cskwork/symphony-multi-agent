@@ -50,7 +50,7 @@ front matter `state:` field to transition; append narrative sections to the
 body. Symphony reconciles on the next poll tick.
 
 ## Audience & writing style (applies to every section you append)
-
+{% if language == 'ko' %}
 This kanban is read by **non-developers as well as developers** (PMs /
 기획자 included). Every section you append must let a non-dev grasp
 "what changed, why, and how" in ~30 seconds. Code-level detail is fine
@@ -103,6 +103,60 @@ line at the end: `_세부: docs/<id>/<stage>/details.md_`.
 - Show, don't tell. "200 passed" beats "all tests passed".
 - A reviewer who reads only the Plain-Korean headers (skipping every
   technical body) must still understand the entire ticket end-to-end.
+{% else %}
+This kanban is read by **non-developers as well as developers** (PMs
+and product managers included). Every section you append must let a
+non-dev grasp "what changed, why, and how" in ~30 seconds. Code-level
+detail is fine in moderation, but the plain-language header comes first.
+
+**Plain-language header (mandatory, first lines of every section except
+the one-line Triage):**
+
+```
+**What**: <one line, understandable by a non-developer>
+**Why**: <one line, what value or risk this carries for the user/system>
+**As-Is → To-Be**:
+- As-Is: <one line, state before this stage>
+- To-Be: <one line, state after this stage>
+```
+
+After the header, write the stage-specific technical body — but obey
+the **length caps**. Push everything that would push you over the cap
+into `docs/{{ issue.identifier }}/<stage>/details.md` and add a link
+line at the end: `_details: docs/<id>/<stage>/details.md_`.
+
+| Section                 | Body cap (after header)                | Goes in details.md instead         |
+|-------------------------|----------------------------------------|-------------------------------------|
+| `## Triage`             | 1-2 lines total (no header needed)     | n/a                                 |
+| `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs |
+| `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches            |
+| `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text        |
+| `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
+| `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
+| `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
+| `## QA Evidence`        | header + commands + 1-line `**Verdict**` + AC table | raw pytest/curl/Playwright output |
+| `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
+| `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
+| As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
+
+**Style rules:**
+
+- **Lean on code references, don't reproduce them.** The reader can
+  read the code directly. Keep code-level detail in the ticket body
+  light: cite the top 1-3 `path:line` anchors that pin the change, but
+  skip function signatures, dataclass field lists, diff hunks, and
+  per-line walks. Push extra citations or raw command output into
+  `docs/{{ issue.identifier }}/<stage>/details.md` instead of the ticket.
+- Write the Plain-language header and human-readable summary lines in
+  English. English is always fine inside code spans (`path:line`,
+  identifiers, command output) — don't translate code symbols.
+- No drive-by jargon. If a term needs context for a non-developer, give
+  one short parenthetical inline. Longer explanations belong in `details.md`.
+- One thing per bullet. No nested bullets. No multi-paragraph items.
+- Show, don't tell. "200 passed" beats "all tests passed".
+- A reviewer who reads only the Plain-language headers (skipping every
+  technical body) must still understand the entire ticket end-to-end.
+{% endif %}
 
 ## Hard rules (apply in every stage)
 
