@@ -411,6 +411,29 @@ class FileBoardTracker:
         """TrackerClient protocol mutation hook (delegates to `transition`)."""
         self.transition(issue.identifier, target_state)
 
+    def record_agent_kind(self, identifier: str, agent_kind: str) -> Path | None:
+        """Write ``agent_kind`` to ticket frontmatter when missing.
+
+        Idempotent and preserves any existing override — recognized in
+        both ``agent_kind:`` (flat) and ``agent.kind:`` (nested) forms via
+        ``_parse_agent_kind`` so either user-authored shape is honored.
+        New writes use the nested shape to match :meth:`create`.
+        ``updated_at`` bumps only when the file is actually modified.
+        """
+        path = self.find_path(identifier)
+        if path is None:
+            return None
+        front, body = parse_ticket_file(path)
+        if _parse_agent_kind(front):
+            return path
+        normalized = agent_kind.strip().lower()
+        if not normalized:
+            return path
+        front["agent"] = {"kind": normalized}
+        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        write_ticket_atomic(path, front, body)
+        return path
+
     def create(
         self,
         *,

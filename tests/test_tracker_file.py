@@ -308,6 +308,83 @@ def test_create_can_write_agent_kind_override(tmp_path, agent_kind):
     assert issue.agent_kind == agent_kind
 
 
+def test_record_agent_kind_writes_when_missing(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="X-DEF", title="t")  # no agent_kind
+    front_before, _ = parse_ticket_file(path)
+    assert "agent" not in front_before and "agent_kind" not in front_before
+
+    out = fbt.record_agent_kind("X-DEF", "claude")
+    assert out == path
+
+    front_after, _ = parse_ticket_file(path)
+    assert front_after["agent"] == {"kind": "claude"}
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_kind == "claude"
+
+
+def test_record_agent_kind_preserves_nested_override(tmp_path):
+    """Pre-existing `agent.kind:` (nested) override is left untouched."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    fbt.create(identifier="X-NESTED", title="t", agent_kind="codex")
+
+    fbt.record_agent_kind("X-NESTED", "claude")  # would-be overwrite
+
+    path = root / "X-NESTED.md"
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_kind == "codex"
+
+
+def test_record_agent_kind_preserves_flat_override(tmp_path):
+    """Pre-existing flat `agent_kind:` (the form users hand-author) is honored."""
+    root = tmp_path / "board"
+    path = _write(
+        root,
+        "Y-FLAT.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: Y-FLAT
+            title: t
+            state: Todo
+            agent_kind: codex
+            ---
+            body
+            """
+        ),
+    )
+    fbt = FileBoardTracker(_tracker(root))
+
+    fbt.record_agent_kind("Y-FLAT", "claude")
+
+    issue = issue_from_file(path)
+    assert issue is not None and issue.agent_kind == "codex"
+
+
+def test_record_agent_kind_returns_none_for_unknown_identifier(tmp_path):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    assert fbt.record_agent_kind("NOPE-42", "claude") is None
+
+
+def test_record_agent_kind_is_idempotent(tmp_path):
+    """Re-dispatch on the same ticket must not bump `updated_at` again."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    fbt.create(identifier="X-IDEM", title="t")
+    path = root / "X-IDEM.md"
+
+    fbt.record_agent_kind("X-IDEM", "claude")
+    front1, _ = parse_ticket_file(path)
+    stamp1 = front1["updated_at"]
+
+    fbt.record_agent_kind("X-IDEM", "claude")  # second pass
+    front2, _ = parse_ticket_file(path)
+    assert front2["updated_at"] == stamp1
+
+
 def test_update_state_protocol_hook(tmp_path):
     """`update_state` is the TrackerClient mutation surface — proxies to transition."""
     from symphony.issue import Issue

@@ -801,8 +801,22 @@ class Orchestrator:
             issue_id=issue.id,
             issue_identifier=issue.identifier,
             attempt=attempt,
-            agent_kind=_requested_agent_kind(issue) or cfg.agent.kind,
+            agent_kind=entry.agent_kind,
         )
+        # Persist the resolved backend onto the ticket so downstream
+        # consumers (board UIs, audits, Done-state history) can see who
+        # ran which ticket without inferring from logs. Idempotent —
+        # adapter preserves any existing override.
+        try:
+            self._tracker_call_record_agent_kind(cfg, issue.identifier, entry.agent_kind)
+        except Exception as exc:
+            log.warning(
+                "record_agent_kind_failed",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                agent_kind=entry.agent_kind,
+                error=str(exc),
+            )
 
     def _on_worker_task_done(self, issue_id: str, task: asyncio.Task[None]) -> None:
         """Clean a registered worker whose coroutine never ran its cleanup.
@@ -2017,6 +2031,24 @@ class Orchestrator:
         client = build_tracker_client(cfg)
         try:
             return client.fetch_issues_by_states(cfg.tracker.terminal_states)
+        finally:
+            client.close()
+
+    @staticmethod
+    def _tracker_call_record_agent_kind(
+        cfg: ServiceConfig, identifier: str, agent_kind: str
+    ) -> None:
+        """Best-effort: persist the resolved backend onto the ticket.
+
+        Adapters that don't implement ``record_agent_kind`` (e.g. Linear,
+        where the field has no remote analogue) are silently skipped.
+        """
+        client = build_tracker_client(cfg)
+        try:
+            record = getattr(client, "record_agent_kind", None)
+            if record is None:
+                return
+            record(identifier, agent_kind)
         finally:
             client.close()
 
