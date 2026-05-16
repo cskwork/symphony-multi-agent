@@ -131,6 +131,24 @@ agent:
   # runs first. Set to false if your workspace is an existing repo with
   # strict commit-style rules you don't want auto-touched.
   auto_commit_on_done: true
+  # After auto-commit on Done, fold the `symphony/<ID>` branch into the
+  # host repo's main development branch as one selective-apply commit.
+  # Safe-by-default: dirty host or missing branch skips silently. Paths
+  # in `auto_merge_exclude_paths` are stripped first — by default this
+  # covers the workspace symlinks that the reference `after_create`
+  # hook installs (kanban/llm-wiki/prompt/docs), which are workspace-only
+  # plumbing and should never reach the host repo.
+  auto_merge_on_done: true
+  # Branch to merge into. Empty string = use whatever branch is currently
+  # checked out in the host repo when the ticket finishes (most flexible).
+  auto_merge_target_branch: ""
+  # Paths excluded from the selective apply. Override when your
+  # after_create hook installs a different set of workspace symlinks.
+  auto_merge_exclude_paths:
+    - kanban
+    - llm-wiki
+    - prompt
+    - docs
 
 codex:
   command: codex app-server

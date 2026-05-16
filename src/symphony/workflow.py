@@ -202,6 +202,9 @@ class HooksConfig:
     after_done: str | None = None
 
 
+DEFAULT_AUTO_MERGE_EXCLUDE_PATHS = ("kanban", "llm-wiki", "prompt", "docs")
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     kind: str
@@ -217,6 +220,23 @@ class AgentConfig:
     # wiring an after_run hook. Set to false in WORKFLOW.md when the
     # workspace is e.g. an existing repo with strict commit-style rules.
     auto_commit_on_done: bool = True
+    # After auto-commit on Done, optionally fold the symphony/<ID> branch
+    # back into the host repo's main development branch as a single
+    # selective-apply commit. Paths in `auto_merge_exclude_paths` are
+    # skipped — by default this covers the workspace symlinks that
+    # `hooks.after_create` installs (kanban/llm-wiki/prompt/docs), which
+    # are workspace-only plumbing and must not reach the host repo.
+    # Safe-by-default: a dirty host working tree or any git error skips
+    # the merge and logs `auto_merge_skipped` — no exception propagates.
+    auto_merge_on_done: bool = True
+    # Target branch in the host repo. Empty string ("") = use whatever
+    # branch is currently checked out in the host repo at fire time.
+    auto_merge_target_branch: str = ""
+    # Paths to exclude from the selective apply. Defaults to the workspace
+    # symlinks created by the `tools/board-viewer` reference workflow.
+    # Override in WORKFLOW.md when your `after_create` hook installs a
+    # different set of symlinks.
+    auto_merge_exclude_paths: tuple[str, ...] = DEFAULT_AUTO_MERGE_EXCLUDE_PATHS
 
 
 @dataclass(frozen=True)
@@ -662,6 +682,16 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         max_total_turns=max_total_turns,
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)
+        ),
+        auto_merge_on_done=bool(
+            agent_raw.get("auto_merge_on_done", True)
+        ),
+        auto_merge_target_branch=_as_str(
+            agent_raw.get("auto_merge_target_branch"), ""
+        ) or "",
+        auto_merge_exclude_paths=_as_str_list(
+            agent_raw.get("auto_merge_exclude_paths"),
+            DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
         ),
     )
 

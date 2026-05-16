@@ -51,6 +51,7 @@ from .workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
+from .auto_merge import auto_merge_on_done_best_effort
 from .workspace import WorkspaceManager, commit_workspace_on_done
 
 
@@ -1731,6 +1732,15 @@ class Orchestrator:
                             state=issue.state,
                         )
                     if (issue.state or "").strip().lower() == "done":
+                        if cfg.agent.auto_merge_on_done:
+                            await auto_merge_on_done_best_effort(
+                                workflow_dir=cfg.workflow_path.parent,
+                                branch=f"symphony/{entry.issue.identifier}",
+                                identifier=entry.issue.identifier,
+                                title=entry.issue.title,
+                                target_branch=cfg.agent.auto_merge_target_branch,
+                                exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                            )
                         await self._workspace_manager.after_done_best_effort(
                             entry.workspace_path,
                             identifier=entry.issue.identifier,
@@ -1822,6 +1832,15 @@ class Orchestrator:
                         state=issue.state,
                     )
                 if (issue.state or "").strip().lower() == "done":
+                    if cfg.agent.auto_merge_on_done:
+                        await auto_merge_on_done_best_effort(
+                            workflow_dir=cfg.workflow_path.parent,
+                            branch=f"symphony/{issue.identifier}",
+                            identifier=issue.identifier,
+                            title=issue.title,
+                            target_branch=cfg.agent.auto_merge_target_branch,
+                            exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                        )
                     await self._workspace_manager.after_done_best_effort(
                         path,
                         identifier=issue.identifier,
