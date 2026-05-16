@@ -36,14 +36,14 @@ Every ticket flows through the same gates. Honour the gate that matches
                               +-- QA failure rewinds here ---------------+
 ```
 
-`llm-wiki/` is the project's domain knowledge base — one Markdown entry
-per topic, plus an `INDEX.md` listing them. It lives at the workspace
-root next to the source code (parallel to `kanban/`). Explore reads it
+`docs/llm-wiki/` is the project's domain knowledge base — one Markdown entry
+per topic, plus an `INDEX.md` listing them. It lives under the workspace's
+`docs/` tree alongside per-ticket evidence. Explore reads it
 before any new work; Learn writes back to it after QA passes. Treat it
 as a living memory that future tickets depend on. The first Learn stage
 that runs creates the directory if it does not yet exist.
 
-`docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules at the bottom for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./llm-wiki}/<topic>.md`, the only artefact outside that root.
+`docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules at the bottom for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./docs/llm-wiki}/<topic>.md`, a sibling under the same `docs/` root.
 
 The ticket file lives at `kanban/{{ issue.identifier }}.md`. Edit the YAML
 front matter `state:` field to transition; append narrative sections to the
@@ -169,8 +169,8 @@ line at the end: `_details: docs/<id>/<stage>/details.md_`.
 - Every artefact this ticket produces lives under
   `docs/{{ issue.identifier }}/<stage>/` — never scatter outputs across
   `qa-artifacts/`, `runs/`, ad-hoc `tests/e2e/<name>/`, or sibling `docs/`
-  files. Create the folder yourself (`mkdir -p`). The llm-wiki write-back
-  in Learn is the only artefact that lives outside this root.
+  files. Create the folder yourself (`mkdir -p`). The `docs/llm-wiki/` write-back
+  in Learn is a sibling under `docs/`, not under this ticket's root.
 - **Backward transitions are explicit, not failures.** `Review → In Progress`
   (on CRITICAL/HIGH/MEDIUM findings) and `QA → In Progress` (on test/spec failure)
   are part of the pipeline. Each rewind starts the next In Progress turn

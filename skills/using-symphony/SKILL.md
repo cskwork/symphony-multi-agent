@@ -113,7 +113,7 @@ their guidance from `docs/symphony-prompts/`, not from these skills.
 matching `prompts.stages` that wire each lane to a stage-specific prompt
 under `docs/symphony-prompts/<linear|file>/stages/*.md`. This is the
 *supported default*, not a maximalist example — Explore briefs the agent
-from `llm-wiki/`, QA captures evidence, Learn writes back to the wiki,
+from `docs/llm-wiki/`, QA captures evidence, Learn writes back to the wiki,
 and the base prompt's "no skipping" gate refers to these by name.
 
 **When bootstrapping, do not shorten `active_states` or drop
@@ -124,7 +124,7 @@ workflow. Trimming to `[Todo, "In Progress", Review]` (a common LLM
 - the `Explore → In Progress → Review → QA → Learn → Done` flow the
   base prompt assumes,
 - the QA evidence gate that the base prompt requires before `Done`,
-- the Learn write-back to `llm-wiki/` future tickets depend on.
+- the Learn write-back to `docs/llm-wiki/` future tickets depend on.
 
 If the target project does need a different workflow (e.g. deploy
 pipeline), edit *both* `tracker.active_states` and the `prompts.stages`
@@ -227,6 +227,7 @@ backend.
 | Offload sub-tasks from the calling agent's context         | `reference/delegation.md`                  |
 | Diagnose `worker_exit`, `hook_failed`, blank TUI, etc.     | `reference/troubleshooting.md`             |
 | Set up / debug on Windows or macOS, or port to a new platform | `reference/platform-compat.md`          |
+| Configure .gitignore so per-ticket docs don't bloat history | `reference/gitignore-recommendations.md` |
 
 ## When NOT to use this skill
 

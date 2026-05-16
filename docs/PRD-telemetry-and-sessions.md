@@ -107,7 +107,7 @@ backend or grep raw pi JSONL. Operators ask "why is my pi run showing
 - `src/symphony/backends/pi.py` — `_update_usage`, `latest_usage` init
 - `src/symphony/orchestrator.py` — `RunningEntry` (add `pi_cache_input_tokens` accumulator), `_apply_token_totals`, `_running_row`
 - `tests/test_backends.py` — pi usage assertions
-- `llm-wiki/agent-observability.md` — note the four-bucket contract
+- `docs/llm-wiki/agent-observability.md` — note the four-bucket contract
 
 ### Verification
 
@@ -233,7 +233,7 @@ Captured shape of `gemini --skip-trust --output-format json -p ""`:
   `gemini:` block snippet to show the new command and field
 - `.claude/skills/using-symphony/reference/workflow-config.md` — bump
   the gemini bullet to mention "now multi-turn capable"
-- `llm-wiki/agent-observability.md` — gemini section
+- `docs/llm-wiki/agent-observability.md` — gemini section
 
 ### Verification
 
@@ -352,7 +352,7 @@ the seven-stage pipeline), this is a real cost.
 - `src/symphony/doctor.py` — possibly a new check (see goal #6)
 - `tests/test_session_store.py` — new file
 - `tests/test_orchestrator_dispatch.py` — extend for resume path
-- `llm-wiki/` — new entry `session-persistence.md` indexed in `INDEX.md`
+- `docs/llm-wiki/` — new entry `session-persistence.md` indexed in `INDEX.md`
 - `.claude/skills/using-symphony/reference/workflow-config.md` — note
   the new file's location; mention "delete the file to force fresh
   session"
@@ -409,7 +409,7 @@ Before tagging the round complete:
    - gemini: 2-turn run, turn 2 references turn 1 context
 4. Restart resumption: kill symphony mid-pi-turn, restart, observe
    `session_resumed` log line and matching session_id.
-5. Update `llm-wiki/INDEX.md` with the new entries.
+5. Update `docs/llm-wiki/INDEX.md` with the new entries.
 6. Update `using-symphony` skill description to advertise the
    four-bucket pi usage and gemini multi-turn.
 

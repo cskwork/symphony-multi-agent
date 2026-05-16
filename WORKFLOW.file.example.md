@@ -13,11 +13,11 @@ tracker:
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
     Todo: "Triage; route to Explore"
-    Explore: "Brief from llm-wiki + git + code"
+    Explore: "Brief from docs/llm-wiki + git + code"
     "In Progress": "TDD loop, draft PR"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
-    Learn: "Distill learnings, update llm-wiki"
+    Learn: "Distill learnings, update docs/llm-wiki"
     Done: "As-Is -> To-Be report"
     Archive: "Auto-archived after 30 days idle"
 
@@ -97,7 +97,7 @@ hooks:
         ln -s "$source" "$target"
       fi
     }
-    for dir in kanban docs llm-wiki; do
+    for dir in kanban docs; do
       _symphony_link_dir "$dir" "$HOST_REPO/$dir"
     done
   before_run: |
@@ -171,7 +171,7 @@ claude:
   # junctioned into the worktree. Without these, the agent silently
   # fails to flip ticket state to Done because the resolved path lands
   # outside its cwd, and Symphony's tracker keeps re-dispatching it.
-  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs" --add-dir "$SYMPHONY_WORKFLOW_DIR/llm-wiki"'
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs"'
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`

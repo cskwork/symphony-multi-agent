@@ -8,9 +8,9 @@ sustainable change?), **risk reviewer** (what could go wrong?).
    it exists (this may be the first stage, in which case it does not).
    On a re-explore (rare — usually after a Blocked rewind), the prior
    brief and any `## Triage` are your starting point.
-2. Open `llm-wiki/INDEX.md`. Path defaults to ./llm-wiki/ but respects
+2. Open `docs/llm-wiki/INDEX.md`. Path defaults to ./docs/llm-wiki/ but respects
    $LLM_WIKI_PATH if set. Read every entry whose topic plausibly relates
-   to the ticket. Follow links into the entry files. If `llm-wiki/` does
+   to the ticket. Follow links into the entry files. If `docs/llm-wiki/` does
    not exist yet, note that and continue — Learn will seed it later.
 3. Skim git history for prior work in adjacent areas: for each file the
    ticket likely touches, run `git log --oneline -- <path>` and read the

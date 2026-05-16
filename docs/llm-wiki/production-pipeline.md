@@ -28,8 +28,10 @@ cannot detect (states are just opaque strings to the Python core).
   `THIS STAGE MUST EXECUTE REAL CODE` and `QA Evidence`, (f) Done
   carries the `## As-Is -> To-Be Report` shape with the four `### As-Is
   / ### To-Be / ### Reasoning / ### Evidence` subsections.
-- `llm-wiki/` lives at the workspace root parallel to `kanban/`. The
-  first Learn that runs creates the directory and seeds `INDEX.md`.
+- `docs/llm-wiki/` lives under the workspace's `docs/` tree alongside
+  per-ticket evidence roots (post-IB-004 layout; previously sat at the
+  workspace root). The first Learn that runs creates the directory and
+  seeds `INDEX.md`.
 - The diagram in `WORKFLOW.file.example.md:96-102` (and its mirror in
   PIPELINE.md) shows two `+-> Blocked` branches, drawn after Review and
   after QA. The QA failure path actually rewinds to `In Progress`, not

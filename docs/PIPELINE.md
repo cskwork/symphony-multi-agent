@@ -23,7 +23,7 @@ than the Python core.
 | In Progress    | implementer                 | `## Implementation` (TDD), transition to Review                       |
 | Review         | reviewer                    | `## Review`; CRITICAL/HIGH/MEDIUM rewinds to In Progress, LOW-only transitions to QA |
 | QA             | qa runner (executes code)   | `## QA Evidence` (real exit codes), -> Learn                          |
-| Learn          | distiller                   | `llm-wiki/` updates + `## Learnings` + `## Wiki Updates`              |
+| Learn          | distiller                   | `docs/llm-wiki/` updates + `## Learnings` + `## Wiki Updates`         |
 | Done           | reporter                    | `## As-Is -> To-Be Report` (structured)                               |
 | Blocked        | -                           | `## Blocker` describing what is needed                                |
 
@@ -33,14 +33,14 @@ Implementation that starts from whatever stale context the agent happens to
 have produces drive-by refactors and missed invariants. Explore forces a
 single, structured pass over three sources before any code changes:
 
-- **`llm-wiki/`**
+- **`docs/llm-wiki/`**
 - **git history** — `git log --oneline -- <path>` for files the ticket
   likely touches, then `git show <sha>` on the relevant commits to
   recover the *why* behind prior changes.
 - **the source files themselves**, end-to-end, so the brief reflects
   current state and not stale memory.
 
-Source 1 (llm-wiki) is documented in [The llm-wiki/ knowledge base](#the-llm-wiki-knowledge-base) below.
+Source 1 (`docs/llm-wiki/`) is documented in [The docs/llm-wiki/ knowledge base](#the-docsllm-wiki-knowledge-base) below.
 
 The agent applies three lenses in one turn — domain expert, implementer,
 risk reviewer — and writes `## Domain Brief`, `## Plan Candidates`, and
@@ -72,7 +72,7 @@ check.
 QA proves the change works; Learn makes the *next* ticket cheaper. After
 QA passes, the agent compares the Explore brief against reality — which
 assumptions held, which were wrong, what only became visible during
-implementation — and persists the delta to `llm-wiki/`:
+implementation — and persists the delta to `docs/llm-wiki/`:
 
 See the LEARN stage rule in WORKFLOW.file.example.md for the canonical wiki-entry template.
 
@@ -82,16 +82,17 @@ ticket before transitioning to Done. If nothing genuinely new emerged,
 the agent says so explicitly ("no new wiki entries; existing coverage
 was correct") and still transitions.
 
-## The `llm-wiki/` knowledge base
+## The `docs/llm-wiki/` knowledge base
 
-`llm-wiki/` lives at the workspace root next to the source code (parallel
-to `kanban/`). It is one Markdown entry per topic plus an `INDEX.md`
-that lists them. Treat it as a living memory that future tickets depend
-on: Explore reads it before any new work, Learn writes back to it after
-QA passes, and the first Learn stage to run creates the directory if it
-does not yet exist. The wiki is the project's institutional knowledge in
-prompt-friendly form — keep entries focused on invariants, constraints,
-and decision history, not transient task state.
+`docs/llm-wiki/` lives under the workspace's `docs/` tree alongside the
+per-ticket evidence roots. It is one Markdown entry per topic plus an
+`INDEX.md` that lists them. Treat it as a living memory that future
+tickets depend on: Explore reads it before any new work, Learn writes
+back to it after QA passes, and the first Learn stage to run creates the
+directory if it does not yet exist. The wiki is the project's
+institutional knowledge in prompt-friendly form — keep entries focused
+on invariants, constraints, and decision history, not transient task
+state.
 
 ## The Done report
 
@@ -167,10 +168,10 @@ brief reflects a quiet workspace.
    runtime requirements, pin the interpreter/toolchain in the hook
    (`PYTHON_BIN`, `NODE_VERSION`, etc.) instead of relying on the host
    default.
-5. Decide whether `llm-wiki/` lives in the same repo as the source (the
-   default; Learn commits wiki edits onto the ticket's branch) or in a
-   sibling repo. Either works; keep it adjacent to `kanban/` so Explore
-   can reach it without extra configuration.
+5. Decide whether `docs/llm-wiki/` lives in the same repo as the source
+   (the default; Learn commits wiki edits onto the ticket's branch) or
+   in a sibling repo. Either works; keep it under `docs/` so Explore can
+   reach it without extra configuration.
 6. Run `symphony doctor ./WORKFLOW.md` before launching to catch the
    common first-run failures (port collision, missing CLI on PATH,
    placeholder clone URL).
@@ -184,7 +185,7 @@ reuse inventory into `explore/`; Implement writes user-facing docs into
 `work/`; Review writes HTTP baseline/PR/diff/curl logs into `verify/`;
 QA writes durable e2e specs and traces/videos/HAR into `qa/`. Workers
 create folders themselves with `mkdir -p`. Learn is the only stage that
-writes outside this root — its target is `${LLM_WIKI_PATH:-./llm-wiki}/`.
+writes outside this ticket's root — its target is `${LLM_WIKI_PATH:-./docs/llm-wiki}/`, a sibling under the same `docs/` tree.
 
 ## Reference ticket
 

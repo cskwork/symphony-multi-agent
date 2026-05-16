@@ -14,11 +14,11 @@ tracker:
   # Optional one-line legend rendered under each TUI column header.
   state_descriptions:
     Todo: "Triage; route to Explore"
-    Explore: "Brief from llm-wiki + git + code"
+    Explore: "Brief from docs/llm-wiki + git + code"
     "In Progress": "TDD loop, draft PR"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
-    Learn: "Distill learnings, update llm-wiki"
+    Learn: "Distill learnings, update docs/llm-wiki"
     Done: "As-Is -> To-Be report"
     Archive: "Auto-archived after 30 days idle"
 
@@ -69,7 +69,7 @@ hooks:
     git -C "$WORKTREE_PATH" config --worktree symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
     # Linear tracker reads from its API, not the file system, so no
     # symlink-back step is needed. (For tracker.kind=file, also symlink
-    # kanban/docs/llm-wiki back to $HOST_REPO — see WORKFLOW.file.example.md.)
+    # kanban/docs back to $HOST_REPO — see WORKFLOW.file.example.md.)
   before_run: |
     # NEVER `git reset --hard` inside a worktree — it discards in-progress
     # work between turns. Just refresh remotes; let the agent decide if/when

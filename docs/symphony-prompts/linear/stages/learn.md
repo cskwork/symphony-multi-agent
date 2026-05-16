@@ -1,10 +1,10 @@
 ### LEARN  -- when state is `Learn`
 
-Make the next ticket cheaper. Distill what this ticket taught and write it back into `llm-wiki/` in a form **both developers and non-developers can learn from**.
+Make the next ticket cheaper. Distill what this ticket taught and write it back into `docs/llm-wiki/` in a form **both developers and non-developers can learn from**.
 
 1. Read `docs/{{ issue.identifier }}/{explore,work,qa}/` and prior Linear comments (Recommendation, Implementation, QA Evidence) end-to-end.
 2. Compare brief vs reality: which assumptions held or were wrong, which constraint/invariant only surfaced now, which prior wiki entry was incomplete or misleading.
-3. Update `llm-wiki/`: edit existing entry by appending a `YYYY-MM-DD | <issue.identifier> | note` Decision log row and refreshing **Last updated**, OR create `llm-wiki/<topic-slug>.md` using the exact template below; then add/refresh its row in `INDEX.md` (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
+3. Update `docs/llm-wiki/`: edit existing entry by appending a `YYYY-MM-DD | <issue.identifier> | note` Decision log row and refreshing **Last updated**, OR create `docs/llm-wiki/<topic-slug>.md` using the exact template below; then add/refresh its row in `INDEX.md` (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
 
    Every wiki entry has two layers stacked top-to-bottom: a **beginner explainer** that any reader (PM, designer, junior dev, future-you with no context) can absorb in two minutes, then a **technical reference** for the engineer who will touch the code next. Both layers live in the same file so the file owns the full picture of the topic.
 
@@ -134,7 +134,7 @@ Make the next ticket cheaper. Distill what this ticket taught and write it back 
 
 4. Wiki integrity sweep before transitioning:
    - Duplicates: merge same-slug rows into the entry with newer Last updated, absorb distinct Invariants/Decision log rows, `git rm` loser file and drop its INDEX row.
-   - Orphans: every `llm-wiki/*.md` (except `INDEX.md`) has an INDEX row; every INDEX row has a file. Reconcile both directions.
+   - Orphans: every `docs/llm-wiki/*.md` (except `INDEX.md`) has an INDEX row; every INDEX row has a file. Reconcile both directions.
    - Stale: if Last updated > 90 days, append ` (stale?)` to the INDEX summary cell (idempotent).
    - Contradictions: if this ticket disproves an entry, update it and log the prior wrong claim; for cross-entry conflicts noticed in passing, post a `Wiki Conflict` comment pointing at both files.
    - Beginner block sanity: every entry's `## 감 잡기` / `## Getting the Feel` section, if present, still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
