@@ -149,6 +149,20 @@ agent:
     - llm-wiki
     - prompt
     - docs
+  # OPT-IN: paths under the host repo whose currently-untracked files
+  # should be folded into the same auto-merge commit. Closes the gap
+  # where `hooks.after_create` installs host directories as symlinks
+  # inside the agent workspace — the agent writes files via the symlink
+  # (so they land in the host repo's real directories) but those writes
+  # never appear in the `symphony/<ID>` branch diff because the branch
+  # only sees the symlink as a single blob. List the host-side paths
+  # where you expect per-ticket notes/wiki/etc to accumulate. Defaults
+  # to empty (current behaviour preserved). Distinct from
+  # `auto_merge_exclude_paths` — those skip branch-side checkout; this
+  # captures host-side filesystem state.
+  auto_merge_capture_untracked: []
+  #   - docs
+  #   - llm-wiki
 
 codex:
   command: codex app-server

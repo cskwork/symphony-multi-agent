@@ -1459,6 +1459,7 @@ class Orchestrator:
                         title=entry.issue.title,
                         target_branch=cfg.agent.auto_merge_target_branch,
                         exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                        capture_untracked=cfg.agent.auto_merge_capture_untracked,
                     )
                 await self._workspace_manager.after_done_best_effort(
                     entry.workspace_path,
@@ -1767,6 +1768,7 @@ class Orchestrator:
                                 title=entry.issue.title,
                                 target_branch=cfg.agent.auto_merge_target_branch,
                                 exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                                capture_untracked=cfg.agent.auto_merge_capture_untracked,
                             )
                         await self._workspace_manager.after_done_best_effort(
                             entry.workspace_path,
@@ -1867,6 +1869,7 @@ class Orchestrator:
                             title=issue.title,
                             target_branch=cfg.agent.auto_merge_target_branch,
                             exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                            capture_untracked=cfg.agent.auto_merge_capture_untracked,
                         )
                     await self._workspace_manager.after_done_best_effort(
                         path,

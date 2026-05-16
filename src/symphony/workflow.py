@@ -237,6 +237,17 @@ class AgentConfig:
     # Override in WORKFLOW.md when your `after_create` hook installs a
     # different set of symlinks.
     auto_merge_exclude_paths: tuple[str, ...] = DEFAULT_AUTO_MERGE_EXCLUDE_PATHS
+    # Paths under the host repo whose UNTRACKED files should be folded into
+    # the same auto-merge commit. Closes the gap where `hooks.after_create`
+    # installs `host_repo/{kanban,docs,...}` as symlinks inside the agent
+    # workspace: the agent writes files via the symlink (so they land in the
+    # host repo's real directories) but the `symphony/<ID>` branch only sees
+    # the symlink as a single blob, so `git diff target..symphony/<ID>` never
+    # reports the agent's per-ticket notes. Opt-in: empty by default so
+    # existing deployments keep their current behaviour. Listing a path here
+    # is orthogonal to `auto_merge_exclude_paths` — those skip checkout of
+    # branch-side blobs; this captures host-side filesystem state.
+    auto_merge_capture_untracked: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -692,6 +703,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         auto_merge_exclude_paths=_as_str_list(
             agent_raw.get("auto_merge_exclude_paths"),
             DEFAULT_AUTO_MERGE_EXCLUDE_PATHS,
+        ),
+        auto_merge_capture_untracked=_as_str_list(
+            agent_raw.get("auto_merge_capture_untracked"),
+            (),
         ),
     )
 

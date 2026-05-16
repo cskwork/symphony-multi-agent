@@ -10,6 +10,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `agent.auto_merge_capture_untracked` (default `[]`, **opt-in**) — list
+  of host-repo paths whose currently-untracked files are folded into the
+  same auto-merge commit on Done. Closes the gap where
+  `hooks.after_create` installs host directories as **symlinks inside
+  the agent workspace**: the agent writes files via the symlink (so
+  they land in the host repo's real directories), but the
+  `symphony/<ID>` branch only sees the symlink as a single blob, so the
+  branch diff never reports the agent's per-ticket notes (e.g.
+  `docs/<ID>/*`). Listing those host paths here lets auto-merge
+  `git add` them alongside the branch-side checkout, producing one
+  cohesive commit. Distinct from `auto_merge_exclude_paths` (which
+  controls what is *skipped from branch-side checkout*); capture is
+  *additive on the host side*. Default empty so existing deployments
+  are unchanged.
+
 ## [0.4.2] — 2026-05-16
 
 Builtin auto-merge on Done, board-viewer launcher integration, and a

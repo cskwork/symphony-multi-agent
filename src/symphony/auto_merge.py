@@ -55,16 +55,25 @@ async def auto_merge_on_done_best_effort(
     title: str,
     target_branch: str,
     exclude_paths: tuple[str, ...] | list[str],
+    capture_untracked: tuple[str, ...] | list[str] = (),
 ) -> None:
-    """Selectively apply `branch` onto `target_branch` in `workflow_dir`."""
+    """Selectively apply `branch` onto `target_branch` in `workflow_dir`.
+
+    `capture_untracked` is an opt-in list of host-repo paths whose currently
+    untracked files should be `git add`ed into the same merge commit. Used
+    to recover files written via after_create symlinks that the branch
+    cannot see (see docstring header).
+    """
     target = (target_branch or "").strip()
     excludes = tuple(p for p in exclude_paths if p)
+    captures = tuple(p for p in capture_untracked if p)
     script = _build_script(
         branch=branch,
         target=target,
         identifier=identifier,
         title=title or "",
         excludes=excludes,
+        captures=captures,
     )
 
     def _do_run() -> subprocess.CompletedProcess[bytes]:
@@ -158,6 +167,7 @@ def _build_script(
     identifier: str,
     title: str,
     excludes: tuple[str, ...],
+    captures: tuple[str, ...] = (),
 ) -> str:
     """Shell-out script for the selective-apply merge.
 
@@ -166,6 +176,16 @@ def _build_script(
     the host repo untouched — no half-applied state is reachable.
     """
     exclude_re = "^(" + "|".join(excludes) + ")$" if excludes else ""
+    capture_block = ""
+    if captures:
+        quoted = " ".join(shlex.quote(p) for p in captures)
+        capture_block = (
+            f"for cap in {quoted}; do\n"
+            '  if [ -n "$cap" ] && [ -d "$cap" ] && [ ! -L "$cap" ]; then\n'
+            '    git add -- "$cap" 2>/dev/null || true\n'
+            "  fi\n"
+            "done\n"
+        )
     return (
         "set -uo pipefail\n"
         f"BRANCH={shlex.quote(branch)}\n"
@@ -200,11 +220,13 @@ def _build_script(
         '  AM="$(git diff --name-only --diff-filter=AM "$TARGET".."$BRANCH" || true)"\n'
         '  DEL="$(git diff --name-only --diff-filter=D "$TARGET".."$BRANCH" || true)"\n'
         "fi\n"
-        'if [ -z "$AM" ] && [ -z "$DEL" ]; then\n'
+        f"HAS_CAPTURES={1 if captures else 0}\n"
+        'if [ -z "$AM" ] && [ -z "$DEL" ] && [ "$HAS_CAPTURES" = "0" ]; then\n'
         '  echo "SKIP: nothing non-excluded differs"; exit 43\n'
         "fi\n"
         '[ -n "$AM" ] && echo "$AM" | xargs -I{} git checkout "$BRANCH" -- "{}"\n'
         '[ -n "$DEL" ] && echo "$DEL" | xargs -I{} git rm -f -q -- "{}" 2>/dev/null\n'
+        + capture_block +
         "if git diff --cached --quiet; then\n"
         '  echo "SKIP: nothing staged"; exit 43\n'
         "fi\n"

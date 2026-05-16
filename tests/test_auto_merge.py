@@ -192,3 +192,53 @@ def test_auto_merge_nothing_to_apply_when_all_excluded(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head_before == head_after
+
+
+def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
+    """Opt-in capture: a host-side untracked file under `docs-host/` should
+    land in the same merge commit, even when the branch-side `docs` blob
+    is excluded. This closes the after_create-symlink gap where docs are
+    written via symlink into the host repo and never appear in the
+    symphony/<ID> branch diff."""
+    repo = _make_repo(tmp_path)
+    _make_symphony_branch(repo, "T-5")  # adds feature.py + kanban/docs blobs
+
+    # Simulate what an agent does when writing through an after_create
+    # symlink: a real file lands in the host repo's docs-host/ directory
+    # as untracked content, never staged on the symphony/<ID> branch.
+    docs_dir = repo / "docs-host"
+    docs_dir.mkdir()
+    (docs_dir / "note.md").write_text("agent wrote this via symlink\n")
+
+    asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch="symphony/T-5",
+            identifier="T-5",
+            title="capture host untracked",
+            target_branch="main",
+            # exclude branch-side `docs` blob (the symlink stand-in)
+            # and capture host-side `docs-host` untracked content.
+            exclude_paths=("kanban", "docs"),
+            capture_untracked=("docs-host",),
+        )
+    )
+
+    # feature.py was applied as before
+    assert (repo / "feature.py").exists()
+    # branch-side docs stand-in stayed excluded
+    assert not (repo / "docs").exists()
+    # host-side untracked note got captured into the same commit
+    assert (repo / "docs-host" / "note.md").exists()
+    tree = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    assert "docs-host/note.md" in tree
+    assert "feature.py" in tree
+    # And the commit is the auto-merge commit, not a stray prior one.
+    log = subprocess.run(
+        ["git", "log", "--oneline", "-1"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "apply T-5 from symphony/T-5" in log
