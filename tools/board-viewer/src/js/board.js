@@ -206,6 +206,12 @@ async function pollOnce() {
 
   if (idxRes.ok && idxRes.data) {
     state.tickets = idxRes.data.tickets || [];
+    // 헤더의 project name — server.py가 kanban_dir의 parent 이름을 노출.
+    // 빈 값이거나 누락되면 헤더에 아무것도 안 그림.
+    const repoNameEl = document.getElementById("repo-name");
+    if (repoNameEl) {
+      repoNameEl.textContent = idxRes.data.project_name || "";
+    }
     if (Array.isArray(idxRes.data.states) && state.states.length === 0) {
       state.states = idxRes.data.states;
       state.active_states = idxRes.data.active_states || [];

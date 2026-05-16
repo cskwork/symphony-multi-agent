@@ -325,6 +325,9 @@ class BoardHandler(BaseHTTPRequestHandler):
                     "terminal_states": TERMINAL_STATES,
                     "tickets": tickets,
                     "count": len(tickets),
+                    # project_name: kanban_dir의 부모 디렉토리 이름. 헤더 표시용.
+                    # 실제 working repo 식별 정보가 박히지 않도록 generic하게 노출.
+                    "project_name": KANBAN_DIR.parent.name,
                 },
             )
             return
