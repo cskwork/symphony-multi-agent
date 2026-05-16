@@ -205,14 +205,15 @@ def test_fetch_candidate_filters_by_active(tmp_path):
     assert ids == ["A", "C"]
 
 
-def test_fetch_candidate_raises_on_invalid_ticket_yaml(tmp_path):
+def test_fetch_candidate_skips_invalid_ticket_yaml(tmp_path):
     root = tmp_path / "board"
     _write(root, "A.md", "---\nid: A\ntitle: a\nstate: Todo\n---\n")
     _write(root, "B.md", "---\nid: B\ntitle: b\nstate: Todo\nbroken\n---\n")
     fbt = FileBoardTracker(_tracker(root))
 
-    with pytest.raises(SymphonyError, match="invalid YAML front matter"):
-        fbt.fetch_candidate_issues()
+    ids = [issue.identifier for issue in fbt.fetch_candidate_issues()]
+
+    assert ids == ["A"]
 
 
 def test_fetch_candidate_resolves_blocker_state_from_current_board(tmp_path):
