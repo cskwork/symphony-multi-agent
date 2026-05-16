@@ -1474,6 +1474,9 @@ def test_after_done_failure_policy_block_preserves_workspace(monkeypatch):
     """
     base_cfg = _make_config(max_concurrent=1)
     cfg_block = _replace_agent_field(base_cfg, after_done_failure_policy="block")
+    cfg_block = replace(
+        cfg_block, agent=replace(cfg_block.agent, auto_merge_on_done=False)
+    )
     orch = _orch()
     issue = _issue("MT-AD-BLOCK", state="Done")
 
@@ -1512,6 +1515,78 @@ def test_after_done_failure_policy_block_preserves_workspace(monkeypatch):
     asyncio.run(_run())
 
 
+def test_auto_merge_failure_blocks_done_ticket_and_preserves_workspace(monkeypatch):
+    """A Done ticket whose merge gate fails must not keep looking Done.
+
+    Reproduces the dograh IB-007/IB-010 failure mode: the worker reached
+    Done, auto-merge failed, but the ticket stayed Done so dependents
+    started against a target branch that did not contain the dependency's
+    files.
+    """
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-MERGE", state="Done")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+        import symphony.orchestrator as _orch_mod
+        from symphony.auto_merge import AutoMergeResult
+
+        async def _merge_fails(**_kwargs):
+            return AutoMergeResult(
+                ok=False,
+                status="git_failed",
+                detail="committed target/branch merge conflict",
+            )
+
+        updates: list[tuple[str, str]] = []
+        notes: list[tuple[str, str, str]] = []
+        removes: list[Path] = []
+        after_done_calls: list[str] = []
+
+        def _capture_update(_cfg, captured_issue, target_state):
+            updates.append((captured_issue.identifier, target_state))
+
+        def _capture_note(_cfg, captured_issue, heading, body):
+            notes.append((captured_issue.identifier, heading, body))
+
+        class _StubWS:
+            async def after_done_best_effort(self, p, *, identifier, title):
+                after_done_calls.append(identifier)
+                return True
+
+            async def remove(self, p):
+                removes.append(p)
+
+            def path_for(self, ident):
+                return Path("/tmp/ws-fake")
+
+        monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _merge_fails)
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", _capture_note)
+        orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+            assert updates == [("MT-MERGE", "Blocked")]
+            assert len(notes) == 1
+            assert notes[0][0] == "MT-MERGE"
+            assert notes[0][1] == "Merge Gate Failed"
+            assert "committed target/branch merge conflict" in notes[0][2]
+            assert removes == []
+            assert after_done_calls == []
+            assert "auto_merge failed" in (orch._issue_debug[issue.id].last_error or "")
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
     """policy='warn' (legacy default) + hook failure → workspace still removed.
 
@@ -1520,6 +1595,7 @@ def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
     change after upgrading.
     """
     cfg = _make_config(max_concurrent=1)
+    cfg = replace(cfg, agent=replace(cfg.agent, auto_merge_on_done=False))
     assert cfg.agent.after_done_failure_policy == "warn", "precondition"
     orch = _orch()
     issue = _issue("MT-AD-WARN", state="Done")
@@ -1823,6 +1899,7 @@ def test_reconcile_terminate_terminal_commits_before_remove(monkeypatch):
     snapshot the workspace before calling `WorkspaceManager.remove()`,
     otherwise `git worktree remove --force` discards uncommitted work."""
     cfg = _make_config(max_concurrent=1)
+    cfg = replace(cfg, agent=replace(cfg.agent, auto_merge_on_done=False))
     orch = _orch()
     issue = _issue("MT-RC", state="In Progress")
 
@@ -1900,7 +1977,9 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
     """If the operator opted out via auto_commit_on_done=False, reconcile
     must still remove but skip the commit."""
     base_cfg = _make_config(max_concurrent=1)
-    cfg_off = _replace_agent_field(base_cfg, auto_commit_on_done=False)
+    cfg_off = _replace_agent_field(
+        base_cfg, auto_commit_on_done=False, auto_merge_on_done=False
+    )
     orch = _orch()
     issue = _issue("MT-RC-OFF", state="In Progress")
 
@@ -2060,7 +2139,9 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
 ):
     """Startup may discover an old Done workspace, but it did not observe the
     transition to Done in this process. It must not create fresh commits or
-    replay merge/deploy hooks just because the directory still exists.
+    replay merge/deploy hooks just because the directory still exists; it
+    must move the ticket out of Done so dependents do not trust an unmerged
+    branch.
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2110,11 +2191,23 @@ def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_repl
 
     monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
     monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _capture_merge)
+
+    def _capture_update_state(_cfg, captured_issue, target_state):
+        calls.append(f"update:{captured_issue.identifier}->{target_state}")
+
+    def _capture_append_note(_cfg, captured_issue, heading, body):
+        calls.append(f"note:{captured_issue.identifier}:{heading}")
+
+    monkeypatch.setattr(orch, "_tracker_call_update_state", _capture_update_state)
+    monkeypatch.setattr(orch, "_tracker_call_append_note", _capture_append_note)
     orch._workspace_manager = _StubWS()  # type: ignore[assignment]
 
     asyncio.run(orch._startup_terminal_cleanup(cfg))
 
-    assert calls == []
+    assert calls == [
+        "update:MT-DONE->Blocked",
+        "note:MT-DONE:Merge Gate Failed",
+    ]
 
 
 def test_snapshot_retry_row_includes_paused_flag():

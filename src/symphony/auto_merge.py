@@ -15,8 +15,9 @@ Safety contract: this is best-effort.
 - Excluded root changed       -> block, log `auto_merge_blocked_excluded_paths`
 - Any other git error         -> log `auto_merge_failed` and return
 
-The caller never sees an exception; Symphony's queue keeps moving even
-if a single ticket's merge fails.
+The caller never sees an exception. Instead, the result reports whether
+the merge gate is satisfied so the orchestrator can keep successful Done
+tickets moving while blocking failed gates before dependents trust them.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import asyncio
 import os
 import shlex
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from ._shell import resolve_bash
@@ -48,6 +50,13 @@ _RC_FAIL_GIT = 50
 _RC_FAIL_COMMIT = 51
 
 
+@dataclass(frozen=True)
+class AutoMergeResult:
+    ok: bool
+    status: str
+    detail: str = ""
+
+
 async def auto_merge_on_done_best_effort(
     *,
     workflow_dir: Path,
@@ -57,7 +66,7 @@ async def auto_merge_on_done_best_effort(
     target_branch: str,
     exclude_paths: tuple[str, ...] | list[str],
     capture_untracked: tuple[str, ...] | list[str] = (),
-) -> None:
+) -> AutoMergeResult:
     """Selectively apply `branch` onto `target_branch` in `workflow_dir`.
 
     `capture_untracked` is an opt-in list of host-repo paths whose currently
@@ -100,7 +109,7 @@ async def auto_merge_on_done_best_effort(
         log.warning(
             "auto_merge_timeout", path=str(workflow_dir), identifier=identifier
         )
-        return
+        return AutoMergeResult(False, "timeout")
     except Exception as exc:
         log.warning(
             "auto_merge_failed",
@@ -108,7 +117,7 @@ async def auto_merge_on_done_best_effort(
             identifier=identifier,
             error=str(exc),
         )
-        return
+        return AutoMergeResult(False, "error", str(exc))
 
     stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
     stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
@@ -121,6 +130,7 @@ async def auto_merge_on_done_best_effort(
             identifier=identifier,
             stdout=stdout[:400],
         )
+        return AutoMergeResult(True, "merged", stdout)
     elif rc == _RC_SKIP_DIRTY:
         log.info(
             "auto_merge_skipped_dirty",
@@ -128,6 +138,7 @@ async def auto_merge_on_done_best_effort(
             identifier=identifier,
             stdout=stdout[:400],
         )
+        return AutoMergeResult(False, "dirty_overlap", stdout)
     elif rc == _RC_SKIP_MISSING_BRANCH:
         log.info(
             "auto_merge_skipped_missing_branch",
@@ -135,12 +146,14 @@ async def auto_merge_on_done_best_effort(
             identifier=identifier,
             branch=branch,
         )
+        return AutoMergeResult(False, "missing_branch", f"branch {branch} missing")
     elif rc == _RC_NOTHING_TO_APPLY:
         log.info(
             "auto_merge_nothing_to_apply",
             path=str(workflow_dir),
             identifier=identifier,
         )
+        return AutoMergeResult(True, "nothing_to_apply", stdout)
     elif rc == _RC_BLOCKED_EXCLUDED:
         log.warning(
             "auto_merge_blocked_excluded_paths",
@@ -148,6 +161,7 @@ async def auto_merge_on_done_best_effort(
             identifier=identifier,
             stdout=stdout[:400],
         )
+        return AutoMergeResult(False, "excluded_paths", stdout)
     elif rc in (_RC_FAIL_GIT, _RC_FAIL_COMMIT):
         log.warning(
             "auto_merge_failed",
@@ -157,6 +171,9 @@ async def auto_merge_on_done_best_effort(
             stdout=stdout[:400],
             stderr=stderr[:400],
         )
+        status = "commit_failed" if rc == _RC_FAIL_COMMIT else "git_failed"
+        detail = "\n".join(part for part in (stdout, stderr) if part)
+        return AutoMergeResult(False, status, detail)
     else:
         log.warning(
             "auto_merge_failed_unknown_rc",
@@ -166,6 +183,8 @@ async def auto_merge_on_done_best_effort(
             stdout=stdout[:400],
             stderr=stderr[:400],
         )
+        detail = "\n".join(part for part in (stdout, stderr) if part)
+        return AutoMergeResult(False, f"unknown_rc_{rc}", detail)
 
 
 def _build_script(

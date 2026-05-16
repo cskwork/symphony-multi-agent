@@ -52,7 +52,7 @@ from .workflow import (
     WorkflowState,
     validate_for_dispatch,
 )
-from .auto_merge import auto_merge_on_done_best_effort
+from .auto_merge import AutoMergeResult, auto_merge_on_done_best_effort
 from .workspace import WorkspaceManager, commit_workspace_on_done
 
 
@@ -657,6 +657,95 @@ class Orchestrator:
                 )
             return
         await self._workspace_manager.remove(path)
+
+    async def _block_done_ticket_for_merge_gate(
+        self,
+        cfg: "ServiceConfig",
+        issue: Issue,
+        workspace_path: Path,
+        *,
+        result: AutoMergeResult,
+        debug_target: "_IssueDebug | None",
+    ) -> None:
+        branch = f"symphony/{issue.identifier}"
+        target = cfg.agent.auto_merge_target_branch or "(current branch)"
+        detail = result.detail.strip()
+        note_body = (
+            f"Symphony could not merge `{branch}` into `{target}` after this "
+            "ticket reached `Done`, so the ticket was moved to `Blocked` to "
+            "prevent dependents from running against an incomplete target branch.\n\n"
+            f"- status: `{result.status}`\n"
+            f"- workspace preserved: `{workspace_path}`"
+        )
+        if detail:
+            note_body = f"{note_body}\n- detail: {detail[:1000]}"
+        if debug_target is not None:
+            debug_target.last_error = (
+                f"auto_merge failed ({result.status}); moved to Blocked; "
+                "workspace preserved"
+            )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                issue,
+                "Blocked",
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                "Merge Gate Failed",
+                note_body,
+            )
+            log.warning(
+                "auto_merge_gate_blocked_ticket",
+                identifier=issue.identifier,
+                branch=branch,
+                target=target,
+                status=result.status,
+                path=str(workspace_path),
+            )
+        except Exception as exc:
+            log.warning(
+                "auto_merge_gate_block_persist_failed",
+                identifier=issue.identifier,
+                branch=branch,
+                target=target,
+                status=result.status,
+                error=str(exc),
+                path=str(workspace_path),
+            )
+
+    async def _auto_merge_done_gate_or_block(
+        self,
+        cfg: "ServiceConfig",
+        issue: Issue,
+        workspace_path: Path,
+        *,
+        debug_target: "_IssueDebug | None",
+    ) -> bool:
+        if not cfg.agent.auto_merge_on_done:
+            return True
+        result = await auto_merge_on_done_best_effort(
+            workflow_dir=cfg.workflow_path.parent,
+            branch=f"symphony/{issue.identifier}",
+            identifier=issue.identifier,
+            title=issue.title,
+            target_branch=cfg.agent.auto_merge_target_branch,
+            exclude_paths=cfg.agent.auto_merge_exclude_paths,
+            capture_untracked=cfg.agent.auto_merge_capture_untracked,
+        )
+        if result is None or result.ok:
+            return True
+        await self._block_done_ticket_for_merge_gate(
+            cfg,
+            issue,
+            workspace_path,
+            result=result,
+            debug_target=debug_target,
+        )
+        return False
 
     # ------------------------------------------------------------------
     # tick loop (§16.2)
@@ -1899,23 +1988,20 @@ class Orchestrator:
             )
             is_terminal = normalize_state(entry.issue.state) in terminal_states
             if is_done and cfg is not None and self._workspace_manager is not None:
-                if cfg.agent.auto_merge_on_done:
-                    await auto_merge_on_done_best_effort(
-                        workflow_dir=cfg.workflow_path.parent,
-                        branch=f"symphony/{entry.issue.identifier}",
-                        identifier=entry.issue.identifier,
-                        title=entry.issue.title,
-                        target_branch=cfg.agent.auto_merge_target_branch,
-                        exclude_paths=cfg.agent.auto_merge_exclude_paths,
-                        capture_untracked=cfg.agent.auto_merge_capture_untracked,
-                    )
-                await self._after_done_then_remove_per_policy(
+                merge_ok = await self._auto_merge_done_gate_or_block(
                     cfg,
+                    entry.issue,
                     entry.workspace_path,
-                    identifier=entry.issue.identifier,
-                    title=entry.issue.title,
                     debug_target=debug,
                 )
+                if merge_ok:
+                    await self._after_done_then_remove_per_policy(
+                        cfg,
+                        entry.workspace_path,
+                        identifier=entry.issue.identifier,
+                        title=entry.issue.title,
+                        debug_target=debug,
+                    )
                 # Don't schedule a continuation — a Done ticket has nothing
                 # to continue. Skip straight to the worker_exit emit below.
             elif not is_terminal and not entry.hit_max_turns:
@@ -2220,23 +2306,20 @@ class Orchestrator:
                             state=issue.state,
                         )
                     if (issue.state or "").strip().lower() == "done":
-                        if cfg.agent.auto_merge_on_done:
-                            await auto_merge_on_done_best_effort(
-                                workflow_dir=cfg.workflow_path.parent,
-                                branch=f"symphony/{entry.issue.identifier}",
-                                identifier=entry.issue.identifier,
-                                title=entry.issue.title,
-                                target_branch=cfg.agent.auto_merge_target_branch,
-                                exclude_paths=cfg.agent.auto_merge_exclude_paths,
-                                capture_untracked=cfg.agent.auto_merge_capture_untracked,
-                            )
-                        await self._after_done_then_remove_per_policy(
+                        merge_ok = await self._auto_merge_done_gate_or_block(
                             cfg,
+                            issue,
                             entry.workspace_path,
-                            identifier=entry.issue.identifier,
-                            title=entry.issue.title,
                             debug_target=self._issue_debug.get(issue.id),
                         )
+                        if merge_ok:
+                            await self._after_done_then_remove_per_policy(
+                                cfg,
+                                entry.workspace_path,
+                                identifier=entry.issue.identifier,
+                                title=entry.issue.title,
+                                debug_target=self._issue_debug.get(issue.id),
+                            )
                     else:
                         # Non-Done terminal state (e.g. Cancelled, Blocked):
                         # no after_done hook, just reap the workspace.
@@ -2334,14 +2417,13 @@ class Orchestrator:
                 is_done = (issue.state or "").strip().lower() == "done"
                 if is_done:
                     branch = f"symphony/{issue.identifier}"
-                    already_merged = (
-                        cfg.agent.auto_merge_on_done
-                        and await _branch_already_merged_into_target(
+                    already_merged = False
+                    if cfg.agent.auto_merge_on_done:
+                        already_merged = await _branch_already_merged_into_target(
                             cfg.workflow_path.parent,
                             branch=branch,
                             target_branch=cfg.agent.auto_merge_target_branch,
                         )
-                    )
                     if already_merged:
                         log.info(
                             "startup_terminal_cleanup_skipped_already_merged",
@@ -2351,6 +2433,27 @@ class Orchestrator:
                             path=str(path),
                         )
                         await self._workspace_manager.remove(path)
+                    elif cfg.agent.auto_merge_on_done:
+                        await self._block_done_ticket_for_merge_gate(
+                            cfg,
+                            issue,
+                            path,
+                            result=AutoMergeResult(
+                                ok=False,
+                                status="startup_unmerged",
+                                detail=(
+                                    f"`{branch}` is not merged into "
+                                    f"`{cfg.agent.auto_merge_target_branch or '(current branch)'}`"
+                                ),
+                            ),
+                            debug_target=self._issue_debug.get(issue.id),
+                        )
+                        log.warning(
+                            "startup_terminal_cleanup_blocked_unmerged_done",
+                            identifier=issue.identifier,
+                            branch=branch,
+                            path=str(path),
+                        )
                     else:
                         log.warning(
                             "startup_terminal_cleanup_preserved_done_workspace",
