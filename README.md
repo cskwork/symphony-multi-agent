@@ -474,6 +474,26 @@ Key bindings (also auto-listed in the footer):
 
 Mouse: clicking a card focuses it, the wheel scrolls its lane.
 
+#### Managed background service
+
+For day-to-day operation, prefer the built-in service command over ad-hoc
+shell jobs. It records the workflow it started under
+`.symphony/run/<workflow-hash>.json`, so the same `WORKFLOW.md` cannot be
+started again on a second port by accident:
+
+```bash
+symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
+symphony service status ./WORKFLOW.md
+symphony service restart ./WORKFLOW.md
+symphony service stop ./WORKFLOW.md
+symphony service logs ./WORKFLOW.md
+```
+
+`service start` runs `symphony doctor` before spawning, starts the
+orchestrator with Python's module runner, and starts `tools/board-viewer/`
+when that folder exists. Commands are launched without a shell, so the same
+path works on macOS, Linux, and Windows.
+
 #### One-shot launchers
 
 For developers who don't want to remember the full `symphony tui` invocation,

@@ -5,6 +5,17 @@ Symphony multi-agent orchestrator(headless 모드)와 sync되는 정적 HTML 기
 
 ## 실행
 
+### 권장: Symphony service 로 함께 실행
+
+```bash
+symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
+symphony service status ./WORKFLOW.md
+```
+
+`symphony service`는 orchestrator와 이 board viewer를 같은 lifecycle로
+관리합니다. 같은 `WORKFLOW.md`가 다른 포트에서 중복 실행되는 것도
+run-state 파일로 막습니다.
+
 ### 가장 빠른 방법 (launcher 사용)
 
 ```bash

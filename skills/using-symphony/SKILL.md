@@ -145,7 +145,21 @@ The two flavors differ in *where* the agent writes stage notes
 generate artefacts in the wrong place. You can copy only the flavor
 you need if disk hygiene matters, but copying both is fine.
 
-Then the operator opens the board with:
+Then the operator starts the managed background service with:
+
+```bash
+symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
+symphony service status ./WORKFLOW.md
+symphony service restart ./WORKFLOW.md
+symphony service stop ./WORKFLOW.md
+```
+
+Use `symphony service ...` for normal headless operation. It records a
+per-workflow run-state file under `.symphony/run/` and refuses to start the
+same `WORKFLOW.md` a second time on another port, which prevents duplicate
+orchestrators from dispatching the same Kanban board.
+
+For foreground TUI work, the operator can still open the board with:
 
 ```bash
 ./tui-open.sh                 # macOS/Linux — uses ./WORKFLOW.md
@@ -203,10 +217,11 @@ symphony board new TASK-001 "<title>" --description "<spec>"
 # or: symphony tui ./WORKFLOW.md                              # plain CLI; TTY required
 ```
 
-### 2. Headless launch + JSON observation (no TTY)
+### 2. Managed headless launch + JSON observation (no TTY)
 
 ```bash
-symphony ./WORKFLOW.md --port 9999 2>> log/symphony.log &
+symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
+symphony service status ./WORKFLOW.md
 curl -s http://127.0.0.1:9999/api/v1/state | jq
 ```
 
