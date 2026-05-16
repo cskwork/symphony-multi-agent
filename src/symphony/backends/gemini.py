@@ -45,6 +45,12 @@ from . import (
 
 log = get_logger()
 
+# StreamReader line-buffer limit for the subprocess pipes. Gemini currently
+# reads stdout with `.read()` (no line limit applies) but we set this for
+# consistency with the other backends and as a safety net for future
+# refactors. Matches codex.py.
+MAX_LINE_BYTES = 10 * 1024 * 1024
+
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -137,6 +143,7 @@ class GeminiBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=os.environ.copy(),
+                limit=MAX_LINE_BYTES,
             )
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc

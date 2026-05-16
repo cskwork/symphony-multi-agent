@@ -67,6 +67,11 @@ log = get_logger()
 
 PENDING_SESSION_ID = "pending"
 
+# StreamReader line-buffer limit for the subprocess pipes. The asyncio
+# default of 64 KiB overflows on JSON-mode events whose `message_update` or
+# tool-result payload exceeds that on a single line. Matches codex.py.
+MAX_LINE_BYTES = 10 * 1024 * 1024
+
 
 def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -171,6 +176,7 @@ class PiBackend:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=os.environ.copy(),
+                limit=MAX_LINE_BYTES,
             )
         except FileNotFoundError as exc:
             raise PortExit("bash not available", error=str(exc)) from exc
