@@ -10,6 +10,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-05-16
+
+Managed background service launch, stricter default run serialization, and
+cleaner repo-local learning docs. Drop-in over 0.4.2; existing `symphony
+./WORKFLOW.md --port ...` and `symphony tui` flows still work, while normal
+headless operation can now use `symphony service ...`.
+
 ### Added
 - `agent.auto_merge_capture_untracked` (default `[]`, **opt-in**) — list
   of host-repo paths whose currently-untracked files are folded into the
@@ -25,6 +32,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   controls what is *skipped from branch-side checkout*); capture is
   *additive on the host side*. Default empty so existing deployments
   are unchanged.
+- `symphony service start/status/stop/restart/logs` — a managed background
+  launcher for the orchestrator plus `tools/board-viewer/`, with per-workflow
+  run-state under `.symphony/run/<workflow-hash>.json`. It refuses to start the
+  same `WORKFLOW.md` a second time on another port, runs without shell/batch
+  wrappers, and uses platform-aware process cleanup for macOS/Linux/Windows.
+
+### Changed
+- Default Symphony runs now serialize by default with
+  `agent.max_concurrent: 1`, keeping dispatch FIFO unless the operator
+  explicitly raises the concurrency cap.
+- The llm-wiki reference set now lives under `docs/llm-wiki/`, matching the
+  prompt and gitignore guidance used by Explore/Learn stages.
 
 ## [0.4.2] — 2026-05-16
 
@@ -243,7 +262,9 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.3
+[0.4.2]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.2
 [0.4.1]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.1
 [0.4.0]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.0
 [0.3.4]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.4
