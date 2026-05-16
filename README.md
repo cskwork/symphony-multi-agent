@@ -494,6 +494,12 @@ orchestrator with Python's module runner, and starts `tools/board-viewer/`
 when that folder exists. Commands are launched without a shell, so the same
 path works on macOS, Linux, and Windows.
 
+Since v0.4.7, the board viewer (default `--viewer-port 8765`) is no longer
+read-only: running cards surface **Pause / Resume** buttons and the header
+refresh button triggers an orchestrator `poll + reconcile`. The three POST
+endpoints behind these (`refresh`, `<id>/pause`, `<id>/resume`) are the only
+mutating proxies — everything else stays read-only.
+
 #### One-shot launchers
 
 For developers who don't want to remember the full `symphony tui` invocation,

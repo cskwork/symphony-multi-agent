@@ -159,6 +159,12 @@ per-workflow run-state file under `.symphony/run/` and refuses to start the
 same `WORKFLOW.md` a second time on another port, which prevents duplicate
 orchestrators from dispatching the same Kanban board.
 
+Since v0.4.7 the board viewer at `--viewer-port` is no longer read-only:
+running cards expose Pause / Resume buttons and the header refresh button
+triggers an orchestrator `poll + reconcile`. So PMs and non-CLI users can
+hold a ticket at the next turn boundary from the browser without dropping
+into `symphony tui` or curl.
+
 For foreground TUI work, the operator can still open the board with:
 
 ```bash
@@ -276,6 +282,9 @@ backend.
 | Headless without progress mirror      | `symphony ./WORKFLOW.md --no-progress-md`                    |
 | Headless + JSON API                   | `symphony ./WORKFLOW.md --port 9999`                         |
 | Force a poll/reconcile                | `curl -X POST http://127.0.0.1:9999/api/v1/refresh`          |
+| Pause a running ticket (next turn)    | `curl -X POST http://127.0.0.1:9999/api/v1/<ID>/pause`       |
+| Resume a paused ticket                | `curl -X POST http://127.0.0.1:9999/api/v1/<ID>/resume`      |
+| Browser controls (pause/resume/refresh) | open `http://127.0.0.1:8765/` (v0.4.7+ board-viewer)       |
 | Snapshot state                        | `curl -s http://127.0.0.1:9999/api/v1/state \| jq`           |
 | Issue debug                           | `curl -s http://127.0.0.1:9999/api/v1/<ID> \| jq`            |
 | Stop a stuck server                   | `lsof -ti :9999 \| xargs -r kill`                            |
