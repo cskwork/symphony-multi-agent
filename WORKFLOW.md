@@ -26,18 +26,18 @@ polling:
 
 workspace:
   root: ~/symphony_workspaces
+  reuse_policy: refresh
 
 hooks:
   # The workspace starts empty. Attach it as a git worktree of the host
   # repo on a per-ticket symphony/<ID> branch so the host working tree
-  # stays untouched while the agent works. To merge results back run
-  # `git -C <HOST_REPO> merge symphony/<ID>` (or open a PR from that
-  # branch) — explicit operator action, not automatic.
+  # stays untouched while the agent works. Product changes and docs/
+  # artefacts stay on the feature branch and merge back with an explicit
+  # --no-ff merge commit when Done.
   #
-  # IMPORTANT: kanban/, docs/, and llm-wiki/ are symlinked back to the
-  # host repo so that agent edits (state transitions, evidence, wiki
-  # updates) are visible to Symphony's FileBoardTracker, which reads
-  # board_root relative to WORKFLOW.md (the host), not the workspace.
+  # IMPORTANT: only host-owned board roots such as kanban/ are symlinked
+  # back to the host repo. docs/ stays branch-local so review/QA evidence
+  # and wiki updates are reviewable deliverables.
   after_create: |
     set -euo pipefail
     ISSUE_ID="$(basename "$PWD")"
@@ -75,8 +75,8 @@ hooks:
     # and corrupts auto_commit for unrelated workspaces nested in the host.
     git config extensions.worktreeConfig true
     git config --worktree symphony.basesha "$(git rev-parse HEAD)"
-    # Link shared directories back to host so agent edits are visible to
-    # Symphony's file tracker (which reads from the host's board_root).
+    # Link shared board directories back to host so agent state changes are
+    # visible to Symphony's file tracker (which reads host board_root).
     #
     # Cross-platform: on POSIX use `ln -s`; on Windows Git Bash without
     # admin / Developer Mode, `ln -s` silently *copies* the source, leaving
@@ -105,7 +105,17 @@ hooks:
         ln -s "$source" "$target"
       fi
     }
-    for dir in kanban docs llm-wiki; do
+    for dir in kanban; do
+      [ -e "$HOST_REPO/$dir" ] || continue
+      tracked_file="$(git rev-parse --git-path "symphony-${dir}-tracked")"
+      git ls-files -z -- "$dir" > "$tracked_file" || true
+      if [ -s "$tracked_file" ]; then
+        xargs -0 git update-index --skip-worktree -- < "$tracked_file" || true
+      fi
+      rm -f "$tracked_file"
+      exclude_file="$(git rev-parse --git-path info/exclude)"
+      mkdir -p "$(dirname "$exclude_file")"
+      grep -qxF "$dir" "$exclude_file" 2>/dev/null || echo "$dir" >> "$exclude_file"
       _symphony_link_dir "$dir" "$HOST_REPO/$dir"
     done
     # Pick the first available Python interpreter. `python3.11` is preferred
@@ -131,6 +141,20 @@ hooks:
   before_run: |
     # NEVER `git reset --hard` inside a worktree — discards mid-run work.
     set -uo pipefail
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
+    for dir in kanban; do
+      source="$HOST_REPO/$dir"
+      target="$PWD/$dir"
+      [ -e "$source" ] || continue
+      if [ ! -L "$target" ] && [ "${OS:-}" != "Windows_NT" ]; then
+        echo "FAIL: workspace $dir must be a symlink to $source; got non-symlink $target" >&2
+        exit 42
+      fi
+      if [ -L "$target" ] && [ "$(readlink "$target")" != "$source" ]; then
+        echo "FAIL: workspace $dir points to $(readlink "$target"), expected $source" >&2
+        exit 42
+      fi
+    done
     git fetch origin main --quiet || true
   after_run: |
     # Per-turn commit-or-amend. The branch stays at the same number of
@@ -140,7 +164,7 @@ hooks:
     # orchestrator squashes everything into a single `<ID>: <title>` commit
     # on exit — see auto_commit_on_done.
     set -uo pipefail
-    git add -A 2>/dev/null || true
+    git add -A -- . ':(exclude)kanban' ':(exclude).symphony' 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
       echo "run finished at $(date -u +%FT%TZ) (no changes)"
       exit 0
@@ -202,16 +226,23 @@ agent:
     Review: 1
     QA: 1
     Learn: 1
+  max_total_tokens: 100000000
+  max_total_tokens_by_state:
+    "In Progress": 500000000
+    QA: 500000000
+  auto_merge_on_done: true
+  auto_merge_exclude_paths:
+    - kanban
 
 claude:
-  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` (etc.) extends Claude
+  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` extends Claude
   # Code's write scope to the host directories that after_create
   # junctioned into the worktree. Without these, the agent silently
   # fails to flip ticket state to Done because the resolved path lands
   # outside its cwd, and Symphony's tracker keeps re-dispatching it.
   # Symphony injects SYMPHONY_WORKFLOW_DIR before spawning each turn
   # (see Orchestrator.start).
-  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs" --add-dir "$SYMPHONY_WORKFLOW_DIR/llm-wiki"'
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"'
   resume_across_turns: true
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000

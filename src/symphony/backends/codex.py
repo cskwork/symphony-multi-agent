@@ -129,7 +129,7 @@ def _scan_workspace_symlinks(*roots: Path) -> list[str]:
     Codex with ``sandbox_mode=workspace-write`` resolves symlinks via realpath
     and refuses to write through paths whose target falls outside the
     workspace root. When ``after_create`` symlinks host repo directories
-    (kanban/, docs/, prompt/, ...) into the workspace, stage-transition
+    (kanban/, prompt/, ...) into the workspace, stage-transition
     commits silently fail and the worker burns turns repeating "쓰기 불가".
 
     This scan returns the resolved targets so the backend can pass them to

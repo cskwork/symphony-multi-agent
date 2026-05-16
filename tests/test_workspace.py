@@ -214,10 +214,10 @@ def test_symphony_link_dir_propagates_writes_back_to_source(tmp_path):
 @pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
 @pytest.mark.asyncio
 async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_path):
-    """The file-tracker example links host kanban/docs into the workspace.
+    """The file-tracker example links host kanban into the workspace.
 
-    Those links are workflow plumbing, not ticket output. If Git sees them as
-    a branch diff, Review reports mass deletions and rewinds forever.
+    That link is workflow plumbing, not ticket output. docs/ stays as a real
+    branch-local tree so review/QA artefacts merge back with the feature.
     """
     host = tmp_path / "host"
     host.mkdir()
@@ -241,7 +241,8 @@ async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_
     ws = await mgr.create_or_reuse("DEMO-1")
 
     assert (ws.path / "kanban").is_symlink()
-    assert (ws.path / "docs").is_symlink()
+    assert not (ws.path / "docs").is_symlink()
+    assert (ws.path / "docs").is_dir()
     assert _git(ws.path, "status", "--short").stdout == ""
 
 

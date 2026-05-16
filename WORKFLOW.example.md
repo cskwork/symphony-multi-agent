@@ -68,8 +68,8 @@ hooks:
     git -C "$WORKTREE_PATH" config extensions.worktreeConfig true
     git -C "$WORKTREE_PATH" config --worktree symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
     # Linear tracker reads from its API, not the file system, so no
-    # symlink-back step is needed. (For tracker.kind=file, also symlink
-    # kanban/docs back to $HOST_REPO — see WORKFLOW.file.example.md.)
+    # symlink-back step is needed. (For tracker.kind=file, symlink only
+    # host-owned board roots such as kanban — see WORKFLOW.file.example.md.)
   before_run: |
     # NEVER `git reset --hard` inside a worktree — it discards in-progress
     # work between turns. Just refresh remotes; let the agent decide if/when
@@ -121,10 +121,11 @@ agent:
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
   # Hard token ceiling by workflow state. The global cap is the default for
-  # Review/QA/Learn; In Progress gets a larger build budget.
-  max_total_tokens: 10000000
+  # Review/Learn; In Progress and QA get larger build/verification budgets.
+  max_total_tokens: 100000000
   max_total_tokens_by_state:
-    "In Progress": 100000000
+    "In Progress": 500000000
+    QA: 500000000
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
@@ -143,34 +144,20 @@ agent:
   # strict commit-style rules you don't want auto-touched.
   auto_commit_on_done: true
   # After auto-commit on Done, fold the `symphony/<ID>` branch into the
-  # host repo's main development branch as one selective-apply commit.
-  # Safe-by-default: dirty host or missing branch skips silently. Paths
-  # in `auto_merge_exclude_paths` are stripped first — by default this
-  # covers the workspace symlinks that the reference `after_create`
-  # hook installs (kanban/llm-wiki/prompt/docs), which are workspace-only
-  # plumbing and should never reach the host repo.
+  # host repo's main development branch as an explicit `--no-ff` merge
+  # commit. Safe-by-default: missing branch, merge conflict, or dirty
+  # host files overlapping the branch skips and logs an event.
   auto_merge_on_done: true
   # Branch to merge into. Empty string = use whatever branch is currently
   # checked out in the host repo when the ticket finishes (most flexible).
   auto_merge_target_branch: ""
-  # Paths excluded from the selective apply. Override when your
-  # after_create hook installs a different set of workspace symlinks.
-  auto_merge_exclude_paths:
-    - kanban
-    - llm-wiki
-    - prompt
-    - docs
-  # OPT-IN: paths under the host repo whose currently-untracked files
-  # should be folded into the same auto-merge commit. Closes the gap
-  # where `hooks.after_create` installs host directories as symlinks
-  # inside the agent workspace — the agent writes files via the symlink
-  # (so they land in the host repo's real directories) but those writes
-  # never appear in the `symphony/<ID>` branch diff because the branch
-  # only sees the symlink as a single blob. List the host-side paths
-  # where you expect per-ticket notes/wiki/etc to accumulate. Defaults
-  # to empty (current behaviour preserved). Distinct from
-  # `auto_merge_exclude_paths` — those skip branch-side checkout; this
-  # captures host-side filesystem state.
+  # Workspace-only roots that must not differ on the ticket branch. Linear
+  # has no host symlink roots, so this stays empty. File-board workflows
+  # usually set this to ["kanban"] in WORKFLOW.file.example.md.
+  auto_merge_exclude_paths: []
+  # Legacy escape hatch: paths under the host repo whose currently
+  # untracked files should be folded into the same merge commit. Prefer
+  # branch-local docs/ so reports and wiki updates merge normally.
   auto_merge_capture_untracked: []
   #   - docs
   #   - llm-wiki
@@ -183,7 +170,7 @@ codex:
   # Sandbox trade-off — read before changing:
   #   `workspace-write` (default below) keeps codex confined to the worker
   #   workspace and is the safer choice for fresh clones / shared machines.
-  #   When `after_create` symlinks host-repo dirs (kanban, docs, ...) into
+  #   When `after_create` symlinks host-repo dirs (kanban, prompt, ...) into
   #   the workspace, symphony's codex backend now scans those symlinks at
   #   start() and auto-injects `-c sandbox_workspace_write.writable_roots`
   #   so writes through them succeed without widening the sandbox. Wrapper

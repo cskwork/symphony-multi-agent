@@ -207,7 +207,7 @@ class HooksConfig:
     after_done: str | None = None
 
 
-DEFAULT_AUTO_MERGE_EXCLUDE_PATHS = ("kanban", "llm-wiki", "prompt", "docs")
+DEFAULT_AUTO_MERGE_EXCLUDE_PATHS: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -228,32 +228,27 @@ class AgentConfig:
     # workspace is e.g. an existing repo with strict commit-style rules.
     auto_commit_on_done: bool = True
     # After auto-commit on Done, optionally fold the symphony/<ID> branch
-    # back into the host repo's main development branch as a single
-    # selective-apply commit. Paths in `auto_merge_exclude_paths` are
-    # skipped — by default this covers the workspace symlinks that
-    # `hooks.after_create` installs (kanban/llm-wiki/prompt/docs), which
-    # are workspace-only plumbing and must not reach the host repo.
-    # Safe-by-default: a dirty host working tree or any git error skips
-    # the merge and logs `auto_merge_skipped` — no exception propagates.
+    # back into the host repo's main development branch with an explicit
+    # `git merge --no-ff` commit. Paths in `auto_merge_exclude_paths` are
+    # guardrails: if any of them changed on the branch, the merge is
+    # blocked because those roots are workspace plumbing, not deliverables.
+    # Keep docs branch-local so reports/wiki updates ride with the merge.
+    # Safe-by-default: a dirty host working tree that overlaps branch
+    # changes or any git error skips the merge and logs an event — no
+    # exception propagates.
     auto_merge_on_done: bool = True
     # Target branch in the host repo. Empty string ("") = use whatever
     # branch is currently checked out in the host repo at fire time.
     auto_merge_target_branch: str = ""
-    # Paths to exclude from the selective apply. Defaults to the workspace
-    # symlinks created by the `tools/board-viewer` reference workflow.
-    # Override in WORKFLOW.md when your `after_create` hook installs a
-    # different set of symlinks.
+    # Workspace-only roots that must not differ on the ticket branch.
+    # File-board workflows usually set this to `["kanban"]`; add `prompt`
+    # only if your hook symlinks it from the host. Do not list `docs`
+    # unless you intentionally made docs host-owned and accept that docs
+    # will not be branch deliverables.
     auto_merge_exclude_paths: tuple[str, ...] = DEFAULT_AUTO_MERGE_EXCLUDE_PATHS
-    # Paths under the host repo whose UNTRACKED files should be folded into
-    # the same auto-merge commit. Closes the gap where `hooks.after_create`
-    # installs `host_repo/{kanban,docs,...}` as symlinks inside the agent
-    # workspace: the agent writes files via the symlink (so they land in the
-    # host repo's real directories) but the `symphony/<ID>` branch only sees
-    # the symlink as a single blob, so `git diff target..symphony/<ID>` never
-    # reports the agent's per-ticket notes. Opt-in: empty by default so
-    # existing deployments keep their current behaviour. Listing a path here
-    # is orthogonal to `auto_merge_exclude_paths` — those skip checkout of
-    # branch-side blobs; this captures host-side filesystem state.
+    # Legacy escape hatch for workflows that intentionally keep a report
+    # tree host-owned. Prefer branch-local docs instead. Captured files are
+    # added to the same `--no-ff` merge commit.
     auto_merge_capture_untracked: tuple[str, ...] = ()
     # What to do when the `after_done` hook fails. "warn" (default,
     # legacy) just logs `hook_after_done_failed` and the orchestrator

@@ -38,7 +38,7 @@ def _make_repo(tmp_path: Path) -> Path:
 
 def _make_symphony_branch(repo: Path, ident: str, *, with_symlinks: bool = True) -> None:
     """Create a symphony/<ident> branch that mirrors what after_create produces:
-    a real code change plus workspace symlinks at kanban/docs."""
+    a real code change plus optional leaked workspace roots at kanban/docs."""
     _git(repo, "checkout", "-q", "-b", f"symphony/{ident}")
     (repo / "feature.py").write_text("print('hi')\n")
     _git(repo, "add", "feature.py")
@@ -52,9 +52,9 @@ def _make_symphony_branch(repo: Path, ident: str, *, with_symlinks: bool = True)
     _git(repo, "checkout", "-q", "main")
 
 
-def test_auto_merge_applies_changes_and_excludes_symlinks(tmp_path: Path) -> None:
+def test_auto_merge_creates_no_ff_merge_commit(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    _make_symphony_branch(repo, "T-1")
+    _make_symphony_branch(repo, "T-1", with_symlinks=False)
 
     asyncio.run(
         auto_merge_on_done_best_effort(
@@ -63,25 +63,31 @@ def test_auto_merge_applies_changes_and_excludes_symlinks(tmp_path: Path) -> Non
             identifier="T-1",
             title="test feature",
             target_branch="main",
-            exclude_paths=("kanban", "docs"),
+            exclude_paths=("kanban",),
         )
     )
 
-    # feature.py applied, but kanban/docs excluded
     assert (repo / "feature.py").exists()
-    assert not (repo / "kanban").exists()
-    assert not (repo / "docs").exists()
     log = subprocess.run(
         ["git", "log", "--oneline", "-1"], cwd=str(repo),
         capture_output=True, text=True, check=True,
     ).stdout
-    assert "apply T-1 from symphony/T-1" in log
+    assert "merge: T-1 from symphony/T-1" in log
+    parents = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert len(parents) == 3, "auto merge must create an explicit merge commit"
 
 
 def test_auto_merge_skips_when_host_dirty(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    _make_symphony_branch(repo, "T-2", with_symlinks=False)
-    # make host dirty
+    _git(repo, "checkout", "-q", "-b", "symphony/T-2")
+    (repo / "README.md").write_text("branch change\n")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "T-2: modify readme")
+    _git(repo, "checkout", "-q", "main")
+    # make host dirty on the same path the branch changes
     (repo / "README.md").write_text("modified\n")
 
     head_before = subprocess.run(
@@ -105,6 +111,31 @@ def test_auto_merge_skips_when_host_dirty(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head_before == head_after, "skip on dirty host must not create commit"
+
+
+def test_auto_merge_allows_non_overlapping_host_dirty(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    _make_symphony_branch(repo, "T-2B", with_symlinks=False)
+    (repo / "local-note.txt").write_text("operator scratch\n")
+
+    asyncio.run(
+        auto_merge_on_done_best_effort(
+            workflow_dir=repo,
+            branch="symphony/T-2B",
+            identifier="T-2B",
+            title="should merge",
+            target_branch="main",
+            exclude_paths=(),
+        )
+    )
+
+    assert (repo / "feature.py").exists()
+    assert (repo / "local-note.txt").read_text() == "operator scratch\n"
+    status = subprocess.run(
+        ["git", "status", "--short"], cwd=str(repo),
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "?? local-note.txt" in status
 
 
 def test_auto_merge_skips_missing_branch(tmp_path: Path) -> None:
@@ -158,11 +189,11 @@ def test_auto_merge_uses_current_branch_when_target_empty(tmp_path: Path) -> Non
         ["git", "log", "--oneline", "-1", "main"], cwd=str(repo),
         capture_output=True, text=True, check=True,
     ).stdout
-    assert "apply T-3" in dev_head
-    assert "apply T-3" not in main_head
+    assert "merge: T-3" in dev_head
+    assert "merge: T-3" not in main_head
 
 
-def test_auto_merge_nothing_to_apply_when_all_excluded(tmp_path: Path) -> None:
+def test_auto_merge_blocks_when_excluded_root_changed(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     # Branch only adds a path that we then exclude entirely.
     _git(repo, "checkout", "-q", "-b", "symphony/T-4")
@@ -192,6 +223,7 @@ def test_auto_merge_nothing_to_apply_when_all_excluded(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head_before == head_after
+    assert not (repo / "kanban").exists()
 
 
 def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
@@ -201,7 +233,7 @@ def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
     written via symlink into the host repo and never appear in the
     symphony/<ID> branch diff."""
     repo = _make_repo(tmp_path)
-    _make_symphony_branch(repo, "T-5")  # adds feature.py + kanban/docs blobs
+    _make_symphony_branch(repo, "T-5", with_symlinks=False)
 
     # Simulate what an agent does when writing through an after_create
     # symlink: a real file lands in the host repo's docs-host/ directory
@@ -217,17 +249,13 @@ def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
             identifier="T-5",
             title="capture host untracked",
             target_branch="main",
-            # exclude branch-side `docs` blob (the symlink stand-in)
-            # and capture host-side `docs-host` untracked content.
-            exclude_paths=("kanban", "docs"),
+            exclude_paths=("kanban",),
             capture_untracked=("docs-host",),
         )
     )
 
     # feature.py was applied as before
     assert (repo / "feature.py").exists()
-    # branch-side docs stand-in stayed excluded
-    assert not (repo / "docs").exists()
     # host-side untracked note got captured into the same commit
     assert (repo / "docs-host" / "note.md").exists()
     tree = subprocess.run(
@@ -241,4 +269,4 @@ def test_auto_merge_captures_untracked_paths(tmp_path: Path) -> None:
         ["git", "log", "--oneline", "-1"], cwd=str(repo),
         capture_output=True, text=True, check=True,
     ).stdout
-    assert "apply T-5 from symphony/T-5" in log
+    assert "merge: T-5 from symphony/T-5" in log

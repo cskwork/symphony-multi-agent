@@ -1,18 +1,17 @@
 """Auto-merge a finished ticket's `symphony/<ID>` branch into the host repo.
 
 Fires once when a ticket reaches Done, immediately after
-`commit_workspace_on_done`. Applies all paths changed in `symphony/<ID>`
-vs the target branch's HEAD — *except* paths listed in `exclude_paths`,
-which are workspace symlinks that the reference `after_create` hook
-installs (kanban/llm-wiki/prompt/docs). A plain `git merge` would try to
-materialise those symlinks back onto the host working tree where they
-clash with the original directories; selective apply avoids that
-entirely.
+`commit_workspace_on_done`. Merges the whole `symphony/<ID>` branch into
+the target branch with an explicit `--no-ff` merge commit. Paths listed in
+`exclude_paths` are workspace-only roots that must not appear in the branch
+diff; if they changed, the merge is blocked instead of silently applying a
+partial branch.
 
 Safety contract: this is best-effort.
-- Dirty host working tree     -> skip, log `auto_merge_skipped_dirty`
+- Dirty host overlap          -> skip, log `auto_merge_skipped_dirty`
 - Branch does not exist       -> skip, log `auto_merge_skipped_missing_branch`
 - Nothing to apply after excl -> skip, log `auto_merge_nothing_to_apply`
+- Excluded root changed       -> block, log `auto_merge_blocked_excluded_paths`
 - Any other git error         -> log `auto_merge_failed` and return
 
 The caller never sees an exception; Symphony's queue keeps moving even
@@ -43,6 +42,7 @@ _RC_OK = 0
 _RC_SKIP_DIRTY = 41
 _RC_SKIP_MISSING_BRANCH = 42
 _RC_NOTHING_TO_APPLY = 43
+_RC_BLOCKED_EXCLUDED = 44
 _RC_FAIL_GIT = 50
 _RC_FAIL_COMMIT = 51
 
@@ -140,6 +140,13 @@ async def auto_merge_on_done_best_effort(
             path=str(workflow_dir),
             identifier=identifier,
         )
+    elif rc == _RC_BLOCKED_EXCLUDED:
+        log.warning(
+            "auto_merge_blocked_excluded_paths",
+            path=str(workflow_dir),
+            identifier=identifier,
+            stdout=stdout[:400],
+        )
     elif rc in (_RC_FAIL_GIT, _RC_FAIL_COMMIT):
         log.warning(
             "auto_merge_failed",
@@ -169,11 +176,12 @@ def _build_script(
     excludes: tuple[str, ...],
     captures: tuple[str, ...] = (),
 ) -> str:
-    """Shell-out script for the selective-apply merge.
+    """Shell-out script for the branch merge.
 
-    Kept as one bash invocation (not a sequence of python subprocess
-    calls) so the entire flow either rolls forward to a commit or leaves
-    the host repo untouched — no half-applied state is reachable.
+    Kept as one bash invocation (not a sequence of python subprocess calls)
+    so the flow either creates one merge commit or leaves the host repo
+    untouched, except for non-overlapping pre-existing dirty files that Git
+    preserves across the merge.
     """
     exclude_re = "^(" + "|".join(excludes) + ")$" if excludes else ""
     capture_block = ""
@@ -196,9 +204,6 @@ def _build_script(
         "if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then\n"
         '  echo "FAIL: not a git repo"; exit 50\n'
         "fi\n"
-        'if [ -n "$(git status -uno --porcelain)" ]; then\n'
-        '  echo "SKIP: host repo has tracked changes"; exit 41\n'
-        "fi\n"
         'if [ -z "$TARGET" ]; then\n'
         '  TARGET="$(git symbolic-ref --short HEAD 2>/dev/null || true)"\n'
         '  if [ -z "$TARGET" ]; then echo "FAIL: detached HEAD"; exit 50; fi\n'
@@ -211,31 +216,44 @@ def _build_script(
         'if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then\n'
         '  echo "SKIP: branch $BRANCH missing"; exit 42\n'
         "fi\n"
+        'CHANGED="$(git diff --name-only "$TARGET".."$BRANCH" || true)"\n'
         'if [ -n "$EXCLUDE_RE" ]; then\n'
-        '  AM="$(git diff --name-only --diff-filter=AM "$TARGET".."$BRANCH" | '
-        'grep -vE "$EXCLUDE_RE" || true)"\n'
-        '  DEL="$(git diff --name-only --diff-filter=D "$TARGET".."$BRANCH" | '
-        'grep -vE "$EXCLUDE_RE" || true)"\n'
-        "else\n"
-        '  AM="$(git diff --name-only --diff-filter=AM "$TARGET".."$BRANCH" || true)"\n'
-        '  DEL="$(git diff --name-only --diff-filter=D "$TARGET".."$BRANCH" || true)"\n'
+        '  BAD="$(printf "%s\\n" "$CHANGED" | grep -E "$EXCLUDE_RE" || true)"\n'
+        '  if [ -n "$BAD" ]; then\n'
+        '    echo "BLOCK: branch changed excluded workspace roots:"\n'
+        '    printf "%s\\n" "$BAD"\n'
+        "    exit 44\n"
+        "  fi\n"
+        "fi\n"
+        'DIRTY="$( { git diff --name-only; git diff --cached --name-only; } | sort -u )"\n'
+        'if [ -n "$DIRTY" ]; then\n'
+        '  OVERLAP="$(comm -12 '
+        '<(printf "%s\\n" "$DIRTY" | sort -u) '
+        '<(printf "%s\\n" "$CHANGED" | sort -u) || true)"\n'
+        '  if [ -n "$OVERLAP" ]; then\n'
+        '    echo "SKIP: host tracked changes overlap branch merge:"\n'
+        '    printf "%s\\n" "$OVERLAP"\n'
+        "    exit 41\n"
+        "  fi\n"
+        '  echo "WARN: preserving non-overlapping host tracked changes"\n'
         "fi\n"
         f"HAS_CAPTURES={1 if captures else 0}\n"
-        'if [ -z "$AM" ] && [ -z "$DEL" ] && [ "$HAS_CAPTURES" = "0" ]; then\n'
-        '  echo "SKIP: nothing non-excluded differs"; exit 43\n'
-        "fi\n"
-        '[ -n "$AM" ] && echo "$AM" | xargs -I{} git checkout "$BRANCH" -- "{}"\n'
-        '[ -n "$DEL" ] && echo "$DEL" | xargs -I{} git rm -f -q -- "{}" 2>/dev/null\n'
-        + capture_block +
-        "if git diff --cached --quiet; then\n"
-        '  echo "SKIP: nothing staged"; exit 43\n'
+        'if [ -z "$CHANGED" ] && [ "$HAS_CAPTURES" = "0" ]; then\n'
+        '  echo "SKIP: nothing differs"; exit 43\n'
         "fi\n"
         'SHA="$(git rev-parse --short "$BRANCH")"\n'
+        'git -c user.email=symphony@local -c user.name=symphony merge '
+        '--no-ff --no-commit "$BRANCH" || '
+        '{ echo "FAIL: merge failed"; git merge --abort >/dev/null 2>&1 || true; exit 50; }\n'
+        + capture_block +
+        "if git diff --cached --quiet; then\n"
+        '  echo "SKIP: nothing staged after merge"; '
+        'git merge --abort >/dev/null 2>&1 || true; exit 43\n'
+        "fi\n"
         "git -c user.email=symphony@local -c user.name=symphony commit "
-        '-m "feat: apply ${IDENT} from ${BRANCH} (${SHA})" '
+        '-m "merge: ${IDENT} from ${BRANCH} (${SHA})" '
         '-m "${TITLE}" '
-        '-m "Workspace symlinks excluded: ${EXCLUDE_RE}" '
         '-m "Source: ${BRANCH} ${SHA}" '
-        '|| { echo "FAIL: commit failed"; exit 51; }\n'
-        'echo "OK: ${BRANCH} (${SHA}) applied to ${TARGET}"\n'
+        '|| { echo "FAIL: commit failed"; git merge --abort >/dev/null 2>&1 || true; exit 51; }\n'
+        'echo "OK: ${BRANCH} (${SHA}) merged to ${TARGET}"\n'
     )

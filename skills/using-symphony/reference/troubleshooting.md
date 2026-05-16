@@ -42,7 +42,7 @@ tail -F log/symphony.log
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
 | TUI exits immediately, no error          | No TTY (running under a non-interactive shell)           | Run from a real terminal, or use `--port 9999` headless mode                        |
-| Review reports mass deletes or `120000` symlink entries for `kanban/`, `docs/`, or `prompt/` | The ticket branch captured host-owned workspace plumbing instead of real code changes | Stop the service, reset the polluted `symphony/<ID>` branch to the last good tree commit, update the file-workflow hooks to hide host symlink roots from Git, then restart |
+| Review reports mass deletes or `120000` symlink entries for host-backed roots such as `kanban/` or `prompt/` | The ticket branch captured host-owned workspace plumbing instead of real code changes | Stop the service, reset the polluted `symphony/<ID>` branch to the last good tree commit, update the file-workflow hooks to hide host symlink roots from Git, then restart |
 
 ## Step 3 — inspect runtime state
 
@@ -74,16 +74,18 @@ The retry queue uses exponential backoff capped at `agent.max_retry_backoff_ms`.
 If the underlying issue is unfixable (e.g. agent CLI is broken), `mv` the
 ticket to `Blocked` to stop the cycle.
 
-### "Review keeps rewinding on `docs/`, `kanban/`, or `prompt/` symlinks"
+### "Review keeps rewinding on workspace symlinks"
 
 The reviewer should inspect the current workspace code. `git diff` is only
 a map. If it shows whole-tree deletes or mode `120000` symlink entries for
-host-backed roots (`kanban/`, `docs/`, `prompt/`), that is not a product
+host-backed roots such as `kanban/` or `prompt/`, that is not a product
 code defect; it means the workspace branch accidentally recorded Symphony
-plumbing.
+plumbing. `docs/` should normally be a real branch-local tree; if it shows
+up as a symlink root, the workflow is using a legacy host-linked docs
+setup and should be reconsidered before continuing review.
 
 Root causes:
-- A file-board `after_create` linked host board/docs/prompt roots into the
+- A file-board `after_create` linked host board/prompt roots into the
   workspace, but did not mark the tracked files `skip-worktree` or add the
   link roots to this worktree's `info/exclude`.
 - `after_run` used plain `git add -A`, so it staged the plumbing roots.
@@ -93,7 +95,7 @@ Root causes:
 Recovery:
 1. Stop the orchestrator for that board.
 2. Find the last good commit where those roots are real trees:
-   `git -C <workspace> ls-tree <sha> kanban docs prompt` should show
+   `git -C <workspace> ls-tree <sha> kanban prompt` should show
    `040000 tree`, not `120000 blob`.
 3. In the ticket workspace, clear skip-worktree on those paths if needed,
    remove the bad link entries, then hard-reset to the good commit.
@@ -108,8 +110,9 @@ Recovery:
 5. Run `symphony doctor ./WORKFLOW.md`, then restart the service.
 
 After this, a reused workspace refreshes its host links before dispatch,
-the agent's card edits still reach the host board, and Review no longer
-mistakes workflow plumbing for code changes.
+the agent's card edits still reach the host board, docs remain reviewable
+branch deliverables, and Review no longer mistakes workflow plumbing for
+code changes.
 
 ### "Card is in `Done` but workspace still exists"
 

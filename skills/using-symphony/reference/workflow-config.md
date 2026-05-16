@@ -200,10 +200,17 @@ want auto-touched. Then you own snapshotting and squashing yourself in
 
 ### File-board host links
 
-When `after_create` links host `kanban/`, `docs/`, or `prompt/` into the
-workspace, set `workspace.reuse_policy: refresh`, hide those roots from
-the worktree's Git status (`skip-worktree` + `info/exclude`), guard them
-in `before_run`, and exclude them from `after_run`'s `git add -A`.
+When `after_create` links host-owned roots such as `kanban/` or `prompt/`
+into the workspace, set `workspace.reuse_policy: refresh`, hide those
+roots from the worktree's Git status (`skip-worktree` + `info/exclude`),
+guard them in `before_run`, and exclude them from `after_run`'s
+`git add -A`.
+
+Keep `docs/` branch-local by default. Per-ticket reports, QA evidence,
+and `docs/llm-wiki/` updates are reviewable deliverables and should land
+on `symphony/<ID>` before the target branch receives a `--no-ff` merge.
+Only link `docs/` from the host if you intentionally want out-of-branch
+documentation and accept that it needs a separate capture/commit policy.
 
 Use `git rev-parse --git-path <scratch-name>` for hook temp files; linked
 worktrees often have `.git` as a file, not a directory. If these roots

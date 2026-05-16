@@ -27,15 +27,15 @@ polling:
 workspace:
   root: ~/symphony_workspaces
   # Re-run after_create when reusing an existing ticket workspace. Use this
-  # for workflows whose after_create installs host-board/docs symlinks that
+  # for workflows whose after_create installs host-board symlinks that
   # must stay fresh for state transitions to be visible to Symphony.
   reuse_policy: refresh
 
 hooks:
   # Default: each ticket gets its own git worktree of the host repo on a
-  # symphony/<ID> branch. The host working tree is never disturbed; merge
-  # back via `git -C <HOST_REPO> merge symphony/<ID>` (or open a PR) when
-  # you're satisfied — explicit operator action.
+  # symphony/<ID> branch. Product changes and docs/ artefacts stay on that
+  # branch; Symphony merges it back with an explicit --no-ff merge commit
+  # when the ticket reaches Done.
   #
   # If your code lives in a *different* remote than the WORKFLOW.md repo,
   # replace the worktree commands with `git clone <remote> .` instead.
@@ -101,11 +101,11 @@ hooks:
         ln -s "$source" "$target"
       fi
     }
-    for dir in kanban docs; do
+    for dir in kanban; do
       [ -e "$HOST_REPO/$dir" ] || continue
       # Hide host-owned symlink/junction roots from this worktree's git
-      # status. Otherwise a reused workspace can record kanban/docs as
-      # 120000 symlink blobs and delete the real tree on the ticket branch.
+      # status. Otherwise a reused workspace can record kanban as a 120000
+      # symlink blob and delete the real tree on the ticket branch.
       tracked_file="$(git rev-parse --git-path "symphony-${dir}-tracked")"
       git ls-files -z -- "$dir" > "$tracked_file" || true
       if [ -s "$tracked_file" ]; then
@@ -123,7 +123,7 @@ hooks:
     # to rebase.
     set -uo pipefail
     HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
-    for dir in kanban docs; do
+    for dir in kanban; do
       source="$HOST_REPO/$dir"
       target="$PWD/$dir"
       [ -e "$source" ] || continue
@@ -145,7 +145,7 @@ hooks:
     # orchestrator squashes everything into a single `<ID>: <title>` commit
     # on exit — see auto_commit_on_done.
     set -uo pipefail
-    git add -A -- . ':(exclude)kanban' ':(exclude)docs' ':(exclude).symphony' 2>/dev/null || true
+    git add -A -- . ':(exclude)kanban' ':(exclude).symphony' 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
       echo "run finished at $(date) (no changes)"
       exit 0
@@ -181,9 +181,10 @@ agent:
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
-  max_total_tokens: 10000000
+  max_total_tokens: 100000000
   max_total_tokens_by_state:
-    "In Progress": 100000000
+    "In Progress": 500000000
+    QA: 500000000
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
@@ -198,6 +199,13 @@ agent:
   # Reuses any enclosing git repo; otherwise runs `git init` first. Set to
   # false to opt out (e.g. workspace is a real repo you don't want touched).
   auto_commit_on_done: true
+  # Done tickets merge back with a real merge commit. kanban/ is a
+  # host-owned board link, so if it appears in the feature-branch diff the
+  # merge is blocked as leaked workspace plumbing. docs/ is intentionally
+  # branch-local and merges normally.
+  auto_merge_on_done: true
+  auto_merge_exclude_paths:
+    - kanban
 
 codex:
   command: codex app-server
@@ -205,7 +213,7 @@ codex:
   reasoning_effort: high
   approval_policy: never
   # `workspace-write` is the safe default. When `after_create` symlinks
-  # host repo dirs (kanban, docs, ...) into the workspace, symphony's codex
+  # host repo dirs (kanban, prompt, ...) into the workspace, symphony's codex
   # backend auto-injects `-c sandbox_workspace_write.writable_roots=[...]`
   # for direct `codex ...` commands and exports the resolved targets via
   # `$SYMPHONY_CODEX_WRITABLE_ROOTS` (os.pathsep-joined) for wrapper
@@ -215,12 +223,12 @@ codex:
   turn_sandbox_policy: workspace-write
 
 claude:
-  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` (etc.) extends Claude
+  # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` extends Claude
   # Code's write scope to the host directories that after_create
   # junctioned into the worktree. Without these, the agent silently
   # fails to flip ticket state to Done because the resolved path lands
   # outside its cwd, and Symphony's tracker keeps re-dispatching it.
-  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban" --add-dir "$SYMPHONY_WORKFLOW_DIR/docs"'
+  command: 'claude -p --output-format stream-json --verbose --permission-mode acceptEdits --add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"'
 
 gemini:
   # `gemini -p` (no argument) prints help in Gemini CLI 0.39+; pass `""`
