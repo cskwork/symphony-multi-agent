@@ -18,12 +18,19 @@ def _load_server_module():
     return module
 
 
-def test_header_has_branch_policy_slot() -> None:
+def test_header_has_branch_controls_without_summary_slot() -> None:
     html = Path("tools/board-viewer/index.html").read_text(encoding="utf-8")
+    css = Path("tools/board-viewer/src/css/style.css").read_text(encoding="utf-8")
 
-    assert 'id="branch-policy"' in html
     assert 'id="feature-base-branch"' in html
     assert 'id="merge-target-branch"' in html
+    assert 'id="branch-policy"' not in html
+
+    header_left_block = css.split(".header-left", 1)[1].split("}", 1)[0]
+    header_right_block = css.split(".header-right", 1)[1].split("}", 1)[0]
+    for block in (header_left_block, header_right_block):
+        assert "flex-wrap: nowrap;" in block
+        assert "overflow-x: auto;" in block
 
 
 def test_card_renderer_has_agent_badge_slot() -> None:
@@ -54,11 +61,11 @@ def test_board_viewer_fallback_states_and_policy_mode() -> None:
 
     assert "const FALLBACK_STATES" in js
     assert '"Plan"' in js
-    assert "policy.auto_merge_enabled === false" in js
-    assert "merge off" in js
+    assert "branchPolicyEl" not in js
+    assert "`branch:" not in js
+    assert "merge off" not in js
     assert "fetchGitBranches" in js
     assert "saveBranchPolicy" in js
-    assert "updateBranchPolicyFromGit" in js
     assert "repo_root" in js
 
 
@@ -223,3 +230,36 @@ def test_git_branch_list_reads_real_local_branches(tmp_path, monkeypatch) -> Non
     assert branches["repo_root"] == str(repo)
     assert branches["workflow_path"] == str(workflow)
     assert branches["feature_base_branch"] == "dev"
+
+
+def test_theme_switcher_static_contract() -> None:
+    html = Path("tools/board-viewer/index.html").read_text(encoding="utf-8")
+    js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
+    css = Path("tools/board-viewer/src/css/style.css").read_text(encoding="utf-8")
+
+    # 1) Theme switcher markup
+    assert 'id="theme-controls"' in html
+    assert 'data-theme="default"' in html
+    assert 'data-theme="focus"' in html
+    assert 'data-theme="command"' in html
+
+    # 2) Theme JS contract
+    assert 'THEME_STORAGE_KEY = "boardViewer.theme"' in js
+    assert "function readTheme(" in js
+    assert "function applyTheme(" in js
+    assert "function setTheme(" in js
+    assert "function bindThemeControls(" in js
+    assert "applyTheme(readTheme())" in js
+
+    # 3) CSS theme overrides re-declare the key variables
+    for selector in ('[data-theme="focus"]', '[data-theme="command"]'):
+        assert f":root{selector}" in css, f"missing block: :root{selector}"
+    focus_block = css.split(':root[data-theme="focus"]', 1)[1].split("}", 1)[0]
+    cmd_block = css.split(':root[data-theme="command"]', 1)[1].split("}", 1)[0]
+    for var in ("--bg", "--fg", "--accent"):
+        assert var in focus_block, f"focus block missing {var}"
+        assert var in cmd_block, f"command block missing {var}"
+
+    # 4) Prep: --code-fg variable replaces hardcoded literal at modal code style
+    assert "--code-fg:" in css
+    assert "color: var(--code-fg);" in css

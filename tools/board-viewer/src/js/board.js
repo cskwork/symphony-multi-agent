@@ -77,6 +77,52 @@ function bindZoomControls() {
   resetBtn?.addEventListener("click", () => setZoom(ZOOM_DEFAULT));
 }
 
+// ---- Theme ------------------------------------------------------------
+const THEME_STORAGE_KEY = "boardViewer.theme";
+const THEMES = ["default", "focus", "command"];
+const THEME_DEFAULT = "default";
+
+function readTheme() {
+  try {
+    const raw = localStorage.getItem(THEME_STORAGE_KEY);
+    if (raw && THEMES.includes(raw)) return raw;
+  } catch {
+    /* localStorage 차단 환경 — 기본값 사용 */
+  }
+  return THEME_DEFAULT;
+}
+
+function applyTheme(theme) {
+  const next = THEMES.includes(theme) ? theme : THEME_DEFAULT;
+  // default는 :root 그대로 두기 위해 data-theme 속성을 제거
+  if (next === THEME_DEFAULT) {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = next;
+  }
+  document.querySelectorAll(".theme-btn").forEach((btn) => {
+    const pressed = btn.dataset.theme === next;
+    btn.setAttribute("aria-pressed", pressed ? "true" : "false");
+    btn.classList.toggle("is-active", pressed);
+  });
+}
+
+function setTheme(theme) {
+  const next = THEMES.includes(theme) ? theme : THEME_DEFAULT;
+  applyTheme(next);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch {
+    /* persistence 실패는 무시 — UI는 정상 동작 */
+  }
+}
+
+function bindThemeControls() {
+  document.querySelectorAll(".theme-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setTheme(btn.dataset.theme));
+  });
+}
+
 const state = {
   tickets: [],
   states: [],
@@ -104,7 +150,6 @@ const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-input");
 const modalBackdrop = document.getElementById("modal-backdrop");
 const modalCloseBtn = document.getElementById("modal-close");
-const branchPolicyEl = document.getElementById("branch-policy");
 const branchControlsEl = document.getElementById("branch-controls");
 const featureBaseSelect = document.getElementById("feature-base-branch");
 const mergeTargetSelect = document.getElementById("merge-target-branch");
@@ -261,42 +306,6 @@ function updateStatus() {
   lastPollEl.textContent = `last poll: ${formatTime(state.lastPollAt)}`;
 }
 
-function updateBranchPolicy(policy) {
-  if (!branchPolicyEl) return;
-  if (!policy) {
-    branchPolicyEl.hidden = true;
-    branchPolicyEl.textContent = "";
-    return;
-  }
-  const base = policy.base_branch || "current branch";
-  const target = policy.merge_target_branch || base;
-  const timing = policy.merge_timing || "after Learn, before Done";
-  const mode = policy.auto_merge_enabled === false ? "merge off" : timing;
-  branchPolicyEl.textContent = `branch: ${base} -> ${target} (${mode})`;
-  branchPolicyEl.dataset.enabled = policy.auto_merge_enabled === false ? "false" : "true";
-  branchPolicyEl.hidden = false;
-}
-
-function updateBranchPolicyFromGit(gitInfo) {
-  if (!state.branchPolicy || !gitInfo?.ok) return;
-  const current = gitInfo.current_branch || "current branch";
-  const repo = repoNameFromGitInfo(gitInfo);
-  const baseLabel = state.branchPolicy.base_branch === "current branch"
-    ? `${repo ? repo + "/" : ""}${current}`
-    : state.branchPolicy.base_branch;
-  const targetLabel = state.branchPolicy.merge_target_branch === "current branch"
-    ? current
-    : state.branchPolicy.merge_target_branch;
-  updateBranchPolicy({
-    ...state.branchPolicy,
-    base_branch: baseLabel,
-    merge_target_branch: targetLabel || baseLabel,
-  });
-  if (branchPolicyEl && gitInfo.repo_root) {
-    branchPolicyEl.title = gitInfo.repo_root;
-  }
-}
-
 function repoNameFromGitInfo(gitInfo) {
   return gitInfo?.repo_root ? gitInfo.repo_root.split("/").filter(Boolean).pop() : "";
 }
@@ -329,7 +338,6 @@ async function refreshBranchControls() {
       selected: res.data.merge_target_branch || "",
       emptyLabel: currentFull,
     });
-    updateBranchPolicyFromGit(res.data);
     branchControlsEl.hidden = false;
   } finally {
     state.branchRefreshInFlight = false;
@@ -433,7 +441,6 @@ async function pollOnce() {
     state.symphonyAlive = true;
     state.defaultAgentKind = symRes.data.workflow?.default_agent_kind || "";
     state.branchPolicy = symRes.data.workflow?.branch_policy || null;
-    updateBranchPolicy(state.branchPolicy);
     const running = symRes.data.running || [];
     for (const r of running) {
       const id = r.issue_identifier || r.issue_id;
@@ -449,7 +456,6 @@ async function pollOnce() {
     state.symphonyAlive = false;
     state.defaultAgentKind = "";
     state.branchPolicy = null;
-    updateBranchPolicy(null);
   }
 
   state.lastPollAt = new Date().toISOString();
@@ -574,9 +580,11 @@ function bindUi() {
 }
 
 async function start() {
-  // zoom은 첫 paint 전에 복원해서 깜박임(FOUC) 방지
+  // zoom/theme은 첫 paint 전에 복원해서 깜박임(FOUC) 방지
   applyZoom(readZoom());
+  applyTheme(readTheme());
   bindZoomControls();
+  bindThemeControls();
   bindUi();
   bindShortcuts();
   schedulePoll(0); // 즉시 1회 → 이후 자체 재예약

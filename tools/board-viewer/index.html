@@ -16,7 +16,6 @@
     <div class="header-left">
       <h1 class="app-title">Symphony Board Viewer</h1>
       <span id="repo-name" class="repo-name"></span>
-      <span id="branch-policy" class="branch-policy" hidden></span>
       <div id="branch-controls" class="branch-controls" hidden>
         <label class="branch-select-label">
           base
@@ -56,6 +55,11 @@
         <span id="zoom-value" class="zoom-value" aria-live="polite">100%</span>
         <button id="zoom-in" class="zoom-btn" type="button" aria-label="UI 키우기" title="키우기 ( ] )">+</button>
         <button id="zoom-reset" class="zoom-btn zoom-reset" type="button" aria-label="UI 크기 리셋" title="리셋 ( \\ )">⟲</button>
+      </div>
+      <div class="theme-controls" id="theme-controls" role="group" aria-label="테마">
+        <button type="button" class="theme-btn" data-theme="default" aria-pressed="true" title="Default 테마 (graphite)">Default</button>
+        <button type="button" class="theme-btn" data-theme="focus" aria-pressed="false" title="Focus 테마 (밝은)">Focus</button>
+        <button type="button" class="theme-btn" data-theme="command" aria-pressed="false" title="Command 테마 (집중 다크)">Command</button>
       </div>
     </div>
   </header>

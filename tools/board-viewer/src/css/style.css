@@ -23,6 +23,9 @@
   --fg-muted:   oklch(74%   0.012 260);
   --fg-dim:     oklch(58%   0.012 260);
 
+  /* Inline code in modal — terracotta on graphite (themes override) */
+  --code-fg:    oklch(82% 0.13 50);
+
   /* Accent — 절제된 indigo (한국 SaaS 톤) */
   --accent:        oklch(68% 0.18 270);
   --accent-strong: oklch(74% 0.20 270);
@@ -62,6 +65,74 @@
   --r-md: 8px;
   --r-lg: 12px;
   --r-pill: 999px;
+}
+
+/* -------------------- Theme: Focus (light, Jira/GitHub-inspired) -------------------- */
+:root[data-theme="focus"] {
+  --bg:            oklch(98% 0.005 250);
+  --bg-elev-1:     oklch(96% 0.006 250);
+  --bg-elev-2:     oklch(94% 0.007 250);
+  --bg-elev-3:     oklch(91% 0.008 250);
+  --border:        oklch(87% 0.010 250);
+  --border-strong: oklch(78% 0.012 250);
+
+  --fg:         oklch(22% 0.012 260);
+  --fg-muted:   oklch(42% 0.012 260);
+  --fg-dim:     oklch(55% 0.012 260);
+
+  --accent:        oklch(48% 0.18 250);
+  --accent-strong: oklch(42% 0.20 250);
+  --accent-soft:   oklch(48% 0.18 250 / 0.14);
+  --accent-fg:     oklch(99% 0.003 250);
+
+  --good:   oklch(52% 0.16 150);
+  --warn:   oklch(60% 0.16  80);
+  --danger: oklch(50% 0.20  25);
+  --info:   oklch(50% 0.14 230);
+
+  --p1: oklch(50% 0.20  25);
+  --p2: oklch(60% 0.16  80);
+  --p3: oklch(50% 0.14 230);
+  --p4: oklch(55% 0.012 260);
+
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.6), 0 1px 2px oklch(0% 0 0 / 0.08);
+  --shadow-elev: 0 12px 32px oklch(0% 0 0 / 0.12), 0 2px 6px oklch(0% 0 0 / 0.08);
+
+  --code-fg: oklch(42% 0.18 25);
+}
+
+/* -------------------- Theme: Command (refined dark, Linear-inspired) -------------------- */
+:root[data-theme="command"] {
+  --bg:            oklch(14% 0.008 280);
+  --bg-elev-1:     oklch(17% 0.009 280);
+  --bg-elev-2:     oklch(20% 0.010 280);
+  --bg-elev-3:     oklch(23% 0.011 280);
+  --border:        oklch(28% 0.012 280);
+  --border-strong: oklch(38% 0.014 280);
+
+  --fg:         oklch(94% 0.012 280);
+  --fg-muted:   oklch(72% 0.010 280);
+  --fg-dim:     oklch(56% 0.010 280);
+
+  --accent:        oklch(68% 0.16 295);
+  --accent-strong: oklch(74% 0.18 295);
+  --accent-soft:   oklch(68% 0.16 295 / 0.18);
+  --accent-fg:     oklch(98% 0.005 295);
+
+  --good:   oklch(72% 0.16 150);
+  --warn:   oklch(78% 0.14  80);
+  --danger: oklch(70% 0.20  25);
+  --info:   oklch(74% 0.14 230);
+
+  --p1: oklch(70% 0.20  25);
+  --p2: oklch(78% 0.14  80);
+  --p3: oklch(74% 0.14 230);
+  --p4: oklch(62% 0.012 280);
+
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.04), 0 1px 2px oklch(0% 0 0 / 0.4);
+  --shadow-elev: 0 12px 32px oklch(0% 0 0 / 0.55), 0 2px 6px oklch(0% 0 0 / 0.45);
+
+  --code-fg: oklch(80% 0.15 50);
 }
 
 * {
@@ -124,7 +195,7 @@ pre,
 
 /* -------------------- Header --------------------
    컨텐츠가 많아 한 줄에 못 들어가면 좌/우 그룹이 두 줄로 wrap된다.
-   PC 와이드(>= 1280px) 에서는 보통 한 줄에 들어맞고, 그보다 좁아지면 자연스럽게 분리. */
+   각 그룹은 한 줄을 유지해 헤더가 세 줄로 늘어지지 않게 한다. */
 .app-header {
   display: flex;
   flex-wrap: wrap;
@@ -142,10 +213,13 @@ pre,
 
 .header-left {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px 12px;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .app-title {
@@ -164,25 +238,10 @@ pre,
   letter-spacing: 0;
 }
 
-.branch-policy {
-  color: var(--fg-muted);
-  font-family: var(--mono);
-  font-size: 11.5px;
-  letter-spacing: 0;
-  line-height: 1;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  padding: 5px 9px;
-  white-space: nowrap;
-}
-
-.branch-policy[data-enabled="false"] {
-  color: var(--warn);
-  border-color: color-mix(in oklch, var(--warn) 50%, transparent);
-}
-
 .branch-controls {
   display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
 }
@@ -221,10 +280,13 @@ pre,
 
 .header-right {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px 12px;
   justify-content: flex-end;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
 .status-block {
@@ -344,6 +406,51 @@ pre,
   min-width: 42px;
   text-align: center;
   user-select: none;
+}
+
+/* -------------------- Theme controls (segmented) -------------------- */
+.theme-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 3px 4px;
+}
+
+.theme-btn {
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  border-radius: 4px;
+  /* 고정 padding으로 pressed/unpressed 사이 너비가 흔들리지 않게 */
+  padding: 4px 10px;
+  min-width: 58px;
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  font-family: var(--sans);
+  letter-spacing: var(--tracking-kr);
+  transition: background 0.12s, color 0.12s;
+}
+
+.theme-btn:hover {
+  background: var(--bg-elev-3);
+  color: var(--fg);
+}
+
+.theme-btn:active { transform: translateY(1px); }
+
+.theme-btn[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+
+.theme-btn:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
 }
 
 /* -------------------- Board (Kanban) -------------------- */
@@ -837,7 +944,7 @@ pre,
   font-family: var(--mono);
   font-size: 13.5px;
   letter-spacing: 0;
-  color: oklch(82% 0.13 50);
+  color: var(--code-fg);
 }
 
 .modal-content pre {
@@ -1158,7 +1265,6 @@ pre,
   .search-input { width: 100%; max-width: 240px; }
   .app-title { font-size: 16px; }
   .meta-block { font-size: 11.5px; }
-  .branch-policy { font-size: 11px; }
 }
 
 @media (max-width: 640px) {
@@ -1178,8 +1284,8 @@ pre,
     scroll-snap-align: start;
   }
   .header-left { gap: 6px 10px; }
-  .header-right { gap: 6px 10px; width: 100%; justify-content: space-between; }
-  .branch-controls { flex-wrap: wrap; gap: 6px; }
+  .header-right { gap: 6px 10px; width: 100%; justify-content: flex-start; }
+  .branch-controls { gap: 6px; }
   .branch-select { min-width: 100px; max-width: 140px; }
   .meta-block { display: none; }   /* 모바일은 last poll/ticket count 숨김 — 정보 밀도 우선순위 ↓ */
   .zoom-controls { display: none; } /* 모바일에선 zoom 버튼 대신 시스템 핀치줌 */
