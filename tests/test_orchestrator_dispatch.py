@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1969,6 +1970,151 @@ def test_reconcile_terminate_terminal_skips_commit_when_auto_off(monkeypatch):
                 pass
 
     asyncio.run(_run())
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        env={
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "HOME": str(cwd),
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+        },
+    )
+
+
+def test_startup_terminal_cleanup_skips_done_workspace_when_branch_already_merged(
+    tmp_path: Path, monkeypatch
+):
+    """A service restart must not resurrect stale Done workspaces whose
+    feature branch has already been folded into the target branch.
+
+    Without this guard, startup cleanup auto-commits old worktree residue,
+    advances `symphony/<ID>` after the human-resolved merge, and then reports
+    fresh merge conflicts for work that is already on the target branch.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", "symphony/MT-DONE")
+    (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-q", "-m", "feature")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "--no-ff", "-m", "merge feature", "symphony/MT-DONE")
+
+    workspace = tmp_path / "ws" / "MT-DONE"
+    workspace.mkdir(parents=True)
+
+    cfg = _make_config(max_concurrent=1)
+    cfg = replace(
+        cfg,
+        workflow_path=repo / "WORKFLOW.md",
+        agent=replace(cfg.agent, auto_merge_target_branch="main"),
+    )
+    issue = _issue("MT-DONE", state="Done")
+    orch = _orch()
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+
+    calls: list[str] = []
+
+    import symphony.orchestrator as _orch_mod
+
+    async def _capture_commit(path, *, identifier, title, **_):
+        calls.append(f"commit:{identifier}")
+
+    async def _capture_merge(**kwargs):
+        calls.append(f"merge:{kwargs['identifier']}")
+
+    class _StubWS:
+        def path_for(self, ident):
+            return workspace
+
+        async def after_done_best_effort(self, p, *, identifier, title):
+            calls.append(f"after_done:{identifier}")
+            return True
+
+        async def remove(self, p):
+            calls.append(f"remove:{Path(p).name}")
+
+    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+    monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _capture_merge)
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+    asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert calls == ["remove:MT-DONE"]
+
+
+def test_startup_terminal_cleanup_preserves_unmerged_done_workspace_without_replay(
+    tmp_path: Path, monkeypatch
+):
+    """Startup may discover an old Done workspace, but it did not observe the
+    transition to Done in this process. It must not create fresh commits or
+    replay merge/deploy hooks just because the directory still exists.
+    """
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "init")
+    _git(repo, "checkout", "-q", "-b", "symphony/MT-DONE")
+    (repo / "feature.txt").write_text("done\n", encoding="utf-8")
+    _git(repo, "add", "feature.txt")
+    _git(repo, "commit", "-q", "-m", "feature")
+    _git(repo, "checkout", "-q", "main")
+
+    workspace = tmp_path / "ws" / "MT-DONE"
+    workspace.mkdir(parents=True)
+
+    cfg = _make_config(max_concurrent=1)
+    cfg = replace(
+        cfg,
+        workflow_path=repo / "WORKFLOW.md",
+        agent=replace(cfg.agent, auto_merge_target_branch="main"),
+    )
+    issue = _issue("MT-DONE", state="Done")
+    orch = _orch()
+    monkeypatch.setattr(orch, "_tracker_call_terminal_issues", lambda c: [issue])
+
+    calls: list[str] = []
+
+    import symphony.orchestrator as _orch_mod
+
+    async def _capture_commit(path, *, identifier, title, **_):
+        calls.append(f"commit:{identifier}")
+
+    async def _capture_merge(**kwargs):
+        calls.append(f"merge:{kwargs['identifier']}")
+
+    class _StubWS:
+        def path_for(self, ident):
+            return workspace
+
+        async def after_done_best_effort(self, p, *, identifier, title):
+            calls.append(f"after_done:{identifier}")
+            return True
+
+        async def remove(self, p):
+            calls.append(f"remove:{Path(p).name}")
+
+    monkeypatch.setattr(_orch_mod, "commit_workspace_on_done", _capture_commit)
+    monkeypatch.setattr(_orch_mod, "auto_merge_on_done_best_effort", _capture_merge)
+    orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+
+    asyncio.run(orch._startup_terminal_cleanup(cfg))
+
+    assert calls == []
 
 
 def test_snapshot_retry_row_includes_paused_flag():

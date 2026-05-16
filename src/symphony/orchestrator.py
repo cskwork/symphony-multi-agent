@@ -13,6 +13,7 @@ Concurrency model:
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import time
 import traceback
 from dataclasses import dataclass, field, replace
@@ -100,6 +101,49 @@ def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:
         "SYMPHONY_FEATURE_BASE_BRANCH": cfg.agent.feature_base_branch or "",
         "SYMPHONY_MERGE_TARGET_BRANCH": cfg.agent.auto_merge_target_branch or "",
     }
+
+
+async def _branch_already_merged_into_target(
+    workflow_dir: Path, *, branch: str, target_branch: str
+) -> bool:
+    """True when `branch` is already contained by the merge target.
+
+    Startup cleanup uses this before it snapshots lingering Done workspaces:
+    if an operator has already merged the branch into the target, a restart
+    must not create a fresh commit on the old feature branch and re-open the
+    merge gate.
+    """
+    target = (target_branch or "HEAD").strip() or "HEAD"
+
+    def _check() -> bool:
+        verify_branch = subprocess.run(
+            ["git", "rev-parse", "--verify", branch],
+            cwd=str(workflow_dir),
+            capture_output=True,
+            check=False,
+        )
+        if verify_branch.returncode != 0:
+            return False
+        verify_target = subprocess.run(
+            ["git", "rev-parse", "--verify", target],
+            cwd=str(workflow_dir),
+            capture_output=True,
+            check=False,
+        )
+        if verify_target.returncode != 0:
+            return False
+        merged = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", branch, target],
+            cwd=str(workflow_dir),
+            capture_output=True,
+            check=False,
+        )
+        return merged.returncode == 0
+
+    try:
+        return await asyncio.to_thread(_check)
+    except Exception:
+        return False
 
 
 def _requested_agent_kind(issue: Issue) -> str | None:
@@ -2287,6 +2331,34 @@ class Orchestrator:
         for issue in terminals:
             path = self._workspace_manager.path_for(issue.identifier)
             if path.exists():
+                is_done = (issue.state or "").strip().lower() == "done"
+                if is_done:
+                    branch = f"symphony/{issue.identifier}"
+                    already_merged = (
+                        cfg.agent.auto_merge_on_done
+                        and await _branch_already_merged_into_target(
+                            cfg.workflow_path.parent,
+                            branch=branch,
+                            target_branch=cfg.agent.auto_merge_target_branch,
+                        )
+                    )
+                    if already_merged:
+                        log.info(
+                            "startup_terminal_cleanup_skipped_already_merged",
+                            identifier=issue.identifier,
+                            branch=branch,
+                            target=cfg.agent.auto_merge_target_branch or "HEAD",
+                            path=str(path),
+                        )
+                        await self._workspace_manager.remove(path)
+                    else:
+                        log.warning(
+                            "startup_terminal_cleanup_preserved_done_workspace",
+                            identifier=issue.identifier,
+                            branch=branch,
+                            path=str(path),
+                        )
+                    continue
                 if cfg.agent.auto_commit_on_done:
                     # Workspaces lingering across orchestrator restarts often
                     # hold the last in-progress changes the agent never got
@@ -2299,26 +2371,7 @@ class Orchestrator:
                         exit_reason="startup_terminal_cleanup",
                         state=issue.state,
                     )
-                if (issue.state or "").strip().lower() == "done":
-                    if cfg.agent.auto_merge_on_done:
-                        await auto_merge_on_done_best_effort(
-                            workflow_dir=cfg.workflow_path.parent,
-                            branch=f"symphony/{issue.identifier}",
-                            identifier=issue.identifier,
-                            title=issue.title,
-                            target_branch=cfg.agent.auto_merge_target_branch,
-                            exclude_paths=cfg.agent.auto_merge_exclude_paths,
-                            capture_untracked=cfg.agent.auto_merge_capture_untracked,
-                        )
-                    await self._after_done_then_remove_per_policy(
-                        cfg,
-                        path,
-                        identifier=issue.identifier,
-                        title=issue.title,
-                        debug_target=self._issue_debug.get(issue.id),
-                    )
-                else:
-                    await self._workspace_manager.remove(path)
+                await self._workspace_manager.remove(path)
 
 
 # ---------------------------------------------------------------------------
