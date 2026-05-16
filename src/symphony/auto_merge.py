@@ -8,6 +8,7 @@ diff; if they changed, the merge is blocked instead of silently applying a
 partial branch.
 
 Safety contract: this is best-effort.
+- Target/branch merge conflict -> fail before dirty-host checks
 - Dirty host overlap          -> skip, log `auto_merge_skipped_dirty`
 - Branch does not exist       -> skip, log `auto_merge_skipped_missing_branch`
 - Nothing to apply after excl -> skip, log `auto_merge_nothing_to_apply`
@@ -224,6 +225,13 @@ def _build_script(
         '    printf "%s\\n" "$BAD"\n'
         "    exit 44\n"
         "  fi\n"
+        "fi\n"
+        'MERGE_TREE_OUTPUT="$(git merge-tree --write-tree "$TARGET" "$BRANCH" 2>&1)"\n'
+        "MERGE_TREE_RC=$?\n"
+        'if [ "$MERGE_TREE_RC" -ne 0 ]; then\n'
+        '  echo "FAIL: committed target/branch merge conflict"\n'
+        '  printf "%s\\n" "$MERGE_TREE_OUTPUT"\n'
+        "  exit 50\n"
         "fi\n"
         'DIRTY="$( { git diff --name-only; git diff --cached --name-only; } | sort -u )"\n'
         'if [ -n "$DIRTY" ]; then\n'

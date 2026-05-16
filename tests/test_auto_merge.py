@@ -6,7 +6,8 @@ import asyncio
 import subprocess
 from pathlib import Path
 
-from symphony.auto_merge import auto_merge_on_done_best_effort
+from symphony._shell import resolve_bash
+from symphony.auto_merge import auto_merge_on_done_best_effort, _build_script
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -111,6 +112,46 @@ def test_auto_merge_skips_when_host_dirty(tmp_path: Path) -> None:
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert head_before == head_after, "skip on dirty host must not create commit"
+
+
+def test_auto_merge_reports_real_conflict_before_dirty_overlap(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "symphony/T-CONFLICT")
+    (repo / "README.md").write_text("branch change\n")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "T-CONFLICT: modify readme")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "README.md").write_text("target change\n")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "main: modify readme")
+
+    # Operator also has a dirty local edit on the same path. The merge gate
+    # must still report the committed target/branch conflict first; otherwise
+    # agents block on "dirty worktree" and miss the real integration work.
+    (repo / "README.md").write_text("operator scratch\n")
+
+    result = subprocess.run(
+        [
+            resolve_bash(),
+            "-lc",
+            _build_script(
+                branch="symphony/T-CONFLICT",
+                target="main",
+                identifier="T-CONFLICT",
+                title="conflict should surface",
+                excludes=(),
+            ),
+        ],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    output = f"{result.stdout}\n{result.stderr}"
+    assert result.returncode == 50
+    assert "CONFLICT" in output
+    assert "SKIP: host tracked changes overlap branch merge" not in output
 
 
 def test_auto_merge_allows_non_overlapping_host_dirty(tmp_path: Path) -> None:

@@ -246,6 +246,19 @@ def test_learn_stage_requires_merge_before_done(workflow: str) -> None:
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_learn_stage_requires_merge_tree_preflight_not_status_only(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Learn"),
+        build_prompt_env(_issue("Learn"), attempt=None),
+    )
+
+    assert "git merge-tree --write-tree" in rendered
+    assert "Do not use `git status -uno --porcelain` as the merge proof" in rendered
+    assert "committed target/branch merge conflict" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_learn_stage_respects_disabled_auto_merge(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(

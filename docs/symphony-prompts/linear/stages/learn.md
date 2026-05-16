@@ -141,7 +141,13 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
 5. Commit wiki edits onto the ticket's PR (same branch, not a separate PR).
 6. Post a Learn comment with `## Learnings` (3-4 bullets of new facts/constraints/surprises) and `## Wiki Updates` (paths created/modified/removed, one line each with a changelog tag: `merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
 {% if agent.auto_merge_on_done %}
-7. Merge Gate — after Learn and before setting state to `Done`, merge this ticket's feature branch into the target branch. Use the workflow target branch (`agent.auto_merge_target_branch`) when set; otherwise use the configured feature base (`agent.feature_base_branch`) or current host branch. If the merge conflicts, touches blocked workspace-only paths, or cannot be proven, move the issue to `Blocked` and post the failing command plus the target branch in a `Merge Failure` comment.
+7. Merge Gate — after Learn and before setting state to `Done`, prove and merge this ticket's feature branch into the target branch:
+   - Resolve target in this order: `agent.auto_merge_target_branch`, `agent.feature_base_branch`, then the current host branch.
+   - First run `git merge-tree --write-tree <target-branch> symphony/{{ issue.identifier }}` from the host repo. This checks the committed target/branch merge without requiring a clean worktree.
+   - Do not use `git status -uno --porcelain` as the merge proof. A dirty host worktree is a separate safety check; it is not proof of a committed target/branch merge conflict.
+   - If `git merge-tree --write-tree` reports a committed target/branch merge conflict, move the issue to `Blocked` and post a `Merge Failure` comment with the exact command, target branch, and conflicted paths.
+   - If the committed merge is clean, then check whether host dirty tracked files overlap `git diff --name-only <target-branch>..symphony/{{ issue.identifier }}`. Block only on actual overlap or workspace-only path changes.
+   - If safe, create the explicit merge commit on the target branch, then record the merge SHA in a `Merge Status` comment.
 8. Transition state to `Done`. If nothing new and sweep was clean, say so in the Learn comment and still transition only after the Merge Gate succeeds.
 {% else %}
 7. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Post a `Merge Status` comment explaining that this workflow intentionally leaves branch integration to the operator.
