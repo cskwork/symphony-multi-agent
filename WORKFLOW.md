@@ -228,6 +228,10 @@ agent:
   # on the (max_attempts+1)th rewind, it moves the ticket to Blocked
   # instead of starting another In Progress pass. Set to 0 to disable.
   max_attempts: 3
+  # File-board optimization: obvious Todo tickets with Acceptance Criteria
+  # are routed to Explore by Symphony itself, saving a model turn. Bug tickets,
+  # blocked tickets, and underspecified tickets still run the Todo prompt.
+  auto_triage_actionable_todo: true
   max_concurrent_agents_by_state:
     Todo: 1
     Explore: 1

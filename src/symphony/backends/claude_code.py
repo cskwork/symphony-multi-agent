@@ -77,6 +77,7 @@ class ClaudeCodeBackend:
         self._active_proc: asyncio.subprocess.Process | None = None
         self._latest_usage: dict[str, int] = {
             "input_tokens": 0,
+            "cache_input_tokens": 0,
             "output_tokens": 0,
             "total_tokens": 0,
         }
@@ -340,13 +341,11 @@ class ClaudeCodeBackend:
         cache_read = int(usage.get("cache_read_input_tokens") or 0)
         cache_create = int(usage.get("cache_creation_input_tokens") or 0)
         out_t = int(usage.get("output_tokens") or 0)
-        # Treat cache reads/creates as part of the input bucket so totals stay
-        # comparable with Codex-side `input_tokens`. Anthropic charges cache
-        # reads at a discount but Symphony's totals are unit counts, not cost.
-        billed_in = in_t + cache_read + cache_create
-        self._latest_usage["input_tokens"] += billed_in
+        cache_t = cache_read + cache_create
+        self._latest_usage["input_tokens"] += in_t
+        self._latest_usage["cache_input_tokens"] += cache_t
         self._latest_usage["output_tokens"] += out_t
-        self._latest_usage["total_tokens"] += billed_in + out_t
+        self._latest_usage["total_tokens"] += in_t + cache_t + out_t
 
     async def _emit(self, event: str, payload: dict[str, Any]) -> None:
         try:

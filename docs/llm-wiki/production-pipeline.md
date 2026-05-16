@@ -32,6 +32,10 @@ cannot detect (states are just opaque strings to the Python core).
   per-ticket evidence roots (post-IB-004 layout; previously sat at the
   workspace root). The first Learn that runs creates the directory and
   seeds `INDEX.md`.
+- File-board Todo can be optimized by `agent.auto_triage_actionable_todo`
+  (default true): tickets with a body and an `Acceptance Criteria` section
+  move to Explore with an orchestrator-authored `## Triage` note, without a
+  model turn. Bug, blocked, ambiguous, and Linear tickets still run Todo.
 - The diagram in `WORKFLOW.file.example.md` (and its mirror in
   PIPELINE.md) must show the Plan gate between Explore and In Progress.
   QA failure rewinds to `In Progress`, not `Blocked`; treat the stage
@@ -63,6 +67,9 @@ cannot detect (states are just opaque strings to the Python core).
   Plan writes a professional `## Plan` so In Progress can implement from
   the plan alone; Explore and wiki materials are reference-only when the
   plan is ambiguous.
+- 2026-05-17 | Todo auto-triage | Added non-LLM Todo routing for obvious
+  file-board tickets to save a full model turn before Explore while keeping
+  the visual pipeline shape.
 - 2026-05-09 | SMK-1 | Brought `docs/PIPELINE.md` from 6 stages to 7
   (added Explore + Learn rows, llm-wiki pointer, refreshed adoption
   checklist). Did NOT update `docs/PIPELINE-DEMO.md` -- demo's section
@@ -72,4 +79,4 @@ cannot detect (states are just opaque strings to the Python core).
   drive-by scope creep.
 - 2026-05-09 | (this ticket) | Absorbed evidence-first ideas from cskwork/backend-dev-skills (MIT): bug-label reproduce sub-block in Triage, durable HTTP/e2e proofs in Review/QA, per-ticket docs/<id>/<stage>/ artefact root, LLM_WIKI_PATH env override.
 
-**Last updated:** 2026-05-09 by (this ticket).
+**Last updated:** 2026-05-17 by Todo auto-triage.

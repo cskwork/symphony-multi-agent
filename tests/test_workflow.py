@@ -174,6 +174,48 @@ def test_build_service_config_reads_agent_max_attempts(tmp_path):
     assert cfg.agent.max_attempts == 3
 
 
+def test_build_service_config_defaults_auto_triage_actionable_todo_on(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.auto_triage_actionable_todo is True
+
+
+def test_build_service_config_reads_auto_triage_actionable_todo(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              auto_triage_actionable_todo: false
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.auto_triage_actionable_todo is False
+
+
 def test_build_service_config_reads_state_token_budgets(tmp_path):
     path = _write(
         tmp_path,

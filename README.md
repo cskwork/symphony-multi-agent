@@ -102,6 +102,12 @@ All backend command and timeout settings still come from the matching global
 When creating file-board tickets from the CLI, use
 `symphony board new TASK-2 "title" --agent-kind codex`.
 
+For file-board workflows, `agent.auto_triage_actionable_todo` defaults to
+`true`: a Todo ticket with a body and an `Acceptance Criteria` section moves to
+Explore with a one-line `## Triage` note without spending a model turn. Bug
+tickets, blocked tickets, ambiguous tickets, and Linear trackers still use the
+Todo prompt.
+
 ## Install
 
 ```bash

@@ -334,10 +334,10 @@ def test_claude_usage_accumulates_across_turns(tmp_path: Path) -> None:
         {"input_tokens": 10, "cache_creation_input_tokens": 5, "output_tokens": 20}
     )
     usage = backend.latest_usage
-    # First turn: 100 + 50 + 0 = 150 in, 40 out
-    # Second turn: 10 + 0 + 5 = 15 in, 20 out
-    # Cumulative: 165 in, 60 out, 225 total
-    assert usage["input_tokens"] == 165
+    # Fresh input is separated from prompt-cache traffic; total still includes
+    # both cache reads/creates so token units remain complete.
+    assert usage["input_tokens"] == 110
+    assert usage["cache_input_tokens"] == 55
     assert usage["output_tokens"] == 60
     assert usage["total_tokens"] == 225
 

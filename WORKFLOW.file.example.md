@@ -196,6 +196,9 @@ agent:
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
+  # Route obvious Todo tickets with Acceptance Criteria to Explore without
+  # spending a model turn. Bug/blocked/ambiguous tickets still run Todo.
+  auto_triage_actionable_todo: true
   max_concurrent_agents_by_state:
     Todo: 1
     Explore: 1

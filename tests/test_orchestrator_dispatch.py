@@ -30,18 +30,21 @@ def _make_config(
     max_concurrent: int = 5,
     per_state: dict[str, int] | None = None,
     active_states: tuple[str, ...] = ("Todo", "In Progress"),
+    tracker_kind: str = "linear",
+    auto_triage_actionable_todo: bool = True,
 ) -> ServiceConfig:
     return ServiceConfig(
         workflow_path=Path("/tmp/WORKFLOW.md"),
         poll_interval_ms=30_000,
         workspace_root=Path("/tmp/ws"),
         tracker=TrackerConfig(
-            kind="linear",
+            kind=tracker_kind,
             endpoint="https://api.linear.app/graphql",
             api_key="tok",
             project_slug="proj",
             active_states=active_states,
             terminal_states=("Done", "Cancelled"),
+            board_root=Path("/tmp/kanban") if tracker_kind == "file" else None,
         ),
         hooks=HooksConfig(None, None, None, None, 60_000),
         agent=AgentConfig(
@@ -50,6 +53,7 @@ def _make_config(
             max_turns=20,
             max_retry_backoff_ms=300_000,
             max_concurrent_agents_by_state=per_state or {},
+            auto_triage_actionable_todo=auto_triage_actionable_todo,
         ),
         codex=CodexConfig(
             command="codex app-server",
@@ -96,14 +100,17 @@ def _issue(
     blocked_by: tuple[BlockerRef, ...] = (),
     priority: int | None = 2,
     updated_at: datetime | None = None,
+    description: str | None = None,
+    labels: tuple[str, ...] = (),
 ) -> Issue:
     return Issue(
         id=f"id-{identifier}",
         identifier=identifier,
         title=f"{identifier} title",
-        description=None,
+        description=description,
         priority=priority,
         state=state,
+        labels=labels,
         blocked_by=blocked_by,
         created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         updated_at=updated_at,
@@ -115,6 +122,125 @@ def test_should_dispatch_basic():
     orch = _orch()
     issue = _issue("MT-1")
     assert orch._should_dispatch(issue, cfg) is True
+
+
+def test_auto_triage_actionable_file_todo_moves_to_explore_without_dispatch(monkeypatch):
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+    issue = _issue(
+        "MT-1",
+        description="## Request\nBuild it.\n\n## Acceptance Criteria\n1. It works.",
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    dispatched: list[str] = []
+    appended: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    def _append(_cfg, _issue, heading, body):
+        appended.append((_issue.identifier, heading, body))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+    monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
+
+    import asyncio
+
+    asyncio.run(orch._on_tick())
+
+    assert dispatched == []
+    assert appended == [("MT-1", "Triage", "Ticket is actionable; routing to Explore.")]
+    assert moved == [("MT-1", "Explore")]
+
+
+def test_auto_triage_skips_already_triaged_todo(monkeypatch):
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+    issue = _issue(
+        "MT-1",
+        description=(
+            "## Request\nBuild it.\n\n"
+            "## Acceptance Criteria\n1. It works.\n\n"
+            "## Triage\nTicket is actionable; routing to Explore."
+        ),
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    dispatched: list[str] = []
+    appended: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    def _append(_cfg, _issue, heading, body):
+        appended.append((_issue.identifier, heading, body))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
+    monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
+
+    import asyncio
+
+    asyncio.run(orch._on_tick())
+
+    assert appended == []
+    assert moved == []
+    assert dispatched == ["MT-1"]
+
+
+def test_auto_triage_skips_bug_tickets_so_reproduction_prompt_runs(monkeypatch):
+    cfg = _make_config(tracker_kind="file", active_states=("Todo", "Explore", "In Progress"))
+    issue = _issue(
+        "BUG-1",
+        description="## Request\nFix it.\n\n## Acceptance Criteria\n1. Reproduced.",
+        labels=("bug",),
+    )
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [issue]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+    import asyncio
+
+    asyncio.run(orch._on_tick())
+
+    assert dispatched == ["BUG-1"]
 
 
 def test_should_skip_terminal_state():
@@ -708,6 +834,33 @@ def _install_running_entry(orch: Orchestrator, issue: Issue) -> RunningEntry:
     )
     orch._running[issue.id] = entry
     return entry
+
+
+def test_token_totals_track_cache_input_tokens_separately():
+    orch = _orch()
+    issue = _issue("TOK-1", state="In Progress")
+    entry = _install_running_entry(orch, issue)
+
+    delta_total, delta_out = orch._apply_token_totals(
+        entry,
+        {
+            "input_tokens": 10,
+            "cache_input_tokens": 90,
+            "output_tokens": 5,
+            "total_tokens": 105,
+        },
+    )
+    row = orch._running_row(issue.id, entry)
+    snap = orch.snapshot()
+
+    assert delta_total == 105
+    assert delta_out == 5
+    assert entry.codex_input_tokens == 10
+    assert entry.codex_cache_input_tokens == 90
+    assert entry.codex_output_tokens == 5
+    assert row["tokens"]["cache_input_tokens"] == 90
+    assert row["tokens"]["state_cache_input_tokens"] == 90
+    assert snap["codex_totals"]["cache_input_tokens"] == 90
 
 
 def _stub_workflow_state_returning(

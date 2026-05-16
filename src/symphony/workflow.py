@@ -220,6 +220,9 @@ class AgentConfig:
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     # Soft cap for Review/QA rewinds back into In Progress. 0 disables.
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    # File-board optimization: actionable Todo tickets can be routed to Explore
+    # by the orchestrator without spending a model turn on one-line triage.
+    auto_triage_actionable_todo: bool = True
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
     # Default ON so a fresh `pip install symphony-multi-agent` plus a
@@ -758,6 +761,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("max_attempts"),
             DEFAULT_MAX_ATTEMPTS,
             name="agent.max_attempts",
+        ),
+        auto_triage_actionable_todo=bool(
+            agent_raw.get("auto_triage_actionable_todo", True)
         ),
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)

@@ -13,6 +13,7 @@ Concurrency model:
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import time
 import traceback
@@ -57,6 +58,11 @@ from .workspace import WorkspaceManager, commit_workspace_on_done
 
 
 log = get_logger()
+
+AUTO_TRIAGE_TARGET_STATE = "Explore"
+AUTO_TRIAGE_NOTE = "Ticket is actionable; routing to Explore."
+_AUTO_TRIAGE_ACCEPTANCE_RE = re.compile(r"\bacceptance\s+criteria\b", re.IGNORECASE)
+_AUTO_TRIAGE_TRIAGE_RE = re.compile(r"^##\s+Triage\b", re.IGNORECASE | re.MULTILINE)
 
 
 CONTINUATION_RETRY_DELAY_MS = 1_000  # §7.1
@@ -153,6 +159,27 @@ def _requested_agent_kind(issue: Issue) -> str | None:
     return kind or None
 
 
+def _is_auto_triage_todo_candidate(issue: Issue, cfg: ServiceConfig) -> bool:
+    if not cfg.agent.auto_triage_actionable_todo:
+        return False
+    if cfg.tracker.kind != "file":
+        return False
+    if normalize_state(issue.state) != "todo":
+        return False
+    if not any(normalize_state(s) == "explore" for s in cfg.tracker.active_states):
+        return False
+    if issue.blocked_by:
+        return False
+    if any(label.strip().lower() == "bug" for label in issue.labels):
+        return False
+    description = issue.description or ""
+    if not description.strip():
+        return False
+    if _AUTO_TRIAGE_TRIAGE_RE.search(description):
+        return False
+    return bool(_AUTO_TRIAGE_ACCEPTANCE_RE.search(description))
+
+
 def _config_for_issue_agent(cfg: ServiceConfig, issue: Issue) -> ServiceConfig:
     """Return a per-worker config with the ticket's backend override applied."""
     kind = _requested_agent_kind(issue)
@@ -195,12 +222,15 @@ class RunningEntry:
     # to show "any activity at all". See _on_codex_event for the predicate.
     last_progress_timestamp: datetime | None = None
     codex_input_tokens: int = 0
+    codex_cache_input_tokens: int = 0
     codex_output_tokens: int = 0
     codex_total_tokens: int = 0
     codex_state_input_tokens: int = 0
+    codex_state_cache_input_tokens: int = 0
     codex_state_output_tokens: int = 0
     codex_state_total_tokens: int = 0
     last_reported_input_tokens: int = 0
+    last_reported_cache_input_tokens: int = 0
     last_reported_output_tokens: int = 0
     last_reported_total_tokens: int = 0
     codex_app_server_pid: int | None = None
@@ -238,6 +268,7 @@ class RetryEntry:
 @dataclass
 class _CodexTotals:
     input_tokens: int = 0
+    cache_input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     seconds_running: float = 0.0
@@ -404,6 +435,7 @@ class Orchestrator:
             "retrying": retry_rows,
             "codex_totals": {
                 "input_tokens": self._totals.input_tokens,
+                "cache_input_tokens": self._totals.cache_input_tokens,
                 "output_tokens": self._totals.output_tokens,
                 "total_tokens": self._totals.total_tokens,
                 "seconds_running": round(self._totals.seconds_running + active_seconds, 1),
@@ -502,9 +534,11 @@ class Orchestrator:
             "paused": self.is_paused(issue_id),
             "tokens": {
                 "input_tokens": entry.codex_input_tokens,
+                "cache_input_tokens": entry.codex_cache_input_tokens,
                 "output_tokens": entry.codex_output_tokens,
                 "total_tokens": entry.codex_total_tokens,
                 "state_input_tokens": entry.codex_state_input_tokens,
+                "state_cache_input_tokens": entry.codex_state_cache_input_tokens,
                 "state_output_tokens": entry.codex_state_output_tokens,
                 "state_total_tokens": entry.codex_state_total_tokens,
             },
@@ -807,6 +841,8 @@ class Orchestrator:
             return
 
         for issue in _sort_for_dispatch_fifo(candidates, cfg):
+            if await self._auto_triage_todo_if_actionable(issue, cfg):
+                continue
             if self._available_slots(cfg) <= 0:
                 break
             if self._should_dispatch(issue, cfg):
@@ -886,6 +922,39 @@ class Orchestrator:
     def _should_dispatch(self, issue: Issue, cfg: ServiceConfig) -> bool:
         """§8.2 — eligibility for the poll-tick dispatch path."""
         return self._eligible(issue, cfg, owning_retry=False)
+
+    async def _auto_triage_todo_if_actionable(
+        self, issue: Issue, cfg: ServiceConfig
+    ) -> bool:
+        if not _is_auto_triage_todo_candidate(issue, cfg):
+            return False
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                issue,
+                "Triage",
+                AUTO_TRIAGE_NOTE,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                issue,
+                AUTO_TRIAGE_TARGET_STATE,
+            )
+        except Exception as exc:
+            log.warning(
+                "auto_triage_todo_failed",
+                identifier=issue.identifier,
+                error=str(exc),
+            )
+            return False
+        log.info(
+            "auto_triage_todo",
+            identifier=issue.identifier,
+            target=AUTO_TRIAGE_TARGET_STATE,
+        )
+        return True
 
     def _eligible(
         self, issue: Issue, cfg: ServiceConfig, *, owning_retry: bool
@@ -1274,9 +1343,11 @@ class Orchestrator:
                                 # max_total_tokens_by_state is measured per
                                 # stage, not against ticket lifetime usage.
                                 running_entry.last_reported_input_tokens = 0
+                                running_entry.last_reported_cache_input_tokens = 0
                                 running_entry.last_reported_output_tokens = 0
                                 running_entry.last_reported_total_tokens = 0
                                 running_entry.codex_state_input_tokens = 0
+                                running_entry.codex_state_cache_input_tokens = 0
                                 running_entry.codex_state_output_tokens = 0
                                 running_entry.codex_state_total_tokens = 0
                                 running_entry.hit_token_budget = False
@@ -1354,6 +1425,7 @@ class Orchestrator:
                             identifier=running_entry.issue.identifier,
                             turn=turn_number,
                             input_tokens=running_entry.codex_input_tokens,
+                            cache_input_tokens=running_entry.codex_cache_input_tokens,
                             output_tokens=running_entry.codex_output_tokens,
                             total_tokens=running_entry.codex_total_tokens,
                         )
@@ -1755,6 +1827,7 @@ class Orchestrator:
                 identifier=entry.issue.identifier,
                 turn=entry.turn_count,
                 input_tokens=entry.codex_input_tokens,
+                cache_input_tokens=entry.codex_cache_input_tokens,
                 output_tokens=entry.codex_output_tokens,
                 total_tokens=entry.codex_total_tokens,
                 last_message=(entry.last_codex_message or "")[:160],
@@ -1810,22 +1883,28 @@ class Orchestrator:
         self, entry: RunningEntry, totals: dict[str, Any]
     ) -> tuple[int, int]:
         in_tok = int(totals.get("input_tokens") or 0)
+        cache_tok = int(totals.get("cache_input_tokens") or 0)
         out_tok = int(totals.get("output_tokens") or 0)
-        tot_tok = int(totals.get("total_tokens") or (in_tok + out_tok))
+        tot_tok = int(totals.get("total_tokens") or (in_tok + cache_tok + out_tok))
         # §13.5 — track deltas from last reported absolute totals.
         delta_in = max(in_tok - entry.last_reported_input_tokens, 0)
+        delta_cache = max(cache_tok - entry.last_reported_cache_input_tokens, 0)
         delta_out = max(out_tok - entry.last_reported_output_tokens, 0)
         delta_total = max(tot_tok - entry.last_reported_total_tokens, 0)
         entry.last_reported_input_tokens = in_tok
+        entry.last_reported_cache_input_tokens = cache_tok
         entry.last_reported_output_tokens = out_tok
         entry.last_reported_total_tokens = tot_tok
         entry.codex_input_tokens += delta_in
+        entry.codex_cache_input_tokens += delta_cache
         entry.codex_output_tokens += delta_out
         entry.codex_total_tokens += delta_total
         entry.codex_state_input_tokens += delta_in
+        entry.codex_state_cache_input_tokens += delta_cache
         entry.codex_state_output_tokens += delta_out
         entry.codex_state_total_tokens += delta_total
         self._totals.input_tokens += delta_in
+        self._totals.cache_input_tokens += delta_cache
         self._totals.output_tokens += delta_out
         self._totals.total_tokens += delta_total
         return delta_total, delta_out

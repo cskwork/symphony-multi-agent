@@ -27,8 +27,8 @@ INFO hook_start hook=before_run        cwd=~/symphony_workspaces/X
 INFO hook_completed                    hook=before_run
 INFO agent_session_started             issue_id=X session_id=<uuid>
 INFO reconcile_skip_active_worker      state=Done last_event_age_s=3.1   # if the agent just emitted
-INFO agent_turn_completed              turn=1 input_tokens=N output_tokens=M total_tokens=N+M last_message=…
-INFO worker_turn_completed             turn=1 input_tokens=N …             # worker-side mirror, fires even under cancellation
+INFO agent_turn_completed              turn=1 input_tokens=N cache_input_tokens=K output_tokens=M total_tokens=N+K+M last_message=…
+INFO worker_turn_completed             turn=1 input_tokens=N cache_input_tokens=K …  # worker-side mirror, fires even under cancellation
 INFO hook_start hook=after_run         cwd=~/symphony_workspaces/X
 INFO hook_completed                    hook=after_run
 INFO worker_exit                       reason=normal error=null
@@ -37,6 +37,11 @@ INFO worker_exit                       reason=normal error=null
 Multi-turn runs repeat `agent_turn_completed` (and `worker_turn_completed`)
 with `turn=N` incrementing. Failures replace those with `WARN
 agent_turn_failed turn=N reason=... stderr_tail=[...]`.
+
+Claude Code reports prompt-cache reads/creates separately from fresh prompt
+input. Symphony exposes that as `cache_input_tokens` in logs and
+`/api/v1/state` so a large cached context does not look like fresh input burn;
+`total_tokens` still includes fresh input + cache input + output.
 
 Pi-only events that may interleave at any point:
 
