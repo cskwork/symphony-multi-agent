@@ -8,6 +8,11 @@ files. Without an opinionated `.gitignore`, large binary artefacts
 (Playwright traces, e2e videos, vendored node_modules) ride along into
 the auto-merge commits and bloat history fast.
 
+For the workspace itself, the linked roots are plumbing. Do not commit
+them as `120000` symlink blobs. The file workflow hook hides them with
+`skip-worktree`, worktree-local `info/exclude`, and `git add -A`
+excludes; keep those guardrails when customizing the hook.
+
 ## Recommended pattern (copy verbatim)
 
 ```gitignore

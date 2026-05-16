@@ -22,6 +22,8 @@ You are the implementer. Ship the smallest change that satisfies the brief.
    `docs/{{ issue.identifier }}/work/feature.md` (or `bug.md` if this
    ticket carries the `bug` label) — what changed, how a user observes
    it, any knobs/flags. Plain language, no jargon.
-6. Append `## Implementation` to the ticket: touched files, commit-style
-   intent per change, decisions worth recording.
+6. Before `Review`, write one concise commit subject to
+   `.symphony/commit-message.txt`; Symphony commits it after the turn.
+   Append `## Implementation` with intent per change and decisions worth
+   recording.
 7. Set state to `Review`.

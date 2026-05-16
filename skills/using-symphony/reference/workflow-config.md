@@ -198,6 +198,19 @@ want auto-touched. Then you own snapshotting and squashing yourself in
 `before_remove`. Recovery from a discarded worktree without it is
 `git fsck --lost-found` plus luck.
 
+### File-board host links
+
+When `after_create` links host `kanban/`, `docs/`, or `prompt/` into the
+workspace, set `workspace.reuse_policy: refresh`, hide those roots from
+the worktree's Git status (`skip-worktree` + `info/exclude`), guard them
+in `before_run`, and exclude them from `after_run`'s `git add -A`.
+
+Use `git rev-parse --git-path <scratch-name>` for hook temp files; linked
+worktrees often have `.git` as a file, not a directory. If these roots
+show up as mode `120000` symlink blobs in Review, the branch captured
+workflow plumbing instead of code changes. See `WORKFLOW.file.example.md`
+for the reference hook.
+
 **Failure mode**: if `after_create` exits non-zero, the worker dies
 immediately with `worker_exit reason=error`. The shipped sample's
 worktree hook fails when `$SYMPHONY_WORKFLOW_DIR` is not a git repo
@@ -301,6 +314,7 @@ column-name-only header.
 ```yaml
 workspace:
   root: ~/symphony_workspaces       # one subdirectory per ticket created here
+  reuse_policy: preserve            # default; use refresh for host symlink roots
 
 agent:
   max_concurrent_agents: 1

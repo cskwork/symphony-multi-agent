@@ -68,10 +68,18 @@ class Workspace:
 class WorkspaceManager:
     """§9.1, §9.2 — sanitized per-issue workspace directories."""
 
-    def __init__(self, root: Path, hooks: HooksConfig, *, workflow_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        root: Path,
+        hooks: HooksConfig,
+        *,
+        workflow_dir: Path | None = None,
+        reuse_policy: str = "preserve",
+    ) -> None:
         self._root = root.resolve()
         self._hooks = hooks
         self._workflow_dir = workflow_dir
+        self._reuse_policy = reuse_policy
         self._root.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -81,6 +89,9 @@ class WorkspaceManager:
     def update_hooks(self, hooks: HooksConfig) -> None:
         # §6.2 — apply reloaded hooks to future executions.
         self._hooks = hooks
+
+    def update_reuse_policy(self, reuse_policy: str) -> None:
+        self._reuse_policy = reuse_policy
 
     def path_for(self, identifier: str) -> Path:
         key = workspace_key(identifier)
@@ -99,16 +110,18 @@ class WorkspaceManager:
         created_now = not path.exists()
         path.mkdir(parents=True, exist_ok=True)
 
-        if created_now and self._hooks.after_create:
+        should_run_after_create = created_now or self._reuse_policy == "refresh"
+        if should_run_after_create and self._hooks.after_create:
             try:
                 await self._run_hook("after_create", self._hooks.after_create, path)
             except Exception:
-                # §9.4 — after_create failure is fatal; clean partial directory.
-                ok, err = await _force_rmtree(path)
-                if not ok:
-                    log.warning(
-                        "workspace_cleanup_incomplete", path=str(path), error=err
-                    )
+                if created_now:
+                    # §9.4 — after_create failure is fatal; clean partial directory.
+                    ok, err = await _force_rmtree(path)
+                    if not ok:
+                        log.warning(
+                            "workspace_cleanup_incomplete", path=str(path), error=err
+                        )
                 raise
 
         return Workspace(path=path, workspace_key=key, created_now=created_now)

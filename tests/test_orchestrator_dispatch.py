@@ -1111,16 +1111,16 @@ def test_max_total_tokens_cap_cancels_worker(monkeypatch):
 
 
 def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
-    """Review can have a tighter budget than In Progress/QA."""
+    """In Progress can have a larger budget than the global default."""
     base_cfg = _make_config(max_concurrent=1)
     cfg_capped = _replace_agent_field(
         base_cfg,
         max_total_tokens=10_000_000,
-        max_total_tokens_by_state={"review": 5_000_000, "qa": 10_000_000},
+        max_total_tokens_by_state={"in progress": 100_000_000},
     )
     orch = _orch()
     review_issue = _issue("MT-REVIEW", state="Review")
-    qa_issue = _issue("MT-QA", state="QA")
+    in_progress_issue = _issue("MT-IP", state="In Progress")
 
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
@@ -1130,7 +1130,7 @@ def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
             await asyncio.sleep(3600)
 
         review_task = asyncio.create_task(_noop())
-        qa_task = asyncio.create_task(_noop())
+        in_progress_task = asyncio.create_task(_noop())
         try:
             review_entry = RunningEntry(
                 issue=review_issue,
@@ -1139,34 +1139,34 @@ def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
                 worker_task=review_task,
                 workspace_path=Path("/tmp"),
             )
-            qa_entry = RunningEntry(
-                issue=qa_issue,
+            in_progress_entry = RunningEntry(
+                issue=in_progress_issue,
                 started_at=datetime.now(timezone.utc),
                 retry_attempt=None,
-                worker_task=qa_task,
+                worker_task=in_progress_task,
                 workspace_path=Path("/tmp"),
             )
             orch._running[review_issue.id] = review_entry
-            orch._running[qa_issue.id] = qa_entry
+            orch._running[in_progress_issue.id] = in_progress_entry
 
             event = {
                 "event": "other_message",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "payload": {"type": "assistant"},
                 "usage": {
-                    "input_tokens": 5_100_000,
+                    "input_tokens": 11_000_000,
                     "output_tokens": 1,
-                    "total_tokens": 5_100_001,
+                    "total_tokens": 11_000_001,
                 },
             }
             await orch._on_codex_event(review_issue.id, event)
-            await orch._on_codex_event(qa_issue.id, event)
+            await orch._on_codex_event(in_progress_issue.id, event)
 
             assert review_entry.cancelled_at is not None
-            assert review_entry.token_budget_cap == 5_000_000
-            assert qa_entry.cancelled_at is None
+            assert review_entry.token_budget_cap == 10_000_000
+            assert in_progress_entry.cancelled_at is None
         finally:
-            for task in (review_task, qa_task):
+            for task in (review_task, in_progress_task):
                 task.cancel()
                 try:
                     await task

@@ -26,6 +26,10 @@ polling:
 
 workspace:
   root: ~/symphony_workspaces
+  # Re-run after_create when reusing an existing ticket workspace. Use this
+  # for workflows whose after_create installs host-board/docs symlinks that
+  # must stay fresh for state transitions to be visible to Symphony.
+  reuse_policy: refresh
 
 hooks:
   # Default: each ticket gets its own git worktree of the host repo on a
@@ -98,6 +102,19 @@ hooks:
       fi
     }
     for dir in kanban docs; do
+      [ -e "$HOST_REPO/$dir" ] || continue
+      # Hide host-owned symlink/junction roots from this worktree's git
+      # status. Otherwise a reused workspace can record kanban/docs as
+      # 120000 symlink blobs and delete the real tree on the ticket branch.
+      tracked_file="$(git rev-parse --git-path "symphony-${dir}-tracked")"
+      git ls-files -z -- "$dir" > "$tracked_file" || true
+      if [ -s "$tracked_file" ]; then
+        xargs -0 git update-index --skip-worktree -- < "$tracked_file" || true
+      fi
+      rm -f "$tracked_file"
+      exclude_file="$(git rev-parse --git-path info/exclude)"
+      mkdir -p "$(dirname "$exclude_file")"
+      grep -qxF "$dir" "$exclude_file" 2>/dev/null || echo "$dir" >> "$exclude_file"
       _symphony_link_dir "$dir" "$HOST_REPO/$dir"
     done
   before_run: |
@@ -105,6 +122,20 @@ hooks:
     # work between turns. Just refresh remotes; let the agent decide if/when
     # to rebase.
     set -uo pipefail
+    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
+    for dir in kanban docs; do
+      source="$HOST_REPO/$dir"
+      target="$PWD/$dir"
+      [ -e "$source" ] || continue
+      if [ ! -L "$target" ] && [ "${OS:-}" != "Windows_NT" ]; then
+        echo "FAIL: workspace $dir must be a symlink to $source; got non-symlink $target" >&2
+        exit 42
+      fi
+      if [ -L "$target" ] && [ "$(readlink "$target")" != "$source" ]; then
+        echo "FAIL: workspace $dir points to $(readlink "$target"), expected $source" >&2
+        exit 42
+      fi
+    done
     git fetch origin main --quiet || true
   after_run: |
     # Per-turn commit-or-amend. The branch stays at the same number of
@@ -114,20 +145,23 @@ hooks:
     # orchestrator squashes everything into a single `<ID>: <title>` commit
     # on exit — see auto_commit_on_done.
     set -uo pipefail
-    git add -A 2>/dev/null || true
+    git add -A -- . ':(exclude)kanban' ':(exclude)docs' ':(exclude).symphony' 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
       echo "run finished at $(date) (no changes)"
       exit 0
     fi
     # Honors any pre-commit hooks in the host repo — if they fail, this
     # turn's snapshot fails and the next turn picks up where files are.
+    MSG="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .symphony/commit-message.txt 2>/dev/null || true)"
+    [ -n "$MSG" ] || MSG="turn $(date -u +%FT%TZ)"
+    case "$MSG" in wip:*) COMMIT_MSG="$MSG" ;; *) COMMIT_MSG="wip: $MSG" ;; esac
     LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
     if [ "${LAST#wip:}" != "$LAST" ]; then
       git -c user.email=symphony@local -c user.name=symphony \
-          commit --amend --no-edit >/dev/null 2>&1 || true
+          commit --amend -m "$COMMIT_MSG" >/dev/null 2>&1 || true
     else
       git -c user.email=symphony@local -c user.name=symphony \
-          commit -m "wip: turn $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+          commit -m "$COMMIT_MSG" >/dev/null 2>&1 || true
     fi
     echo "run finished at $(date)"
   before_remove: |
@@ -149,11 +183,7 @@ agent:
   max_total_turns: 60
   max_total_tokens: 10000000
   max_total_tokens_by_state:
-    Review: 5000000
-    QA: 10000000
-    "In Progress": 10000000
-    Learn: 5000000
-    Learning: 5000000
+    "In Progress": 100000000
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3

@@ -6,8 +6,11 @@ You are the reviewer. Find issues; do not fix them.
    re-read the most recent Implementation comment. If a prior Review
    Findings comment exists, confirm those specific items are resolved
    before opening new findings.
-2. Read the diff on the PR (`git diff origin/main...HEAD`). Re-read
-   touched files end-to-end, not just the hunks.
+2. Review the current workspace code. Use the latest In Progress commit
+   or PR diff to identify files and changed line ranges, then open touched
+   files end-to-end. Docs are reviewable when they are deliverables; ignore
+   only root symlink/junction metadata for host-backed `kanban/`, `docs/`,
+   or `prompt/` plumbing unless the issue is explicitly about Symphony setup.
 3. Apply the checklist: clarity, naming, error handling, security,
    performance, simplicity, no dead code, no debug prints, no secrets.
 4. When the change touches an API, verify with live HTTP proof. Hit both

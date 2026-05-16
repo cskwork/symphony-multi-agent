@@ -5,12 +5,14 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from symphony._shell import resolve_bash
 from symphony.errors import InvalidWorkspaceCwd, SymphonyError
 from symphony.workflow import HooksConfig
+from symphony.workflow import build_service_config, load_workflow
 from symphony.workspace import (
     WorkspaceManager,
     commit_workspace_on_done,
@@ -90,6 +92,24 @@ async def test_after_create_hook_runs_only_on_creation(tmp_path):
     await mgr.create_or_reuse("MT-2")
     assert not marker.exists()  # not re-run on reuse
     assert ws1.path.exists()
+
+
+@pytest.mark.asyncio
+async def test_after_create_hook_reruns_on_reuse_when_refresh_policy(tmp_path):
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        _hooks(after_create="n=$(cat marker 2>/dev/null || echo 0); echo $((n + 1)) > marker"),
+        reuse_policy="refresh",
+    )
+    ws1 = await mgr.create_or_reuse("MT-2")
+    marker = ws1.path / "marker"
+    assert marker.read_text(encoding="utf-8").strip() == "1"
+
+    ws2 = await mgr.create_or_reuse("MT-2")
+
+    assert ws2.created_now is False
+    assert ws2.path == ws1.path
+    assert marker.read_text(encoding="utf-8").strip() == "2"
 
 
 @pytest.mark.asyncio
@@ -189,6 +209,40 @@ def test_symphony_link_dir_propagates_writes_back_to_source(tmp_path):
     # New file created through the link must also appear at the host.
     (linked / "DEMO-2.md").write_text("state: Todo\n", encoding="utf-8")
     assert (board / "DEMO-2.md").exists()
+
+
+@pytest.mark.skipif(not _HAS_GIT, reason="git CLI required")
+@pytest.mark.asyncio
+async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_path):
+    """The file-tracker example links host kanban/docs into the workspace.
+
+    Those links are workflow plumbing, not ticket output. If Git sees them as
+    a branch diff, Review reports mass deletions and rewinds forever.
+    """
+    host = tmp_path / "host"
+    host.mkdir()
+    _git(host, "init", "-q", "-b", "main")
+    (host / "kanban").mkdir()
+    (host / "docs").mkdir()
+    (host / "kanban" / "DEMO-1.md").write_text("---\nstate: Review\n---\n")
+    (host / "docs" / "seed.md").write_text("seed\n")
+    _git(host, "add", "-A")
+    _git(host, "commit", "-q", "-m", "seed")
+
+    workflow = load_workflow(Path(__file__).parents[1] / "WORKFLOW.file.example.md")
+    cfg = build_service_config(workflow)
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        cfg.hooks,
+        workflow_dir=host,
+        reuse_policy=cfg.workspace_reuse_policy,
+    )
+
+    ws = await mgr.create_or_reuse("DEMO-1")
+
+    assert (ws.path / "kanban").is_symlink()
+    assert (ws.path / "docs").is_symlink()
+    assert _git(ws.path, "status", "--short").stdout == ""
 
 
 @pytest.mark.asyncio
@@ -402,15 +456,18 @@ async def test_commit_workspace_on_done_tags_non_done_state(tmp_path, monkeypatc
 
 _AFTER_RUN_HOOK = r"""
 set -uo pipefail
-git add -A 2>/dev/null || true
+git add -A -- . ':(exclude).symphony' 2>/dev/null || true
 if git diff --cached --quiet 2>/dev/null; then
   exit 0
 fi
+MSG="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .symphony/commit-message.txt 2>/dev/null || true)"
+[ -n "$MSG" ] || MSG="turn $(date -u +%FT%TZ)"
+case "$MSG" in wip:*) COMMIT_MSG="$MSG" ;; *) COMMIT_MSG="wip: $MSG" ;; esac
 LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
 if [ "${LAST#wip:}" != "$LAST" ]; then
-  git commit --amend --no-edit >/dev/null 2>&1 || true
+  git commit --amend -m "$COMMIT_MSG" >/dev/null 2>&1 || true
 else
-  git commit -m "wip: turn $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+  git commit -m "$COMMIT_MSG" >/dev/null 2>&1 || true
 fi
 """
 
@@ -442,17 +499,22 @@ def test_after_run_amend_keeps_branch_at_one_wip_commit(tmp_path, monkeypatch):
         )
 
     # Turn 1 — first commit on branch.
+    (repo / ".symphony").mkdir()
+    (repo / ".symphony" / "commit-message.txt").write_text("feat: first slice")
     (repo / "t1.txt").write_text("turn1")
     _run_hook()
     assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "2"
+    assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "wip: feat: first slice"
     last1 = _git(repo, "rev-parse", "HEAD").stdout.strip()
 
     # Turn 2 — amend, no new commit. SHA changes but count stays.
+    (repo / ".symphony" / "commit-message.txt").write_text("fix: second slice")
     (repo / "t2.txt").write_text("turn2")
     _run_hook()
     assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "2", (
         "after_run must amend the prior wip commit, not stack new ones"
     )
+    assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "wip: fix: second slice"
     last2 = _git(repo, "rev-parse", "HEAD").stdout.strip()
     assert last1 != last2, "amend should produce a new SHA"
 

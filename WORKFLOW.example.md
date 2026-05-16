@@ -84,20 +84,23 @@ hooks:
     # orchestrator squashes everything into a single `<ID>: <title>` commit
     # on exit — see auto_commit_on_done.
     set -uo pipefail
-    git add -A 2>/dev/null || true
+    git add -A -- . ':(exclude).symphony' 2>/dev/null || true
     if git diff --cached --quiet 2>/dev/null; then
       echo "run finished at $(date) (no changes)"
       exit 0
     fi
     # Honors any pre-commit hooks in the host repo — if they fail, this
     # turn's snapshot fails and the next turn picks up where files are.
+    MSG="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .symphony/commit-message.txt 2>/dev/null || true)"
+    [ -n "$MSG" ] || MSG="turn $(date -u +%FT%TZ)"
+    case "$MSG" in wip:*) COMMIT_MSG="$MSG" ;; *) COMMIT_MSG="wip: $MSG" ;; esac
     LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
     if [ "${LAST#wip:}" != "$LAST" ]; then
       git -c user.email=symphony@local -c user.name=symphony \
-          commit --amend --no-edit >/dev/null 2>&1 || true
+          commit --amend -m "$COMMIT_MSG" >/dev/null 2>&1 || true
     else
       git -c user.email=symphony@local -c user.name=symphony \
-          commit -m "wip: turn $(date -u +%FT%TZ)" >/dev/null 2>&1 || true
+          commit -m "$COMMIT_MSG" >/dev/null 2>&1 || true
     fi
     echo "run finished at $(date)"
   before_remove: |
@@ -117,16 +120,11 @@ agent:
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
-  # Hard token ceiling by workflow state. The global cap stays available as
-  # a fallback; these tighter stage caps stop review loops before they burn
-  # the larger build/QA budget.
+  # Hard token ceiling by workflow state. The global cap is the default for
+  # Review/QA/Learn; In Progress gets a larger build budget.
   max_total_tokens: 10000000
   max_total_tokens_by_state:
-    Review: 5000000
-    QA: 10000000
-    "In Progress": 10000000
-    Learn: 5000000
-    Learning: 5000000
+    "In Progress": 100000000
   budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3

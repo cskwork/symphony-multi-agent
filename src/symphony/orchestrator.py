@@ -258,7 +258,12 @@ class Orchestrator:
         # writes through the host-board junction installed by after_create.
         import os as _os
         _os.environ["SYMPHONY_WORKFLOW_DIR"] = str(cfg.workflow_path.parent)
-        self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
+        self._workspace_manager = WorkspaceManager(
+            cfg.workspace_root,
+            cfg.hooks,
+            workflow_dir=cfg.workflow_path.parent,
+            reuse_policy=cfg.workspace_reuse_policy,
+        )
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -597,9 +602,15 @@ class Orchestrator:
         # Apply hot-reloadable settings.
         if self._workspace_manager is not None and self._workspace_manager.root != cfg.workspace_root.resolve():
             log.info("workspace_root_changed", new=str(cfg.workspace_root))
-            self._workspace_manager = WorkspaceManager(cfg.workspace_root, cfg.hooks, workflow_dir=cfg.workflow_path.parent)
+            self._workspace_manager = WorkspaceManager(
+                cfg.workspace_root,
+                cfg.hooks,
+                workflow_dir=cfg.workflow_path.parent,
+                reuse_policy=cfg.workspace_reuse_policy,
+            )
         elif self._workspace_manager is not None:
             self._workspace_manager.update_hooks(cfg.hooks)
+            self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
 
         await self._reconcile_running(cfg)
 
@@ -957,6 +968,7 @@ class Orchestrator:
                     client_tools=tools,
                 )
             )
+            after_run_pending = False
             try:
                 await client.start()
                 await client.initialize()
@@ -1134,6 +1146,7 @@ class Orchestrator:
                         max_turns=cfg.agent.max_turns,
                         is_continuation=is_continuation,
                     )
+                    after_run_pending = True
                     try:
                         await client.run_turn(prompt=prompt, is_continuation=is_continuation)
                     except (TurnTimeout, TurnFailed, TurnCancelled, TurnInputRequired) as exc:
@@ -1159,6 +1172,9 @@ class Orchestrator:
                             output_tokens=running_entry.codex_output_tokens,
                             total_tokens=running_entry.codex_total_tokens,
                         )
+
+                    await self._workspace_manager.after_run_best_effort(workspace.path)
+                    after_run_pending = False
 
                     # Record the state the backend just operated on so the
                     # next iteration can detect a phase transition against
@@ -1218,7 +1234,8 @@ class Orchestrator:
                         identifier=issue.identifier,
                         error=str(stop_exc),
                     )
-                await self._workspace_manager.after_run_best_effort(workspace.path)
+                if after_run_pending:
+                    await self._workspace_manager.after_run_best_effort(workspace.path)
         except SymphonyError as exc:
             outcome = "error"
             error = str(exc)

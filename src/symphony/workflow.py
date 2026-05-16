@@ -43,6 +43,8 @@ DEFAULT_CODEX_READ_TIMEOUT_MS = 5_000
 DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
 DEFAULT_CODEX_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REASONING_EFFORT = "high"
+DEFAULT_WORKSPACE_REUSE_POLICY = "preserve"
+SUPPORTED_WORKSPACE_REUSE_POLICIES = {"preserve", "refresh"}
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
@@ -416,6 +418,7 @@ class ServiceConfig:
     prompts: PromptConfig = field(default_factory=PromptConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
+    workspace_reuse_policy: str = DEFAULT_WORKSPACE_REUSE_POLICY
 
     def prompt_template_for_state(self, state: str) -> str:
         """Return the runtime prompt template for one tracker state."""
@@ -681,6 +684,15 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         workspace_root = (base_dir / workspace_root).resolve()
     else:
         workspace_root = workspace_root.resolve()
+    workspace_reuse_policy = _as_str(
+        workspace_raw.get("reuse_policy"), DEFAULT_WORKSPACE_REUSE_POLICY
+    ).strip().lower() or DEFAULT_WORKSPACE_REUSE_POLICY
+    if workspace_reuse_policy not in SUPPORTED_WORKSPACE_REUSE_POLICIES:
+        raise ConfigValidationError(
+            "workspace.reuse_policy must be one of "
+            f"{sorted(SUPPORTED_WORKSPACE_REUSE_POLICIES)}",
+            value=workspace_reuse_policy,
+        )
 
     hooks_raw = cfg.get("hooks") or {}
     if not isinstance(hooks_raw, dict):
@@ -934,6 +946,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         prompts=prompts,
         raw=dict(cfg),
         prompt_template=prompt_template,
+        workspace_reuse_policy=workspace_reuse_policy,
     )
 
 

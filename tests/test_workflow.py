@@ -161,11 +161,7 @@ def test_build_service_config_reads_state_token_budgets(tmp_path):
             agent:
               max_total_tokens: 10000000
               max_total_tokens_by_state:
-                Review: 5000000
-                QA: 10000000
-                "In Progress": 10000000
-                Learn: 5000000
-                Learning: 5000000
+                "In Progress": 100000000
                 Invalid: 0
             ---
             Hello
@@ -177,11 +173,7 @@ def test_build_service_config_reads_state_token_budgets(tmp_path):
 
     assert cfg.agent.max_total_tokens == 10_000_000
     assert cfg.agent.max_total_tokens_by_state == {
-        "review": 5_000_000,
-        "qa": 10_000_000,
-        "in progress": 10_000_000,
-        "learn": 5_000_000,
-        "learning": 5_000_000,
+        "in progress": 100_000_000,
     }
 
 
@@ -317,6 +309,48 @@ def test_build_service_config_workspace_root_relative(tmp_path, monkeypatch):
     wf = load_workflow(path)
     cfg = build_service_config(wf)
     assert cfg.workspace_root == (tmp_path / "ws").resolve()
+
+
+def test_build_service_config_reads_workspace_reuse_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("LINEAR_API_KEY", "tok")
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: linear
+              project_slug: x
+            workspace:
+              root: ./ws
+              reuse_policy: refresh
+            ---
+            body
+            """
+        ),
+    )
+    cfg = build_service_config(load_workflow(path))
+    assert cfg.workspace_reuse_policy == "refresh"
+
+
+def test_build_service_config_rejects_unknown_workspace_reuse_policy(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            workspace:
+              reuse_policy: delete-everything
+            ---
+            body
+            """
+        ),
+    )
+    with pytest.raises(ConfigValidationError, match="workspace.reuse_policy"):
+        build_service_config(load_workflow(path))
 
 
 def test_build_service_config_state_concurrency_normalization(tmp_path, monkeypatch):

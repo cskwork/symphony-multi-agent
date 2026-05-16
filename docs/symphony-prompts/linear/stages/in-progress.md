@@ -24,6 +24,8 @@ You are the implementer. Ship the smallest change that satisfies the brief.
    `docs/{{ issue.identifier }}/work/feature.md` (or `bug.md` if this
    ticket carries the `bug` label) — what changed, how a user observes
    it, any knobs/flags. Plain language, no jargon.
-6. Open a draft PR. Post an Implementation comment with the PR link,
-   touched files, and commit-style intent per change.
+6. Before `Review`, write one concise commit subject to
+   `.symphony/commit-message.txt`; Symphony commits it after the turn.
+   Open a draft PR. Post an Implementation comment with the PR link,
+   intent per change, and decisions worth recording.
 7. Transition state to `Review`.

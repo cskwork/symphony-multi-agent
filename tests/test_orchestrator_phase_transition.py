@@ -91,6 +91,7 @@ class _FakeWorkspaceManager:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self.after_run_paths: list[Path] = []
 
     def path_for(self, identifier: str) -> Path:
         del identifier
@@ -105,7 +106,7 @@ class _FakeWorkspaceManager:
         return None
 
     async def after_run_best_effort(self, path: Path) -> None:
-        del path
+        self.after_run_paths.append(path)
         return None
 
 
@@ -282,6 +283,10 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     _install_state_sequence(monkeypatch, ["In Progress", "Done"])
 
     asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    fake_ws = o._workspace_manager
+    assert isinstance(fake_ws, _FakeWorkspaceManager)
+    assert fake_ws.after_run_paths == [tmp_path, tmp_path]
 
     # Two backends total: one for Todo, one for In Progress.
     assert len(instances) == 2

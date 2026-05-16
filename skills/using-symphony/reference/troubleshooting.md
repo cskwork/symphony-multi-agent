@@ -28,6 +28,7 @@ tail -F log/symphony.log
 | `hook_failed hook=after_create rc=128`   | Worktree/clone failed (e.g. `git worktree add` against a non-repo, placeholder URL, or branch already checked out elsewhere) | Confirm `SYMPHONY_WORKFLOW_DIR` is a real git repo; `cd $HOST_REPO && git worktree list` to spot dangling registrations (`git worktree prune` to clean). For clone-mode hooks, replace placeholder repo URL or set `after_create: \|\n  : noop`. If the hook parses ticket frontmatter, see "awk vs sed for YAML values" below |
 | `hook_failed hook=after_create rc=1 stderr="rmdir: ... Device or resource busy"` (Windows) | Pre-`worktree add` `rmdir` raced the Windows file indexer | Update to a Symphony build ≥ 2026-05-15 (the shipped hook no longer rmdirs); see `reference/platform-compat.md` |
 | `hook_failed hook=after_create rc=128 stderr="missing but already registered worktree"` | Crashed prior attempt left `.git/worktrees/<ID>` registered | The 2026-05-15 hook does `worktree remove --force` + `prune` before `add`; if you're on the old hook, run `git worktree remove --force $WORKTREE_PATH` once and update WORKFLOW.md |
+| `hook_failed hook=after_create ... Not a directory` under `.git/symphony-*` | The hook wrote temp files under `.git/...`, but linked worktrees often have `.git` as a file pointing at the real metadata dir | Use `git rev-parse --git-path <name>` for hook scratch files instead of hardcoding `.git/<name>` |
 | `hook_failed hook=after_create rc=127 stderr="python3.11: command not found"`            | Hook hardcoded a Python version not installed       | The 2026-05-15 hook walks `python3.11/3.12/3.13/python3/python`; update WORKFLOW.md from the example or accept that the venv step will be skipped |
 | `worker_exit reason=error error="module 'os' has no attribute 'WIFEXITED'"` (Windows)   | `_shell.safe_proc_wait` hit POSIX-only `os.WIF*`     | Update to a Symphony build ≥ 2026-05-15 (`safe_proc_wait` now delegates to `proc.wait()` on Windows) |
 | `worker_exit reason=error`               | Worker terminated abnormally                             | Read the preceding `hook_failed` event or backend stderr for the actual cause       |
@@ -41,6 +42,7 @@ tail -F log/symphony.log
 | `workflow_path_missing`                  | `WORKFLOW.md` not at the path you passed                 | Pass an explicit path; default is `./WORKFLOW.md`                                   |
 | `dispatch_validation_failed`             | Config invalid for the chosen `agent.kind`               | Check the matching `<kind>:` block in `WORKFLOW.md` (command, timeouts)             |
 | TUI exits immediately, no error          | No TTY (running under a non-interactive shell)           | Run from a real terminal, or use `--port 9999` headless mode                        |
+| Review reports mass deletes or `120000` symlink entries for `kanban/`, `docs/`, or `prompt/` | The ticket branch captured host-owned workspace plumbing instead of real code changes | Stop the service, reset the polluted `symphony/<ID>` branch to the last good tree commit, update the file-workflow hooks to hide host symlink roots from Git, then restart |
 
 ## Step 3 — inspect runtime state
 
@@ -71,6 +73,43 @@ After hitting `max_turns`, the orchestrator marks the worker for retry.
 The retry queue uses exponential backoff capped at `agent.max_retry_backoff_ms`.
 If the underlying issue is unfixable (e.g. agent CLI is broken), `mv` the
 ticket to `Blocked` to stop the cycle.
+
+### "Review keeps rewinding on `docs/`, `kanban/`, or `prompt/` symlinks"
+
+The reviewer should inspect the current workspace code. `git diff` is only
+a map. If it shows whole-tree deletes or mode `120000` symlink entries for
+host-backed roots (`kanban/`, `docs/`, `prompt/`), that is not a product
+code defect; it means the workspace branch accidentally recorded Symphony
+plumbing.
+
+Root causes:
+- A file-board `after_create` linked host board/docs/prompt roots into the
+  workspace, but did not mark the tracked files `skip-worktree` or add the
+  link roots to this worktree's `info/exclude`.
+- `after_run` used plain `git add -A`, so it staged the plumbing roots.
+- A reused workspace kept stale real directories or stale symlinks because
+  `after_create` did not run again.
+
+Recovery:
+1. Stop the orchestrator for that board.
+2. Find the last good commit where those roots are real trees:
+   `git -C <workspace> ls-tree <sha> kanban docs prompt` should show
+   `040000 tree`, not `120000 blob`.
+3. In the ticket workspace, clear skip-worktree on those paths if needed,
+   remove the bad link entries, then hard-reset to the good commit.
+4. Update `WORKFLOW.md`:
+   - `workspace.reuse_policy: refresh` for file-board workflows that
+     depend on host symlinks/junctions.
+   - In `after_create`, use `git rev-parse --git-path` for scratch files,
+     mark tracked files under host-backed roots `skip-worktree`, add the
+     roots to `info/exclude`, then recreate the links.
+   - In `before_run`, assert the roots still point at `$SYMPHONY_WORKFLOW_DIR`.
+   - In `after_run`, exclude those roots from `git add -A`.
+5. Run `symphony doctor ./WORKFLOW.md`, then restart the service.
+
+After this, a reused workspace refreshes its host links before dispatch,
+the agent's card edits still reach the host board, and Review no longer
+mistakes workflow plumbing for code changes.
 
 ### "Card is in `Done` but workspace still exists"
 
