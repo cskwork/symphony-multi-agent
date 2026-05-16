@@ -10,6 +10,42 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-05-16
+
+Workspace review handoff hardening for long-running file-board workflows.
+This release is a drop-in patch over 0.4.7 and is aimed at preventing
+Review loops caused by stale workspace symlinks, missing per-turn commits,
+and token-budget exhaustion edge cases.
+
+### Added
+- `workspace.reuse_policy` with `preserve` (default) and `refresh`.
+  File-board workflows can opt into `refresh` so reused workspaces rerun
+  `after_create` and repair host-backed `kanban/`, `docs/`, or `prompt/`
+  links before the next agent turn.
+- Example hooks now support an agent-authored commit subject via
+  `.symphony/commit-message.txt`; per-turn snapshots are still stored as
+  `wip:` commits so Review can inspect the latest implementation diff.
+
+### Changed
+- Successful turns now run `after_run` immediately, not only when the
+  whole attempt exits. This guarantees a Review turn can see the preceding
+  In Progress wip commit with `git show`.
+- File-board examples hide host-owned symlink/junction roots from the
+  workspace branch using `skip-worktree`, worktree-local `info/exclude`,
+  and `git add -A` pathspec excludes.
+- Default token budgets now use a 10M global cap with a larger 100M
+  `In Progress` budget, matching the agentic workflow profile observed in
+  the dograh-demo run.
+- Review prompts stay concise but clarify that docs are reviewable
+  deliverables; only root symlink/junction metadata for host-backed
+  workflow plumbing should be ignored.
+
+### Fixed
+- Prevents Review from misclassifying host-board/docs/prompt symlink roots
+  as product-code deletes or `120000` symlink blobs.
+- Token-budget exhaustion no longer needs to be treated as a failure when
+  the worker already advanced to the next stage.
+
 ## [0.4.7] — 2026-05-16
 
 Board viewer gains runtime controls and the codex backend stops burning
@@ -284,7 +320,9 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.8
+[0.4.7]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.7
 [0.4.3]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.3
 [0.4.2]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.2
 [0.4.1]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.1
