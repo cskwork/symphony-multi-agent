@@ -155,6 +155,11 @@ class RunningEntry:
     # Set when the worker's own `finally` starts exit cleanup. The task done
     # callback is only a fallback for workers that never reached this point.
     exit_started_at: datetime | None = None
+    # Set when the per-attempt `max_turns` ceiling halted the worker without
+    # the ticket having reached a terminal state. Treated as an explicit
+    # non-success outcome in `_on_worker_exit`: no automatic continuation is
+    # scheduled. The operator must transition the ticket or resume manually.
+    hit_max_turns: bool = False
 
 
 @dataclass
@@ -1116,6 +1121,19 @@ class Orchestrator:
                     if state not in active:
                         break
                     if turn_number >= cfg.agent.max_turns:
+                        # Per-attempt ceiling reached without a terminal
+                        # transition. Mark explicitly so `_on_worker_exit`
+                        # doesn't auto-schedule a continuation — the ticket
+                        # waits for operator action instead of looping
+                        # silently against the ceiling.
+                        running.hit_max_turns = True
+                        log.warning(
+                            "worker_max_turns_exhausted",
+                            issue_id=running_issue_id,
+                            issue_identifier=running.issue.identifier,
+                            turns=turn_number,
+                            max_turns=cfg.agent.max_turns,
+                        )
                         break
                     turn_number += 1
             finally:
@@ -1520,7 +1538,7 @@ class Orchestrator:
                 await self._workspace_manager.remove(entry.workspace_path)
                 # Don't schedule a continuation — a Done ticket has nothing
                 # to continue. Skip straight to the worker_exit emit below.
-            elif not is_terminal:
+            elif not is_terminal and not entry.hit_max_turns:
                 self._schedule_retry(
                     issue_id,
                     identifier=entry.issue.identifier,
@@ -1528,6 +1546,17 @@ class Orchestrator:
                     delay_ms=CONTINUATION_RETRY_DELAY_MS,
                     error=None,
                     kind="continuation",
+                )
+            elif entry.hit_max_turns:
+                # `max_turns` exhausted without a terminal transition: stop
+                # auto-continuation. Record the reason on the debug entry so
+                # operators see "why is this ticket stalled?" in the TUI /
+                # state snapshot without having to chase log lines.
+                self._claimed.add(issue_id)
+                attempt_cap = cfg.agent.max_turns if cfg is not None else 0
+                debug.last_error = (
+                    f"max_turns reached ({attempt_cap}/attempt) "
+                    f"— operator action required"
                 )
         else:
             next_attempt = (entry.retry_attempt or 0) + 1

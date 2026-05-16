@@ -887,6 +887,75 @@ def test_reconcile_skips_stall_detection_for_paused_worker():
     asyncio.run(_run())
 
 
+def test_on_worker_exit_hit_max_turns_skips_continuation(monkeypatch):
+    """Per-attempt `max_turns` exhaustion must NOT auto-schedule a continuation.
+
+    Reproduces the issue Codex flagged 2026-05-16: `worker_run_loop` breaks
+    out of its turn loop at `turn >= cfg.agent.max_turns`, then exits with
+    `reason="normal"`. The old `_on_worker_exit` saw a non-terminal state
+    and silently scheduled a continuation, so the ticket bounced against
+    the ceiling forever instead of waiting for operator action. Fix sets
+    `entry.hit_max_turns` at the break site and gates continuation on it.
+    """
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-MAX", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        entry = _install_running_entry(orch, issue)
+        entry.hit_max_turns = True  # simulate the worker_run_loop break path
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+
+        try:
+            assert orch._retry == {}, "precondition: no retries scheduled"
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert orch._retry == {}, (
+                "max_turns exhaustion must NOT auto-schedule a continuation"
+            )
+            assert issue.id in orch._claimed, (
+                "hit_max_turns path must mark the ticket as claimed so the "
+                "dispatcher doesn't immediately pick it up again"
+            )
+            assert "max_turns reached" in (
+                orch._issue_debug[issue.id].last_error or ""
+            )
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_on_worker_exit_normal_non_terminal_still_continues_when_no_max_turns():
+    """Sanity: the existing continuation path is preserved when `hit_max_turns`
+    is False — only the new flag should suppress auto-continuation."""
+    cfg = _make_config(max_concurrent=1)
+    orch = _orch()
+    issue = _issue("MT-CONT", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        entry = _install_running_entry(orch, issue)
+        assert entry.hit_max_turns is False  # default
+
+        # Monkey-patch workflow_state.current() so _on_worker_exit can read
+        # cfg.agent.max_total_turns without exploding on None.
+        orch._workflow_state.current = lambda: cfg  # type: ignore[assignment]
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert len(orch._retry) == 1, (
+                "non-terminal + no max_turns flag must still schedule a "
+                "continuation"
+            )
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_worker_exit_preserves_pause_flag_for_held_ticket():
     """Pause is per-issue — a worker exit must keep `_paused_issue_ids` intact.
 
