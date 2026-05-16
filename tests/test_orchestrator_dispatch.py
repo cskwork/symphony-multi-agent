@@ -887,6 +887,96 @@ def test_reconcile_skips_stall_detection_for_paused_worker():
     asyncio.run(_run())
 
 
+def test_max_total_turns_exhaustion_persists_via_tracker_transition(monkeypatch):
+    """`agent.budget_exhausted_state` set + max_total_turns reached →
+    tracker.update_state is called with the configured target so the
+    decision survives a service restart.
+
+    Codex review 2026-05-16: the legacy implementation only mutated an
+    in-memory `_turn_budget_exhausted` set and `return`-ed before any
+    persistence. Restart cleared the guard and the same ticket ran
+    again. This test covers the new persistence path; legacy behaviour
+    (empty `budget_exhausted_state`) is covered by the existing
+    completed_turn_count tests.
+    """
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_persist = _replace_agent_field(
+        base_cfg, max_total_turns=2, budget_exhausted_state="Blocked"
+    )
+    orch = _orch()
+    issue = _issue("MT-BUDGET", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg_persist, monkeypatch)
+
+        # Pre-load completed_turn_count so the next exit crosses the cap.
+        debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+        debug.completed_turn_count = 2
+
+        transitions: list[tuple[str, str]] = []
+
+        def _capture_update_state(cfg, captured_issue, target_state):
+            transitions.append((captured_issue.identifier, target_state))
+
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", _capture_update_state
+        )
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert transitions == [("MT-BUDGET", "Blocked")], (
+                "max_total_turns exhaustion must transition the ticket "
+                "to budget_exhausted_state via the tracker"
+            )
+            assert issue.id in orch._turn_budget_exhausted
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_max_total_turns_exhaustion_no_transition_when_state_unset(monkeypatch):
+    """Empty `budget_exhausted_state` (default) preserves legacy
+    in-memory-only behaviour — no tracker write."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_legacy = _replace_agent_field(base_cfg, max_total_turns=2)
+    assert cfg_legacy.agent.budget_exhausted_state == "", "precondition"
+    orch = _orch()
+    issue = _issue("MT-BUDGET-LEG", state="In Progress")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg_legacy, monkeypatch)
+
+        debug = orch._issue_debug.setdefault(issue.id, _IssueDebug())
+        debug.completed_turn_count = 2
+
+        transitions: list[tuple[str, str]] = []
+
+        def _capture_update_state(cfg, captured_issue, target_state):
+            transitions.append((captured_issue.identifier, target_state))
+
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", _capture_update_state
+        )
+
+        try:
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+            assert transitions == [], (
+                "no tracker transition when budget_exhausted_state is unset"
+            )
+            assert issue.id in orch._turn_budget_exhausted
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_max_total_tokens_cap_cancels_worker(monkeypatch):
     """A per-ticket token cap cancels the worker on breach.
 

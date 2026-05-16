@@ -270,6 +270,16 @@ class AgentConfig:
     # progress-timestamp stall predicate can't see because turns ARE
     # completing.
     max_total_tokens: int = 0
+    # Target tracker state to transition the ticket to when
+    # `max_total_turns` is exhausted. Empty string (default, legacy) =
+    # no transition; the in-memory `_turn_budget_exhausted` guard alone
+    # suppresses re-dispatch within this process — a service restart
+    # then clears the guard and the same ticket can run again. Set this
+    # to a non-active state name (e.g. "Blocked" or your tracker's
+    # equivalent) to persist the exhaustion via the tracker, so the
+    # decision survives restart and reaches operators reviewing the
+    # board. Must match a state your tracker.kind backend can write to.
+    budget_exhausted_state: str = ""
 
 
 @dataclass(frozen=True)
@@ -743,6 +753,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             0,
             name="agent.max_total_tokens",
         ),
+        budget_exhausted_state=_as_str(
+            agent_raw.get("budget_exhausted_state"), ""
+        ) or "",
     )
 
     codex_raw = cfg.get("codex") or {}

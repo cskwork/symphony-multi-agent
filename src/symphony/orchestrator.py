@@ -1554,6 +1554,42 @@ class Orchestrator:
                     total_turns=debug.completed_turn_count,
                     max_total_turns=max_total_turns,
                 )
+                # Persistence: in-memory `_turn_budget_exhausted` clears on
+                # service restart, so without an explicit transition the
+                # same ticket runs again next boot. When the operator opted
+                # in via `agent.budget_exhausted_state`, write the new
+                # state through the tracker so the decision survives
+                # restart and reaches anyone reviewing the board.
+                target_state = (
+                    cfg.agent.budget_exhausted_state if cfg is not None else ""
+                )
+                if target_state and cfg is not None:
+                    try:
+                        await asyncio.to_thread(
+                            self._tracker_call_update_state,
+                            cfg,
+                            entry.issue,
+                            target_state,
+                        )
+                        log.info(
+                            "budget_exhausted_persisted",
+                            issue_id=issue_id,
+                            issue_identifier=entry.issue.identifier,
+                            target_state=target_state,
+                        )
+                    except Exception as persist_exc:
+                        # Lenient — a failed tracker write must not block
+                        # worker cleanup. The in-memory guard still
+                        # suppresses re-dispatch until restart, at which
+                        # point the operator notices because the ticket
+                        # is still in its original state.
+                        log.warning(
+                            "budget_exhausted_persist_failed",
+                            issue_id=issue_id,
+                            identifier=entry.issue.identifier,
+                            target_state=target_state,
+                            error=str(persist_exc),
+                        )
                 return
             self._completed.add(issue_id)
             if cfg is not None and cfg.agent.auto_commit_on_done:
