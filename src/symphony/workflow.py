@@ -259,15 +259,15 @@ class AgentConfig:
     # with a production-critical `after_done` (deploy / apply-to-host)
     # to avoid silent partial completions.
     after_done_failure_policy: str = "warn"
-    # Hard cap on cumulative `total_tokens` per dispatched ticket
-    # (input + output across all turns). 0 = disabled (legacy). When set,
-    # `_on_codex_event` cancels the worker the moment the running total
-    # crosses the cap and marks `last_error="token budget exceeded"` so
-    # an operator sees the brake reason without log-diving. Pair with a
-    # generous `max_turns` to catch runaway-reasoning loops (e.g. codex
-    # accumulating 1.6M tokens / turn over a dozen turns) that the
-    # progress-timestamp stall predicate can't see because turns ARE
-    # completing.
+    # Hard cap on state-local `total_tokens` (input + output across turns
+    # while the ticket remains in one state). The counter resets on each
+    # state transition, while lifetime totals stay visible in the API. 0 =
+    # disabled (legacy). When set, `_on_codex_event` cancels the worker
+    # the moment the current state's total crosses the cap and marks
+    # `last_error="token budget exceeded"` so an operator sees the brake
+    # reason without log-diving. Pair with a generous `max_turns` to catch
+    # runaway-reasoning loops that the progress-timestamp stall predicate
+    # can't see because turns ARE completing.
     max_total_tokens: int = 0
     # Optional per-state override for `max_total_tokens`. Keys are state
     # names lowercased by the parser, e.g. "review" or "in progress".

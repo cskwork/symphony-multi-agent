@@ -143,6 +143,9 @@ class RunningEntry:
     codex_input_tokens: int = 0
     codex_output_tokens: int = 0
     codex_total_tokens: int = 0
+    codex_state_input_tokens: int = 0
+    codex_state_output_tokens: int = 0
+    codex_state_total_tokens: int = 0
     last_reported_input_tokens: int = 0
     last_reported_output_tokens: int = 0
     last_reported_total_tokens: int = 0
@@ -160,8 +163,9 @@ class RunningEntry:
     # non-success outcome in `_on_worker_exit`: no automatic continuation is
     # scheduled. The operator must transition the ticket or resume manually.
     hit_max_turns: bool = False
-    # Set when `agent.max_total_tokens` is crossed. Worker exit refreshes
-    # the ticket: a stage change continues, unchanged state is budget-blocked.
+    # Set when the current state's `agent.max_total_tokens` budget is
+    # crossed. Worker exit refreshes the ticket: a stage change continues,
+    # unchanged state is budget-blocked.
     hit_token_budget: bool = False
     token_budget_cap: int = 0
 
@@ -421,6 +425,9 @@ class Orchestrator:
                 "input_tokens": entry.codex_input_tokens,
                 "output_tokens": entry.codex_output_tokens,
                 "total_tokens": entry.codex_total_tokens,
+                "state_input_tokens": entry.codex_state_input_tokens,
+                "state_output_tokens": entry.codex_state_output_tokens,
+                "state_total_tokens": entry.codex_state_total_tokens,
             },
             "worker_task": _task_debug(entry.worker_task),
         }
@@ -1091,11 +1098,18 @@ class Orchestrator:
                                 # `max(new - old_high, 0) = 0` and silently
                                 # drops every token from the new phase until
                                 # the cumulative count overtakes the old mark.
-                                # Cumulative `codex_*_tokens` are NOT reset —
-                                # those are the per-ticket lifetime totals.
+                                # Cumulative `codex_*_tokens` are NOT reset;
+                                # state-local totals reset so
+                                # max_total_tokens_by_state is measured per
+                                # stage, not against ticket lifetime usage.
                                 running_entry.last_reported_input_tokens = 0
                                 running_entry.last_reported_output_tokens = 0
                                 running_entry.last_reported_total_tokens = 0
+                                running_entry.codex_state_input_tokens = 0
+                                running_entry.codex_state_output_tokens = 0
+                                running_entry.codex_state_total_tokens = 0
+                                running_entry.hit_token_budget = False
+                                running_entry.token_budget_cap = 0
                             log.info(
                                 "worker_phase_transition",
                                 issue_id=issue.id,
@@ -1361,7 +1375,7 @@ class Orchestrator:
             return
         if budget_kind == "tokens":
             budget_detail = (
-                f"({entry.codex_total_tokens}/"
+                f"({entry.codex_state_total_tokens}/"
                 f"{entry.token_budget_cap or cfg.agent.max_total_tokens})"
             )
         else:
@@ -1485,19 +1499,22 @@ class Orchestrator:
         if (
             cap > 0
             and entry.cancelled_at is None
-            and entry.codex_total_tokens >= cap
+            and entry.codex_state_total_tokens >= cap
         ):
             log.warning(
                 "token_budget_exceeded",
                 issue_id=issue_id,
                 identifier=entry.issue.identifier,
+                state_total_tokens=entry.codex_state_total_tokens,
                 total_tokens=entry.codex_total_tokens,
                 cap=cap,
+                state=entry.issue.state,
             )
             debug = self._issue_debug.setdefault(issue_id, _IssueDebug())
             debug.last_error = (
                 f"token budget exceeded "
-                f"({entry.codex_total_tokens}/{cap}) — worker cancelled"
+                f"({entry.codex_state_total_tokens}/{cap} in {entry.issue.state}) "
+                "— worker cancelled"
             )
             entry.hit_token_budget = True
             entry.token_budget_cap = cap
@@ -1633,6 +1650,9 @@ class Orchestrator:
         entry.codex_input_tokens += delta_in
         entry.codex_output_tokens += delta_out
         entry.codex_total_tokens += delta_total
+        entry.codex_state_input_tokens += delta_in
+        entry.codex_state_output_tokens += delta_out
+        entry.codex_state_total_tokens += delta_total
         self._totals.input_tokens += delta_in
         self._totals.output_tokens += delta_out
         self._totals.total_tokens += delta_total
@@ -1704,13 +1724,15 @@ class Orchestrator:
                         )
                         debug.last_error = (
                             f"max_total_tokens reached "
-                            f"({entry.codex_total_tokens}/{cap}); "
+                            f"({entry.codex_state_total_tokens}/{cap} "
+                            f"in {entry.issue.state}); "
                             f"state still {entry.issue.state}"
                         )
                         log.warning(
                             "worker_token_budget_exhausted",
                             issue_id=issue_id,
                             issue_identifier=entry.issue.identifier,
+                            state_total_tokens=entry.codex_state_total_tokens,
                             total_tokens=entry.codex_total_tokens,
                             max_total_tokens=cap,
                             state=entry.issue.state,

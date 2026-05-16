@@ -1176,6 +1176,65 @@ def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
     asyncio.run(_run())
 
 
+def test_max_total_tokens_by_state_uses_state_local_total(monkeypatch):
+    """State budgets reset on phase transition while lifetime totals remain visible."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(
+        base_cfg,
+        max_total_tokens=100_000_000,
+        max_total_tokens_by_state={"qa": 500_000_000},
+    )
+    orch = _orch()
+    issue = _issue("MT-QA", state="QA")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg_capped  # type: ignore[assignment]
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        try:
+            entry = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+                # Simulate earlier stages already consuming more than the
+                # Review/default cap. QA should still get its own fresh cap.
+                codex_total_tokens=200_000_000,
+            )
+            orch._running[issue.id] = entry
+
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 1_000_000,
+                        "output_tokens": 1,
+                        "total_tokens": 1_000_001,
+                    },
+                },
+            )
+
+            assert entry.codex_total_tokens == 201_000_001
+            assert entry.codex_state_total_tokens == 1_000_001
+            assert entry.cancelled_at is None
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    asyncio.run(_run())
+
+
 def test_max_total_tokens_exhaustion_persists_via_tracker_transition(monkeypatch):
     """`agent.max_total_tokens` must honor `budget_exhausted_state`.
 
