@@ -3,7 +3,7 @@ tracker:
   kind: linear
   project_slug: my-team-project
   api_key: $LINEAR_API_KEY
-  active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
+  active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
   terminal_states: [Closed, Cancelled, Canceled, Duplicate, Done, Archive]
   # Auto-archive sweep — terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on each poll tick.
@@ -15,6 +15,7 @@ tracker:
   state_descriptions:
     Todo: "Triage; route to Explore"
     Explore: "Brief from docs/llm-wiki + git + code"
+    Plan: "Lock the implementation plan"
     "In Progress": "TDD loop, draft PR"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "Execute real code, capture evidence"
@@ -31,8 +32,8 @@ workspace:
 hooks:
   # Default: attach the per-ticket workspace as a git worktree of the
   # host repo on a symphony/<ID> branch. The host working tree is never
-  # touched. Operator merges back via `git -C <HOST_REPO> merge symphony/<ID>`
-  # (or PR from that branch) — explicit, never automatic.
+  # touched while the ticket is active. The default Learn gate merges the
+  # feature branch into the target branch before the ticket can move to Done.
   #
   # If your code lives in a *different* remote than where WORKFLOW.md
   # sits (common with Linear setups where the config repo is config-only),
@@ -44,6 +45,9 @@ hooks:
     WORKTREE_PATH="$PWD"
     BRANCH="symphony/${ISSUE_ID}"
     cd "$HOST_REPO"
+    BASE_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current 2>/dev/null || true)"
+    FEATURE_BASE_BRANCH="${SYMPHONY_FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
+    MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}}"
     # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
     # directory — which is exactly what Symphony pre-creates as the workspace.
     # We rely on that here to avoid an rmdir that on Windows races against
@@ -57,6 +61,8 @@ hooks:
     git worktree prune 2>/dev/null || true
     if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$BRANCH"
+    elif [ -n "$FEATURE_BASE_BRANCH" ]; then
+      git worktree add "$WORKTREE_PATH" -b "$BRANCH" "$FEATURE_BASE_BRANCH"
     else
       git worktree add "$WORKTREE_PATH" -b "$BRANCH"
     fi
@@ -67,6 +73,8 @@ hooks:
     # and corrupts auto_commit for unrelated workspaces nested in the host.
     git -C "$WORKTREE_PATH" config extensions.worktreeConfig true
     git -C "$WORKTREE_PATH" config --worktree symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
+    git -C "$WORKTREE_PATH" config --worktree symphony.basebranch "${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
+    git -C "$WORKTREE_PATH" config --worktree symphony.mergetargetbranch "${MERGE_TARGET_BRANCH:-}"
     # Linear tracker reads from its API, not the file system, so no
     # symlink-back step is needed. (For tracker.kind=file, symlink only
     # host-owned board roots such as kanban — see WORKFLOW.file.example.md.)
@@ -75,7 +83,7 @@ hooks:
     # work between turns. Just refresh remotes; let the agent decide if/when
     # to rebase.
     set -uo pipefail
-    git fetch origin main --quiet || true
+    git fetch origin --quiet || true
   after_run: |
     # Per-turn commit-or-amend. The branch stays at the same number of
     # commits across turns (amends in place when HEAD is already a `wip:`
@@ -133,6 +141,7 @@ agent:
   max_concurrent_agents_by_state:
     Todo: 1
     Explore: 1
+    Plan: 1
     "In Progress": 1
     Review: 1
     QA: 1
@@ -143,13 +152,17 @@ agent:
   # runs first. Set to false if your workspace is an existing repo with
   # strict commit-style rules you don't want auto-touched.
   auto_commit_on_done: true
-  # After auto-commit on Done, fold the `symphony/<ID>` branch into the
-  # host repo's main development branch as an explicit `--no-ff` merge
-  # commit. Safe-by-default: missing branch, merge conflict, or dirty
-  # host files overlapping the branch skips and logs an event.
+  # Merge policy for the Learn -> Done gate. Learn must merge the
+  # `symphony/<ID>` feature branch into this target before setting Done.
+  # The post-Done auto-merge remains a best-effort fallback for older prompts.
   auto_merge_on_done: true
-  # Branch to merge into. Empty string = use whatever branch is currently
-  # checked out in the host repo when the ticket finishes (most flexible).
+  # Branch/ref used as the start point for new `symphony/<ID>` feature
+  # branches. Empty string = current host branch. The board viewer can
+  # update this from its real git branch dropdown.
+  feature_base_branch: ""
+  # Branch to merge into. Empty string = use the branch the feature branch
+  # was created from/current host branch (most flexible). The board viewer
+  # can update this from its real git branch dropdown.
   auto_merge_target_branch: ""
   # Workspace-only roots that must not differ on the ticket branch. Linear
   # has no host symlink roots, so this stays empty. File-board workflows
@@ -228,6 +241,7 @@ prompts:
   stages:
     Todo: ./docs/symphony-prompts/linear/stages/todo.md
     Explore: ./docs/symphony-prompts/linear/stages/explore.md
+    Plan: ./docs/symphony-prompts/linear/stages/plan.md
     "In Progress": ./docs/symphony-prompts/linear/stages/in-progress.md
     Review: ./docs/symphony-prompts/linear/stages/review.md
     QA: ./docs/symphony-prompts/linear/stages/qa.md

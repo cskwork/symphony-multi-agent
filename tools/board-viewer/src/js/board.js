@@ -4,13 +4,19 @@ import { el, formatTime } from "./utils.js";
 import {
   fetchSymphonyState,
   fetchKanbanIndex,
+  fetchGitBranches,
   pauseTicket,
   resumeTicket,
   refreshSymphony,
+  saveBranchPolicy,
 } from "./api.js";
 import { renderCard, openTicketDetail, closeTicketDetail } from "./ticket.js";
 
 const POLL_INTERVAL_MS = 5000;
+const FALLBACK_STATES = [
+  "Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn",
+  "Done", "Cancelled", "Blocked", "Archive",
+];
 
 // ---- UI Zoom ----------------------------------------------------------
 const ZOOM_STORAGE_KEY = "boardViewer.uiZoom";
@@ -76,10 +82,13 @@ const state = {
   active_states: [],
   terminal_states: [],
   runningById: new Map(), // ticket_id -> running info
+  defaultAgentKind: "",
   symphonyAlive: false,
   lastPollAt: null,
   pollTimer: null,
   pollInFlight: false, // race 방지: 두 사이클이 state.tickets를 동시에 덮어쓰지 못하게
+  branchRefreshInFlight: false,
+  branchSaveInFlight: false,
   pollStopped: false,  // start/stop 토글용
   focusedId: null,
 };
@@ -93,6 +102,10 @@ const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-input");
 const modalBackdrop = document.getElementById("modal-backdrop");
 const modalCloseBtn = document.getElementById("modal-close");
+const branchPolicyEl = document.getElementById("branch-policy");
+const branchControlsEl = document.getElementById("branch-controls");
+const featureBaseSelect = document.getElementById("feature-base-branch");
+const mergeTargetSelect = document.getElementById("merge-target-branch");
 
 // ---- 액션 핸들러: pause / resume / orchestrator refresh ----
 // 모두 optimistic update 없이, 호출 직후 즉시 poll로 정확한 상태 반영.
@@ -184,7 +197,9 @@ function renderBoard() {
     } else {
       for (const t of tickets) {
         const running = state.runningById.get(t.id) || null;
-        const card = renderCard(t, running, cardHandlers);
+        const card = renderCard(t, running, cardHandlers, {
+          defaultAgentKind: state.defaultAgentKind,
+        });
         if (filter && !cardMatches(t, filter)) {
           card.classList.add("hidden");
         } else {
@@ -235,6 +250,91 @@ function updateStatus() {
   lastPollEl.textContent = `last poll: ${formatTime(state.lastPollAt)}`;
 }
 
+function updateBranchPolicy(policy) {
+  if (!branchPolicyEl) return;
+  if (!policy) {
+    branchPolicyEl.hidden = true;
+    branchPolicyEl.textContent = "";
+    return;
+  }
+  const base = policy.base_branch || "current branch";
+  const target = policy.merge_target_branch || base;
+  const timing = policy.merge_timing || "after Learn, before Done";
+  const mode = policy.auto_merge_enabled === false ? "merge off" : timing;
+  branchPolicyEl.textContent = `branch: ${base} -> ${target} (${mode})`;
+  branchPolicyEl.dataset.enabled = policy.auto_merge_enabled === false ? "false" : "true";
+  branchPolicyEl.hidden = false;
+}
+
+async function refreshBranchControls() {
+  if (!branchControlsEl || !featureBaseSelect || !mergeTargetSelect) return;
+  if (state.branchRefreshInFlight || state.branchSaveInFlight) return;
+  state.branchRefreshInFlight = true;
+  try {
+    const res = await fetchGitBranches();
+    if (!res.ok || !res.data?.ok) {
+      branchControlsEl.hidden = true;
+      return;
+    }
+    renderBranchSelect(featureBaseSelect, res.data.branches || [], {
+      current: res.data.current_branch || "",
+      selected: res.data.feature_base_branch || "",
+      emptyLabel: res.data.current_branch
+        ? `current (${res.data.current_branch})`
+        : "current branch",
+    });
+    renderBranchSelect(mergeTargetSelect, res.data.branches || [], {
+      current: res.data.current_branch || "",
+      selected: res.data.merge_target_branch || "",
+      emptyLabel: res.data.current_branch
+        ? `same as base/current`
+        : "same as base/current",
+    });
+    branchControlsEl.hidden = false;
+  } finally {
+    state.branchRefreshInFlight = false;
+  }
+}
+
+function renderBranchSelect(select, branches, { selected, emptyLabel }) {
+  select.innerHTML = "";
+  select.appendChild(el("option", { value: "" }, emptyLabel));
+  for (const branch of branches) {
+    if (branch.startsWith("symphony/")) continue;
+    select.appendChild(el("option", { value: branch }, branch));
+  }
+  select.value = selected || "";
+  if (selected && select.value !== selected) {
+    select.appendChild(el("option", { value: selected }, selected));
+    select.value = selected;
+  }
+}
+
+async function saveSelectedBranchPolicy(changedSelect) {
+  if (!featureBaseSelect || !mergeTargetSelect) return;
+  state.branchSaveInFlight = true;
+  if (changedSelect) changedSelect.disabled = true;
+  try {
+    const res = await saveBranchPolicy({
+      feature_base_branch: featureBaseSelect.value,
+      merge_target_branch: mergeTargetSelect.value,
+    });
+    if (!res.ok) {
+      const detail = res.error?.branch ? `: ${res.error.branch}` : "";
+      flashError(`Branch 저장 실패 (${res.status || "network"})${detail}`);
+      state.branchSaveInFlight = false;
+      await refreshBranchControls();
+      return;
+    }
+    state.branchSaveInFlight = false;
+    await refreshSymphony();
+    await Promise.all([refreshBranchControls(), poll()]);
+  } finally {
+    if (changedSelect) changedSelect.disabled = false;
+    state.branchSaveInFlight = false;
+  }
+}
+
 // 한 사이클: kanban index + symphony state 병렬 호출.
 // race 방지: in-flight 가드 — 이전 poll이 5초 안에 끝나지 못하면
 // 다음 사이클은 그냥 skip한다 (state.tickets 동시 덮어쓰기 방지).
@@ -269,24 +369,20 @@ async function pollOnce() {
       buildColumns();
     } else if (state.states.length === 0) {
       // fallback
-      state.states = [
-        "Todo", "Explore", "In Progress", "Review", "QA", "Learn",
-        "Done", "Cancelled", "Blocked", "Archive",
-      ];
+      state.states = FALLBACK_STATES;
       buildColumns();
     }
   } else if (state.states.length === 0) {
     // index 실패 + 컬럼 없음 → 기본 컬럼
-    state.states = [
-      "Todo", "Explore", "In Progress", "Review", "QA", "Learn",
-      "Done", "Cancelled", "Blocked", "Archive",
-    ];
+    state.states = FALLBACK_STATES;
     buildColumns();
   }
 
   state.runningById.clear();
   if (symRes.ok && symRes.data) {
     state.symphonyAlive = true;
+    state.defaultAgentKind = symRes.data.workflow?.default_agent_kind || "";
+    updateBranchPolicy(symRes.data.workflow?.branch_policy || null);
     const running = symRes.data.running || [];
     for (const r of running) {
       const id = r.issue_identifier || r.issue_id;
@@ -300,11 +396,14 @@ async function pollOnce() {
     }
   } else {
     state.symphonyAlive = false;
+    state.defaultAgentKind = "";
+    updateBranchPolicy(null);
   }
 
   state.lastPollAt = new Date().toISOString();
   updateStatus();
   renderBoard();
+  refreshBranchControls();
 }
 
 // ---- 키보드 단축키 ----
@@ -413,6 +512,12 @@ function bindUi() {
   modalCloseBtn.addEventListener("click", () => closeTicketDetail());
   modalBackdrop.addEventListener("click", (e) => {
     if (e.target === modalBackdrop) closeTicketDetail();
+  });
+  featureBaseSelect?.addEventListener("change", () => {
+    saveSelectedBranchPolicy(featureBaseSelect);
+  });
+  mergeTargetSelect?.addEventListener("change", () => {
+    saveSelectedBranchPolicy(mergeTargetSelect);
   });
 }
 

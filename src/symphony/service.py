@@ -309,6 +309,8 @@ def build_viewer_command(
         str(viewer_port),
         "--symphony",
         f"http://{host}:{port}",
+        "--workflow",
+        str(_resolved(workflow_path)),
     ]
     if kanban_dir is not None:
         command.extend(["--kanban", str(kanban_dir)])

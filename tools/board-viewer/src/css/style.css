@@ -86,6 +86,55 @@ body {
   font-size: 14px;
 }
 
+.branch-policy {
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 8px;
+  white-space: nowrap;
+}
+
+.branch-policy[data-enabled="false"] {
+  color: var(--warn);
+  border-color: rgba(210, 153, 34, 0.55);
+}
+
+.branch-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.branch-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.branch-select {
+  max-width: 170px;
+  min-width: 118px;
+  height: 28px;
+  background: var(--bg-elev-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.branch-select:focus {
+  border-color: var(--accent);
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -362,6 +411,39 @@ body {
   line-height: 1.4;
   word-break: break-word;
   margin-bottom: 8px;
+}
+
+.agent-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.agent-badge {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+.agent-badge.assigned {
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
+.agent-badge.working {
+  color: var(--good);
+  border-color: rgba(63, 185, 80, 0.5);
+}
+
+.agent-badge.done {
+  color: var(--accent);
+  border-color: rgba(82, 116, 236, 0.55);
 }
 
 .card-labels {
@@ -729,4 +811,188 @@ body {
 /* -------------------- Filtered (search hidden) -------------------- */
 .card.hidden {
   display: none;
+}
+
+/* -------------------- Settings modal -------------------- */
+.settings-btn {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-btn:hover { background: var(--bg-elev-3); border-color: var(--border-strong); }
+.settings-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.settings-modal {
+  max-width: 720px;
+  width: 90vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.settings-body { overflow-y: auto; padding: 12px 16px; }
+
+.settings-paths {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-right: 8px;
+  user-select: text;
+  word-break: break-all;
+}
+
+.settings-status {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-bottom: 8px;
+}
+.settings-status[data-kind="error"] { color: var(--danger); }
+.settings-status[data-kind="ok"] { color: var(--good); }
+
+.settings-section {
+  margin: 14px 0;
+  padding: 10px 12px;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.settings-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.settings-section-head .settings-section-title { margin-bottom: 0; }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.settings-cell { display: flex; flex-direction: column; gap: 3px; }
+.settings-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.settings-input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  min-width: 0;
+}
+.settings-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.settings-select { padding: 4px 6px; }
+
+.settings-add-btn {
+  background: var(--bg-elev-2);
+  border: 1px dashed var(--border-strong);
+  color: var(--fg);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-add-btn:hover { background: var(--bg-elev-3); border-style: solid; }
+
+.settings-db-list { display: flex; flex-direction: column; gap: 10px; }
+.settings-empty { color: var(--fg-dim); font-size: 12px; margin: 4px 0; }
+
+.settings-db-card {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+.settings-db-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.settings-db-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.settings-db-name { flex: 1 1 auto; max-width: 240px; }
+.settings-db-delete {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--danger);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.settings-db-delete:hover { background: rgba(248, 81, 73, 0.1); border-color: var(--danger); }
+
+.settings-env-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.settings-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev-1);
+}
+.settings-cancel-btn,
+.settings-save-btn {
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.settings-cancel-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.settings-cancel-btn:hover { background: var(--bg-elev-2); }
+.settings-save-btn {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: white;
+  font-weight: 600;
+}
+.settings-save-btn:hover { filter: brightness(1.1); }
+.settings-save-btn:focus-visible,
+.settings-cancel-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (max-width: 640px) {
+  .settings-modal { width: 96vw; }
+  .settings-grid { grid-template-columns: 1fr; }
 }

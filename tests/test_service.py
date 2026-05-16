@@ -13,6 +13,7 @@ from symphony.service import (
     ServiceLockError,
     acquire_service_lock,
     build_orchestrator_command,
+    build_viewer_command,
     clear_record,
     is_process_running,
     load_record,
@@ -117,6 +118,25 @@ def test_build_orchestrator_command_uses_python_module(tmp_path: Path) -> None:
     assert str(workflow.resolve()) in command
     assert "--port" in command
     assert "--host" in command
+
+
+def test_build_viewer_command_passes_workflow_path(tmp_path: Path) -> None:
+    workflow = _workflow(tmp_path)
+    viewer_dir = tmp_path / "tools" / "board-viewer"
+    viewer_dir.mkdir(parents=True)
+    (viewer_dir / "server.py").write_text("# viewer\n", encoding="utf-8")
+
+    command = build_viewer_command(
+        workflow,
+        host="127.0.0.1",
+        port=9999,
+        viewer_port=8765,
+        kanban_dir=tmp_path / "kanban",
+    )
+
+    assert command is not None
+    assert "--workflow" in command
+    assert str(workflow.resolve()) in command
 
 
 def test_service_status_cli_reports_stopped(tmp_path: Path, capsys) -> None:

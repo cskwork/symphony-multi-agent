@@ -2,7 +2,7 @@
 
 Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
-1. Read `docs/{{ issue.identifier }}/{explore,work,qa}/` and prior Linear comments (Recommendation, Implementation, QA Evidence) end-to-end.
+1. Read `docs/{{ issue.identifier }}/{explore,plan,work,qa}/` and prior Linear comments (Recommendation, Plan, Implementation, QA Evidence) end-to-end.
 2. Compare brief vs reality: assumptions that held or broke, constraints/invariants that only surfaced now, prior wiki entries that were incomplete or misleading.
 3. Update `docs/llm-wiki/`: either append `YYYY-MM-DD | <issue.identifier> | note` to an existing entry's Decision log and refresh **Last updated**, OR create `docs/llm-wiki/<topic-slug>.md` from the template below; then add/refresh its row in `INDEX.md` (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
 
@@ -140,4 +140,10 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    - Beginner block sanity: every existing `## 감 잡기` / `## Getting the Feel` still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
 5. Commit wiki edits onto the ticket's PR (same branch, not a separate PR).
 6. Post a Learn comment with `## Learnings` (3-4 bullets of new facts/constraints/surprises) and `## Wiki Updates` (paths created/modified/removed, one line each with a changelog tag: `merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
-7. Transition state to `Done`. If nothing new and sweep was clean, say so in the Learn comment and still transition.
+{% if agent.auto_merge_on_done %}
+7. Merge Gate — after Learn and before setting state to `Done`, merge this ticket's feature branch into the target branch. Use the workflow target branch (`agent.auto_merge_target_branch`) when set; otherwise use the configured feature base (`agent.feature_base_branch`) or current host branch. If the merge conflicts, touches blocked workspace-only paths, or cannot be proven, move the issue to `Blocked` and post the failing command plus the target branch in a `Merge Failure` comment.
+8. Transition state to `Done`. If nothing new and sweep was clean, say so in the Learn comment and still transition only after the Merge Gate succeeds.
+{% else %}
+7. Merge Gate is disabled because `agent.auto_merge_on_done` is false. Post a `Merge Status` comment explaining that this workflow intentionally leaves branch integration to the operator.
+8. Transition state to `Done` after the Learn evidence is complete.
+{% endif %}

@@ -2026,6 +2026,30 @@ def test_running_snapshot_includes_effective_agent_kind():
     assert row["agent_kind"] == "pi"
 
 
+def test_snapshot_includes_branch_policy_for_board_viewer():
+    orch = _orch()
+    cfg = replace(
+        _make_config(),
+        agent=replace(
+            _make_config().agent,
+            feature_base_branch="dev",
+            auto_merge_target_branch="release",
+        ),
+    )
+    orch._workflow_state._config = cfg
+
+    snap = orch.snapshot()
+
+    assert snap["workflow"]["default_agent_kind"] == cfg.agent.kind
+    assert snap["workflow"]["branch_policy"] == {
+        "feature_branch_pattern": "symphony/<ID>",
+        "base_branch": "dev",
+        "merge_target_branch": "release",
+        "merge_timing": "after Learn, before Done",
+        "auto_merge_enabled": True,
+    }
+
+
 def test_normal_exit_does_not_continue_after_total_turn_budget():
     orch = _orch()
     issue = _issue("MT-1", state="Todo")

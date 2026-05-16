@@ -2,7 +2,7 @@
 tracker:
   kind: file
   board_root: ./kanban
-  active_states: [Todo, Explore, "In Progress", Review, QA, Learn]
+  active_states: [Todo, Explore, Plan, "In Progress", Review, QA, Learn]
   terminal_states: [Done, Cancelled, Blocked, Archive]
   # Auto-archive sweep: terminal-state issues whose `updated_at` is older
   # than `archive_after_days` move to `archive_state` on the next poll.
@@ -14,6 +14,7 @@ tracker:
   state_descriptions:
     Todo: "Triage; route to Explore"
     Explore: "Brief from llm-wiki + git + code"
+    Plan: "Lock implementation plan"
     "In Progress": "TDD loop, draft branch"
     Review: "Read diff, fix CRITICAL/HIGH/MEDIUM"
     QA: "pytest -q + real-CLI smoke"
@@ -32,8 +33,9 @@ hooks:
   # The workspace starts empty. Attach it as a git worktree of the host
   # repo on a per-ticket symphony/<ID> branch so the host working tree
   # stays untouched while the agent works. Product changes and docs/
-  # artefacts stay on the feature branch and merge back with an explicit
-  # --no-ff merge commit when Done.
+  # artefacts stay on the feature branch. The default Learn gate merges
+  # that feature branch into the target branch before the ticket can move
+  # to Done.
   #
   # IMPORTANT: only host-owned board roots such as kanban/ are symlinked
   # back to the host repo. docs/ stays branch-local so review/QA evidence
@@ -47,6 +49,9 @@ hooks:
     # Symphony pre-creates the workspace dir; git worktree add refuses to
     # populate an existing path, so drop the empty dir first.
     cd "$HOST_REPO"
+    BASE_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current 2>/dev/null || true)"
+    FEATURE_BASE_BRANCH="${SYMPHONY_FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
+    MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}}"
     # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
     # directory, which is exactly what Symphony pre-creates here. Trying to
     # rmdir it first runs straight into Windows file-indexer / AV scans that
@@ -64,6 +69,8 @@ hooks:
     # Reuse the branch if a prior worktree was reaped without prune.
     if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
       git worktree add "$WORKTREE_PATH" "$BRANCH"
+    elif [ -n "$FEATURE_BASE_BRANCH" ]; then
+      git worktree add "$WORKTREE_PATH" -b "$BRANCH" "$FEATURE_BASE_BRANCH"
     else
       git worktree add "$WORKTREE_PATH" -b "$BRANCH"
     fi
@@ -75,6 +82,8 @@ hooks:
     # and corrupts auto_commit for unrelated workspaces nested in the host.
     git config extensions.worktreeConfig true
     git config --worktree symphony.basesha "$(git rev-parse HEAD)"
+    git config --worktree symphony.basebranch "${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
+    git config --worktree symphony.mergetargetbranch "${MERGE_TARGET_BRANCH:-}"
     # Link shared board directories back to host so agent state changes are
     # visible to Symphony's file tracker (which reads host board_root).
     #
@@ -155,7 +164,7 @@ hooks:
         exit 42
       fi
     done
-    git fetch origin main --quiet || true
+    git fetch origin --quiet || true
   after_run: |
     # Per-turn commit-or-amend. The branch stays at the same number of
     # commits across turns (amends in place when HEAD is already a `wip:`
@@ -222,6 +231,7 @@ agent:
   max_concurrent_agents_by_state:
     Todo: 1
     Explore: 1
+    Plan: 1
     "In Progress": 1
     Review: 1
     QA: 1
@@ -230,7 +240,18 @@ agent:
   max_total_tokens_by_state:
     "In Progress": 500000000
     QA: 500000000
+  # Merge policy for the Learn -> Done gate. Learn must merge the
+  # `symphony/<ID>` feature branch into the target branch before setting
+  # Done. The post-Done auto-merge remains a best-effort fallback for older
+  # prompts.
   auto_merge_on_done: true
+  # Branch/ref used as the start point for new `symphony/<ID>` feature
+  # branches. Empty string = current host branch. The board viewer can
+  # update this from its real git branch dropdown.
+  feature_base_branch: ""
+  # Branch to merge into after Learn. Empty string = same as feature base
+  # branch/current host branch. The board viewer can update this too.
+  auto_merge_target_branch: ""
   auto_merge_exclude_paths:
     - kanban
 
@@ -299,13 +320,13 @@ server:
 
 tui:
   language: en
-  max_cards_per_column: 6
 
 prompts:
   base: ./docs/symphony-prompts/file/base.md
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
     Explore: ./docs/symphony-prompts/file/stages/explore.md
+    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
     Review: ./docs/symphony-prompts/file/stages/review.md
     QA: ./docs/symphony-prompts/file/stages/qa.md

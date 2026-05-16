@@ -438,6 +438,7 @@ def build_prompt_env(
     language: str | None = None,
     is_rewind: bool = False,
     max_attempts: int = 3,
+    auto_merge_on_done: bool = True,
 ) -> dict[str, Any]:
     """§12.1 — input variables for prompt rendering.
 
@@ -465,7 +466,10 @@ def build_prompt_env(
         "attempt": attempt,
         "language": normalize_language(language),
         "is_rewind": is_rewind,
-        "agent": {"max_attempts": max_attempts},
+        "agent": {
+            "max_attempts": max_attempts,
+            "auto_merge_on_done": auto_merge_on_done,
+        },
     }
 
 
@@ -478,6 +482,7 @@ def build_first_turn_prompt(
     max_turns: int,
     max_attempts: int = 3,
     is_rewind: bool = False,
+    auto_merge_on_done: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
 
@@ -503,6 +508,7 @@ def build_first_turn_prompt(
         language=language,
         is_rewind=is_rewind,
         max_attempts=max_attempts,
+        auto_merge_on_done=auto_merge_on_done,
     )
     env["turn_number"] = 1
     env["max_turns"] = max_turns

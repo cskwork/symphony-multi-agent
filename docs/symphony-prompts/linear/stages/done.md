@@ -1,6 +1,7 @@
 ### DONE  -- when state is `Done`
 
-Terminal. Ticket has passed QA. Post the two comments below, then stop.
+Terminal. Ticket has passed QA and the Learn Merge Gate already merged the
+feature branch into the target branch. Post the comments below, then stop.
 
 1. Post a final comment with `## As-Is -> To-Be Report` in this exact structure:
 
@@ -29,7 +30,13 @@ Terminal. Ticket has passed QA. Post the two comments below, then stop.
    - `docs/{{ issue.identifier }}/qa/` — QA durable specs, traces, logs.
    ```
 
-2. Post a separate `## Merge Command` comment with both blocks below:
+2. Post a separate `## Merge Status` comment confirming the target branch and
+   merge evidence. If the Learn Merge Gate used a PR instead of a local merge,
+   include the PR URL and target branch.
+
+3. If merge evidence is missing, do not invent it. Post `## Merge Missing`
+   with the fallback commands below and move the issue to `Blocked` until the
+   merge is completed:
 
    ```sh
    # From the host repo root (parent of the worktree):
@@ -42,5 +49,5 @@ Terminal. Ticket has passed QA. Post the two comments below, then stop.
      --title "{{ issue.identifier }}: {{ issue.title }}"
    ```
 
-3. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically post-squash; the Merge Command comment is the manual fallback.
-4. Leave state as `Done` and stop.
+4. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically post-squash; any post-Done auto-merge is only a compatibility fallback for older prompts.
+5. Leave state as `Done` and stop.

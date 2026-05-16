@@ -311,6 +311,41 @@ async def test_workflow_dir_env_exported(tmp_path):
     assert content == str(wf_dir)
 
 
+@pytest.mark.asyncio
+async def test_branch_policy_env_exported_to_after_create(tmp_path):
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        _hooks(
+            after_create=(
+                'printf "%s\\n%s" "$SYMPHONY_FEATURE_BASE_BRANCH" '
+                '"$SYMPHONY_MERGE_TARGET_BRANCH" > branch-env'
+            )
+        ),
+        hook_env={
+            "SYMPHONY_FEATURE_BASE_BRANCH": "dev",
+            "SYMPHONY_MERGE_TARGET_BRANCH": "release",
+        },
+    )
+
+    ws = await mgr.create_or_reuse("MT-BRANCH")
+
+    assert (ws.path / "branch-env").read_text() == "dev\nrelease"
+
+
+@pytest.mark.asyncio
+async def test_branch_policy_env_is_scoped_to_after_create(tmp_path):
+    mgr = WorkspaceManager(
+        tmp_path / "ws",
+        _hooks(before_run='printf "%s" "${SYMPHONY_FEATURE_BASE_BRANCH:-}" > before-env'),
+        hook_env={"SYMPHONY_FEATURE_BASE_BRANCH": "dev"},
+    )
+    ws = await mgr.create_or_reuse("MT-BRANCH-SCOPE")
+
+    await mgr.before_run(ws.path)
+
+    assert (ws.path / "before-env").read_text() == ""
+
+
 # ---------------------------------------------------------------------------
 # auto-commit on Done — commit_workspace_on_done
 # ---------------------------------------------------------------------------

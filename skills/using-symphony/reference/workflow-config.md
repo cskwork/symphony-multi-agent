@@ -100,6 +100,7 @@ prompts:
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
     Explore: ./docs/symphony-prompts/file/stages/explore.md
+    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
     Review: ./docs/symphony-prompts/file/stages/review.md
     QA: ./docs/symphony-prompts/file/stages/qa.md
@@ -124,7 +125,7 @@ Each hook is a shell script that runs in the workspace directory:
 | Hook            | When                                | Common use                          |
 |-----------------|-------------------------------------|-------------------------------------|
 | `after_create`  | once, when workspace is first created | attach a `git worktree` of the host repo on a `symphony/<ID>` branch + record fork-point (`git config symphony.basesha <HEAD>`) for the end-of-run squash |
-| `before_run`    | before every turn                   | `git fetch` to pull latest main — **never `git reset --hard`**; that would discard the agent's mid-run work |
+| `before_run`    | before every turn                   | `git fetch` to pull latest remote refs — **never `git reset --hard`**; that would discard the agent's mid-run work |
 | `after_run`     | after every turn                    | per-turn **commit-or-amend**: first turn creates `wip: turn …`, every subsequent turn `--amend --no-edit`s into it. Branch stays at one commit but each turn is durably written to `.git/objects` |
 | `before_remove` | before workspace cleanup            | `git worktree remove --force` to drop the registration before Symphony rmtree's the dir |
 
@@ -134,11 +135,15 @@ Each hook is a shell script that runs in the workspace directory:
 `after_create` hooks that attach the per-ticket workspace as a **git
 worktree** of `$SYMPHONY_WORKFLOW_DIR` on a fresh `symphony/<ID>`
 branch. The host's working tree is never modified, and the operator
-merges results back explicitly with `git -C <host> merge symphony/<ID>`
-(or by opening a PR from that branch) — never automatic. Worktrees
-share the host's object DB so setup is near-instant compared to a
-full clone, and the branch is immediately visible to host-side `git`
-commands.
+sees each feature branch immediately. `agent.feature_base_branch` selects
+the start point for new `symphony/<ID>` branches; empty means the current
+host branch. The default Learn prompt merges `symphony/<ID>` into
+`agent.auto_merge_target_branch` before the ticket moves to `Done`; empty
+means the feature base/current host branch. The board viewer exposes both
+values as real local git branch dropdowns, and post-Done auto-merge is only
+a compatibility fallback for older prompt packs. Worktrees share the host's
+object DB so setup is near-instant compared to a full clone, and the branch
+is immediately visible to host-side `git` commands.
 
 The matching `before_remove` hook runs `git worktree remove --force`
 so cleanup also drops the `.git/worktrees/<ID>` registration; without
@@ -169,8 +174,8 @@ without any repo, use `: noop`.
    - `git commit -m "<ID>: <title>[ <suffix>]"` — single ticket commit
 
 Net result: `git log symphony/<ID>` shows exactly **base + 1 commit**.
-Operator merges with `git -C <host> merge --ff-only symphony/<ID>` (or
-opens a PR) and the host history stays clean.
+During Learn, that branch is merged into the target branch with a real
+merge/PR before the ticket is allowed to move to `Done`.
 
 Commit-message convention:
 

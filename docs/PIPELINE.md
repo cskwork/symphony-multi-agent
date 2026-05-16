@@ -1,6 +1,6 @@
 # Production pipeline
 
-Symphony's default task drives every ticket through seven gated stages.
+Symphony's default task drives every ticket through eight gated stages.
 `WORKFLOW.md` remains the orchestration manifest, while the default agent
 instructions live in `docs/symphony-prompts/`. The harness picks the
 ticket up on each poll tick; the agent moves it from one stage to the next
@@ -9,7 +9,7 @@ this stage machine is intentionally implemented in prompt files rather
 than the Python core.
 
 ```
-  Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
+  Todo  ->  Explore  ->  Plan  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Merge Gate  ->  Done
                               \                       \                    ^
                                +-> Blocked             +-> Blocked          |
                                                                             |
@@ -20,10 +20,11 @@ than the Python core.
 |----------------|-----------------------------|-----------------------------------------------------------------------|
 | Todo           | triager                     | `## Triage` line, route to Explore (or `Blocked`)                     |
 | Explore        | researcher (3 lenses)       | `## Domain Brief` + `## Plan Candidates` + `## Recommendation`        |
+| Plan           | planner                     | professional `## Plan`: chosen approach, scope, steps, tests, acceptance gates |
 | In Progress    | implementer                 | `## Implementation` (TDD), transition to Review                       |
 | Review         | reviewer                    | `## Review`; CRITICAL/HIGH/MEDIUM rewinds to In Progress, LOW-only transitions to QA |
 | QA             | qa runner (executes code)   | `## QA Evidence` (real exit codes), -> Learn                          |
-| Learn          | distiller                   | `docs/llm-wiki/` updates + `## Learnings` + `## Wiki Updates`         |
+| Learn          | distiller                   | `docs/llm-wiki/` updates + `## Learnings` + `## Wiki Updates`, then merge feature branch into target branch |
 | Done           | reporter                    | `## As-Is -> To-Be Report` (structured)                               |
 | Blocked        | -                           | `## Blocker` describing what is needed                                |
 
@@ -44,8 +45,18 @@ Source 1 (`docs/llm-wiki/`) is documented in [The docs/llm-wiki/ knowledge base]
 
 The agent applies three lenses in one turn — domain expert, implementer,
 risk reviewer — and writes `## Domain Brief`, `## Plan Candidates`, and
-`## Recommendation` into the ticket. Implement reads the recommendation
-and follows it; it does not re-plan unless the brief got a fact wrong.
+`## Recommendation` into the ticket. Plan reads those outputs and turns
+them into an implementation-ready plan.
+
+## Why a Plan stage
+
+Explore is intentionally divergent: it compares options and records risk.
+Plan is convergent and professional: it picks one route and writes a
+complete `## Plan` with file ownership, ordered steps, tests, verification
+commands, acceptance criteria, and rollback notes. In Progress should be
+able to implement from `## Plan` alone. Explore notes, `docs/llm-wiki/`,
+and other docs are reference material only when the plan is ambiguous or
+missing required detail.
 
 ## Why a QA stage
 
@@ -81,6 +92,14 @@ surprises) and `## Wiki Updates` (paths created or modified) into the
 ticket before transitioning to Done. If nothing genuinely new emerged,
 the agent says so explicitly ("no new wiki entries; existing coverage
 was correct") and still transitions.
+
+Before that transition, Learn must pass the Merge Gate: merge the
+ticket's `symphony/<ID>` feature branch into the workflow target branch.
+Operators can choose both the feature start branch
+(`agent.feature_base_branch`) and merge target
+(`agent.auto_merge_target_branch`) from the board viewer's real local git
+branch dropdowns. If the target branch cannot be merged cleanly or the merge
+cannot be proven, the ticket moves to `Blocked` instead of `Done`.
 
 ## The `docs/llm-wiki/` knowledge base
 
@@ -119,6 +138,7 @@ prompts:
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
     Explore: ./docs/symphony-prompts/file/stages/explore.md
+    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
     Review: ./docs/symphony-prompts/file/stages/review.md
     QA: ./docs/symphony-prompts/file/stages/qa.md
@@ -138,7 +158,7 @@ when a board needs different agent behavior.
 
 ## Stage transitions and the orchestrator
 
-`active_states` in `WORKFLOW.md` is `[Todo, Explore, "In Progress", Review, QA, Learn]`.
+`active_states` in `WORKFLOW.md` is `[Todo, Explore, Plan, "In Progress", Review, QA, Learn]`.
 The orchestrator dispatches a worker for any ticket whose state is in
 that set, regardless of which stage it is on. Each phase starts with a
 fresh first-turn prompt assembled from `prompts.base` and the current
@@ -154,8 +174,8 @@ brief reflects a quiet workspace.
 
 1. Copy `WORKFLOW.file.example.md` (file tracker) or `WORKFLOW.example.md`
    (Linear) to `WORKFLOW.md` and customize.
-2. Confirm `tracker.active_states` includes `Explore`, `Review`, `QA`,
-   and `Learn` (in addition to `Todo` and `In Progress`).
+2. Confirm `tracker.active_states` includes `Explore`, `Plan`, `Review`,
+   `QA`, and `Learn` (in addition to `Todo` and `In Progress`).
 3. Confirm the `prompts:` block points at the prompt directory you want
    to customize. The shipped examples use `docs/symphony-prompts/file/`
    and `docs/symphony-prompts/linear/`.
@@ -181,7 +201,8 @@ brief reflects a quiet workspace.
 Every artefact a pipeline ticket produces lives under a single root:
 `docs/<TICKET-ID>/<stage>/`. Triage drops bug reproductions into
 `reproduce/` (bug-labeled tickets only); Explore drops citations and
-reuse inventory into `explore/`; Implement writes user-facing docs into
+reuse inventory into `explore/`; Plan writes implementation planning notes
+into `plan/`; Implement writes user-facing docs into
 `work/`; Review writes HTTP baseline/PR/diff/curl logs into `verify/`;
 QA writes durable e2e specs and traces/videos/HAR into `qa/`. Workers
 create folders themselves with `mkdir -p`. Learn is the only stage that

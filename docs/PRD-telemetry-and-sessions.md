@@ -269,7 +269,7 @@ symphony crashes / is killed / restarts mid-ticket:
 4. Token totals on the JSON snapshot reset to zero, masking real cost.
 
 For long-running tickets (e.g. a multi-day refactor that flows through
-the seven-stage pipeline), this is a real cost.
+the eight-stage pipeline), this is a real cost.
 
 ### Out of scope
 
@@ -388,7 +388,7 @@ restart.
 
 ~120 lines new (session_store.py) + ~30 lines wiring + ~80 lines tests
 + docs. **3–4 agent turns** depending on how the agent splits the work
-across the seven-stage pipeline. The Plan stage should call out the
+across the eight-stage pipeline. The Plan stage should call out the
 codex resumption uncertainty (goal #4 third bullet) explicitly.
 
 ---

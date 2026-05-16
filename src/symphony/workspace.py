@@ -75,11 +75,13 @@ class WorkspaceManager:
         *,
         workflow_dir: Path | None = None,
         reuse_policy: str = "preserve",
+        hook_env: dict[str, str] | None = None,
     ) -> None:
         self._root = root.resolve()
         self._hooks = hooks
         self._workflow_dir = workflow_dir
         self._reuse_policy = reuse_policy
+        self._hook_env = dict(hook_env or {})
         self._root.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -92,6 +94,9 @@ class WorkspaceManager:
 
     def update_reuse_policy(self, reuse_policy: str) -> None:
         self._reuse_policy = reuse_policy
+
+    def update_hook_env(self, hook_env: dict[str, str] | None) -> None:
+        self._hook_env = dict(hook_env or {})
 
     def path_for(self, identifier: str) -> Path:
         key = workspace_key(identifier)
@@ -233,6 +238,8 @@ class WorkspaceManager:
             if self._workflow_dir
             else "",
         }
+        if name == "after_create" and self._hook_env:
+            env.update(self._hook_env)
         if extra_env:
             env.update(extra_env)
 

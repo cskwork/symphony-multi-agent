@@ -124,7 +124,32 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.codex.reasoning_effort == "high"
     assert cfg.agent.max_concurrent_agents == 1
     assert cfg.agent.max_attempts == 3
+    assert cfg.agent.feature_base_branch == ""
     assert cfg.prompt_template_for_state("Todo") == "Hello {{ issue.identifier }}"
+
+
+def test_build_service_config_reads_branch_policy_fields(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              feature_base_branch: dev
+              auto_merge_target_branch: release
+            ---
+            Body
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.feature_base_branch == "dev"
+    assert cfg.agent.auto_merge_target_branch == "release"
 
 
 def test_build_service_config_reads_agent_max_attempts(tmp_path):

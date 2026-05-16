@@ -11,4 +11,4 @@ Research the ticket through three lenses in one turn: **domain expert** (what do
    - `## Domain Brief` — key facts, invariants, and references (`path:line`, wiki entry titles, commit SHAs) the implementer must know before writing code. Include a `## Touched Files` bullet list (repo-relative paths, ≤12; group by directory if more) so other in-flight tickets can detect overlap.
    - `## Plan Candidates` — 2-3 concrete approaches with trade-offs (complexity, blast radius, reversibility). Name files touched and tests added per option.
    - `## Recommendation` — the option you choose, the rationale (why this lens won), the risks accepted, and the first failing test the implementer should write.
-7. Set state to `In Progress`.
+7. Set state to `Plan`.

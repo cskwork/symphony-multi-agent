@@ -34,6 +34,7 @@ WORKFLOW_FILES = (
 STAGE_HEADINGS_BY_STATE = {
     "Todo": "### TRIAGE",
     "Explore": "### EXPLORE",
+    "Plan": "### PLAN",
     "In Progress": "### IMPLEMENT",
     "Review": "### REVIEW",
     "QA": "### QA",
@@ -109,7 +110,7 @@ def _issue(state: str, **overrides) -> Issue:
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_active_states_cover_full_pipeline(workflow: str) -> None:
     cfg = _load(workflow)
-    for required in ("Todo", "Explore", "In Progress", "Review", "QA", "Learn"):
+    for required in ("Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn"):
         assert required in cfg.tracker.active_states, (
             f"{workflow} active_states missing {required!r} — TUI lane will not render"
         )
@@ -123,7 +124,7 @@ def test_active_states_cover_full_pipeline(workflow: str) -> None:
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 @pytest.mark.parametrize(
-    "state", ["Todo", "Explore", "In Progress", "Review", "QA", "Learn", "Done"]
+    "state", ["Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn", "Done"]
 )
 def test_prompt_renders_for_every_stage(workflow: str, state: str) -> None:
     cfg = _load(workflow)
@@ -191,6 +192,38 @@ def test_explore_stage_consults_wiki_history_and_code(workflow: str) -> None:
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_plan_stage_creates_professional_executable_plan(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Plan"),
+        build_prompt_env(_issue("Plan"), attempt=None),
+    )
+    for phrase in (
+        "Do not write production code",
+        "## Plan",
+        "implementation-plan.md",
+        "execute by reading only `## Plan`",
+        "verification commands",
+        "state to `In Progress`",
+    ):
+        assert phrase in rendered, f"Plan stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_in_progress_uses_plan_as_primary_contract(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("In Progress"),
+        build_prompt_env(_issue("In Progress"), attempt=None),
+    )
+
+    assert "Read the plan first" in rendered
+    assert "That plan should be enough to implement" in rendered
+    assert "Use Explore notes, llm-wiki, or" in rendered
+    assert "only as reference material" in rendered
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
 def test_learn_stage_writes_back_to_wiki(workflow: str) -> None:
     cfg = _load(workflow)
     rendered = render(
@@ -199,6 +232,46 @@ def test_learn_stage_writes_back_to_wiki(workflow: str) -> None:
     )
     for phrase in LEARN_HARD_RULES:
         assert phrase in rendered, f"Learn stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_learn_stage_requires_merge_before_done(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Learn"),
+        build_prompt_env(_issue("Learn"), attempt=None),
+    )
+    for phrase in ("Merge Gate", "target branch", "before setting state to `Done`"):
+        assert phrase in rendered, f"Learn stage missing merge gate: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_learn_stage_respects_disabled_auto_merge(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Learn"),
+        build_prompt_env(
+            _issue("Learn"),
+            attempt=None,
+            auto_merge_on_done=False,
+        ),
+    )
+
+    assert "Merge Gate is disabled" in rendered
+    assert "leaves branch integration to the operator" in rendered
+    assert "before setting state to `Done`" not in rendered
+
+
+@pytest.mark.parametrize("flavor", ("file", "linear"))
+def test_base_prompt_declares_merge_gate(flavor: str) -> None:
+    text = (REPO_ROOT / "docs" / "symphony-prompts" / flavor / "base.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "eight stages, no skipping" in text
+    assert "Plan  ->  In Progress" in text
+    assert "Learn  ->  Merge Gate  ->  Done" in text
+    assert "successful Learn Merge Gate" in text
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

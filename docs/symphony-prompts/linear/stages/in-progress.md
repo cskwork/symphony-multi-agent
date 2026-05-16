@@ -8,13 +8,17 @@ You are the implementer. Ship the smallest change that satisfies the brief.
    transition state to `Blocked` and post a `## Conflict` comment with
    the other issue id, overlapping path(s), and a one-line reason
    ("waiting on <ID> to finish editing <path>"); STOP.
-2. **Read shared context.** Open `docs/{{ issue.identifier }}/explore/`
-   and re-read the most recent Recommendation. If the most recent ticket
-   comment is a QA Failure or Review Findings comment, scope this turn
-   to ONLY those flagged items — no drive-by changes. Fresh context
-   means earlier conversation is gone; the markdown and Linear comments
-   are the contract.
-3. Implement the chosen option from the Explore Recommendation (or, on
+2. **Read the plan first.** Re-read the most recent `## Plan` and
+   `docs/{{ issue.identifier }}/plan/implementation-plan.md` if it exists.
+   That plan should be enough to implement. Use Explore notes, llm-wiki, or
+   other docs only as reference material when the plan is ambiguous or
+   missing a required detail. If `## Plan` is missing, transition state to
+   `Plan`, post `## Plan Missing`, and stop. If the most recent ticket
+   comment is a QA Failure or Review Findings comment, scope this turn to
+   ONLY those flagged items — no drive-by changes. Fresh context means
+   earlier conversation is gone; the markdown and Linear comments are the
+   contract.
+3. Implement the chosen option from `## Plan` (or, on
    rewind, only the flagged failure items above). Do not reopen the plan
    unless the brief got a fact wrong — then post a one-line note and
    proceed.

@@ -12,6 +12,7 @@
 # 환경변수:
 #   BOARD_VIEWER_PORT        — 정적 서버 포트 (기본 8765)
 #   BOARD_VIEWER_KANBAN_DIR  — kanban 경로 (CLI 인자가 우선)
+#   BOARD_VIEWER_WORKFLOW    — WORKFLOW.md 경로 (자동 감지 실패 시)
 #   SYMPHONY_BASE            — Symphony orchestrator URL (기본 http://127.0.0.1:9999)
 
 set -euo pipefail
@@ -41,6 +42,15 @@ if [ ! -d "$KANBAN_ARG" ]; then
   exit 3
 fi
 
+WORKFLOW_ARG="${BOARD_VIEWER_WORKFLOW:-}"
+if [ -z "$WORKFLOW_ARG" ]; then
+  if [ -f "$PWD/WORKFLOW.md" ]; then
+    WORKFLOW_ARG="$PWD/WORKFLOW.md"
+  elif [ -f "$(dirname "$KANBAN_ARG")/WORKFLOW.md" ]; then
+    WORKFLOW_ARG="$(dirname "$KANBAN_ARG")/WORKFLOW.md"
+  fi
+fi
+
 # Python 선택 (3.11+)
 PYTHON=""
 for c in python3.11 python3.12 python3.13 python3 python; do
@@ -54,4 +64,8 @@ if [ -z "$PYTHON" ]; then
   exit 4
 fi
 
-exec "$PYTHON" "$SERVER_PY" --kanban "$KANBAN_ARG"
+if [ -n "$WORKFLOW_ARG" ]; then
+  exec "$PYTHON" "$SERVER_PY" --kanban "$KANBAN_ARG" --workflow "$WORKFLOW_ARG"
+else
+  exec "$PYTHON" "$SERVER_PY" --kanban "$KANBAN_ARG"
+fi

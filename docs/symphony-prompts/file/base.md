@@ -22,13 +22,13 @@ This ticket depends on:
 {% endfor %}
 {% endif %}
 
-## Production pipeline (seven stages, no skipping)
+## Production pipeline (eight stages, no skipping)
 
 Every ticket flows through the same gates. Honour the gate that matches
 `{{ issue.state }}`. Each stage owns one transition; never jump ahead.
 
 ```
-  Todo  ->  Explore  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Done
+  Todo  ->  Explore  ->  Plan  ->  In Progress  ->  Review  ->  QA  ->  Learn  ->  Merge Gate  ->  Done
                               ^   \                ^    \                ^
                               |    +-> Blocked     |     +-> Blocked     |
                               |                    |                     |
@@ -40,6 +40,10 @@ Every ticket flows through the same gates. Honour the gate that matches
 entry per topic plus an `INDEX.md`. Explore reads it before new work;
 Learn writes back after QA passes. Treat it as living memory future
 tickets depend on. The first Learn stage creates the directory if missing.
+Plan turns Explore's candidates into a single executable `## Plan`; In
+Progress must read that plan before editing code.
+After Learn writes back, merge the ticket's `symphony/{{ issue.identifier }}`
+feature branch into the target branch before marking the ticket `Done`.
 
 `docs/{{ issue.identifier }}/` is this ticket's evidence root — see Hard rules below for the artefact policy. Learn writes to `${LLM_WIKI_PATH:-./docs/llm-wiki}/<topic>.md`, a sibling under the same `docs/` root.
 
@@ -76,6 +80,7 @@ the end: `_세부: docs/<id>/<stage>/details.md_`.
 | `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs |
 | `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches            |
 | `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text        |
+| `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
@@ -128,6 +133,7 @@ the end: `_details: docs/<id>/<stage>/details.md_`.
 | `## Domain Brief`       | ≤ 12 lines                             | extra path:line citations, vendor docs |
 | `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches            |
 | `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text        |
+| `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
@@ -156,7 +162,8 @@ the end: `_details: docs/<id>/<stage>/details.md_`.
 
 ## Hard rules (apply in every stage)
 
-- Never skip a stage. Never mark `Done` without `## QA Evidence`.
+- Never skip a stage. Never mark `Done` without `## QA Evidence` and a
+  successful Learn Merge Gate into the target branch.
 - Never silence failing tests, hide errors, or add fake success paths.
   Fix the root cause or move the ticket to `Blocked`.
 - Touch only what the ticket requires. No drive-by refactors.

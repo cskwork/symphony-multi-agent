@@ -1,7 +1,8 @@
 # Symphony Board Viewer
 
 Symphony multi-agent orchestrator(headless 모드)와 sync되는 정적 HTML 기반 Kanban 보드 뷰어.
-브라우저에서 Symphony TUI를 모방하되, 기존 headless server와 동시에 떠도 race 없이 **read-only** 로 안전하게 동작한다.
+브라우저에서 Symphony TUI를 모방하되, 기존 headless server와 동시에 떠도 race 없이 동작한다.
+카드 상태 조회는 read-only이고, 헤더의 branch dropdown만 `WORKFLOW.md`의 branch policy를 갱신한다.
 
 ## 실행
 
@@ -30,13 +31,14 @@ run-state 파일로 막습니다.
 ```bash
 ./tools/board-viewer/board-viewer-open.sh /path/to/some/kanban
 # 또는
-python3 tools/board-viewer/server.py --kanban /path/to/some/kanban --port 8765
+python3 tools/board-viewer/server.py --kanban /path/to/some/kanban --workflow /path/to/WORKFLOW.md --port 8765
 ```
 
 ### 환경변수
 
 - `BOARD_VIEWER_PORT` — 정적 서버 포트 (기본 8765)
 - `BOARD_VIEWER_KANBAN_DIR` — kanban 경로 (CLI `--kanban` 이 우선)
+- `BOARD_VIEWER_WORKFLOW` — branch policy를 읽고 갱신할 `WORKFLOW.md` 경로
 - `SYMPHONY_BASE` — Symphony orchestrator URL (기본 `http://127.0.0.1:9999`)
 
 ### Kanban 경로 결정 우선순위
@@ -51,12 +53,16 @@ python3 tools/board-viewer/server.py --kanban /path/to/some/kanban --port 8765
 `server.py` 가 세 가지 역할을 동시에 수행:
 
 1. 정적 파일 serving (`index.html`, `src/css/*`, `src/js/*`)
-2. Symphony API 프록시 (read-only):
+2. Symphony API 프록시:
    - `GET /api/symphony/state` → `GET http://127.0.0.1:9999/api/v1/state`
    - `GET /api/symphony/<ID>` → `GET http://127.0.0.1:9999/api/v1/<ID>`
+   - `POST /api/symphony/refresh`, `pause`, `resume` → orchestrator 제어
 3. Kanban 파일 인덱스/원본:
    - `GET /api/kanban/index` — `kanban/*.md` 전체 frontmatter 인덱스 (JSON)
    - `GET /api/kanban/<ID>.md` — 단일 ticket 원본 .md
+4. Branch policy:
+   - `GET /api/git/branches` — 현재 repo의 실제 local git branch 목록
+   - `POST /api/workflow/branch-policy` — `agent.feature_base_branch`와 `agent.auto_merge_target_branch` 갱신
 
 브라우저는 5초마다 인덱스 + Symphony state를 병렬 fetch하여 칸반을 갱신.
 

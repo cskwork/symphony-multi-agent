@@ -85,3 +85,57 @@ export function resumeTicket(id) {
 export function refreshSymphony() {
   return postNoBody("/api/symphony/refresh");
 }
+
+export async function fetchGitBranches() {
+  try {
+    const r = await fetchWithTimeout("/api/git/branches");
+    const data = await safeJson(r);
+    if (!r.ok) return { ok: false, status: r.status, error: data };
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}
+
+export async function saveBranchPolicy(payload) {
+  try {
+    const r = await fetchWithTimeout("/api/workflow/branch-policy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await safeJson(r);
+    if (!r.ok) return { ok: false, status: r.status, error: data };
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}
+
+// ---- Settings (.symphony/config.yaml + .env) ----
+
+export async function fetchSettings() {
+  try {
+    const r = await fetchWithTimeout("/api/settings");
+    const data = await safeJson(r);
+    if (!r.ok) return { ok: false, status: r.status, error: data };
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}
+
+export async function saveSettings(payload) {
+  try {
+    const r = await fetchWithTimeout("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await safeJson(r);
+    if (!r.ok) return { ok: false, status: r.status, error: data };
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}

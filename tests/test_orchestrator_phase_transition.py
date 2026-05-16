@@ -586,9 +586,11 @@ def test_is_rewind_transition_pure_function() -> None:
     # Canonical rewinds defined by WORKFLOW.md hard rules.
     assert _is_rewind_transition("review", "in progress") is True
     assert _is_rewind_transition("qa", "in progress") is True
+    assert _is_rewind_transition("in progress", "plan") is True
     # Forward transitions are NEVER rewinds.
     assert _is_rewind_transition("todo", "explore") is False
-    assert _is_rewind_transition("explore", "in progress") is False
+    assert _is_rewind_transition("explore", "plan") is False
+    assert _is_rewind_transition("plan", "in progress") is False
     assert _is_rewind_transition("in progress", "review") is False
     assert _is_rewind_transition("review", "qa") is False
     assert _is_rewind_transition("qa", "learn") is False

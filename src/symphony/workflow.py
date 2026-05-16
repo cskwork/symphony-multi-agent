@@ -27,7 +27,7 @@ SUPPORTED_TRACKER_KINDS = {"linear", "file"}
 LINEAR_DEFAULT_ENDPOINT = "https://api.linear.app/graphql"
 LINEAR_API_KEY_ENV = "LINEAR_API_KEY"
 
-DEFAULT_ACTIVE_STATES = ("Todo", "In Progress")
+DEFAULT_ACTIVE_STATES = ("Todo", "Explore", "Plan", "In Progress", "Review", "QA", "Learn")
 DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done", "Archive")
 DEFAULT_BOARD_ROOT_NAME = "board"
 DEFAULT_POLL_INTERVAL_MS = 30_000
@@ -240,6 +240,9 @@ class AgentConfig:
     # Target branch in the host repo. Empty string ("") = use whatever
     # branch is currently checked out in the host repo at fire time.
     auto_merge_target_branch: str = ""
+    # Branch/ref used as the start point when creating new per-ticket feature
+    # worktrees. Empty string ("") = use the host repo's current branch.
+    feature_base_branch: str = ""
     # Workspace-only roots that must not differ on the ticket branch.
     # File-board workflows usually set this to `["kanban"]`; add `prompt`
     # only if your hook symlinks it from the host. Do not list `docs`
@@ -764,6 +767,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         ),
         auto_merge_target_branch=_as_str(
             agent_raw.get("auto_merge_target_branch"), ""
+        ) or "",
+        feature_base_branch=_as_str(
+            agent_raw.get("feature_base_branch"), ""
         ) or "",
         auto_merge_exclude_paths=_as_str_list(
             agent_raw.get("auto_merge_exclude_paths"),

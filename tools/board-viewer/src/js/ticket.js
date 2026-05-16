@@ -11,14 +11,30 @@ function parseFrontmatterClient(text) {
   const body = text.slice(m[0].length);
   const data = {};
   let currentListKey = null;
+  let currentContainerKey = null;
   for (const rawLine of block.split("\n")) {
     const line = rawLine.replace(/\s+$/, "");
     if (!line.trim()) {
+      currentListKey = null;
+      currentContainerKey = null;
+      continue;
+    }
+    const nestedKv = line.match(/^\s+([A-Za-z0-9_\-]+)\s*:\s*(.*)$/);
+    if (nestedKv && currentContainerKey !== null) {
+      if (
+        typeof data[currentContainerKey] !== "object" ||
+        data[currentContainerKey] === null ||
+        Array.isArray(data[currentContainerKey])
+      ) {
+        data[currentContainerKey] = {};
+      }
+      data[currentContainerKey][nestedKv[1]] = coerce(nestedKv[2]);
       currentListKey = null;
       continue;
     }
     const listMatch = line.match(/^\s*-\s+(.*)$/);
     if (listMatch && currentListKey !== null) {
+      if (!Array.isArray(data[currentListKey])) data[currentListKey] = [];
       data[currentListKey].push(coerce(listMatch[1]));
       continue;
     }
@@ -29,9 +45,11 @@ function parseFrontmatterClient(text) {
     if (rest === "") {
       data[key] = [];
       currentListKey = key;
+      currentContainerKey = key;
     } else {
       data[key] = coerce(rest);
       currentListKey = null;
+      currentContainerKey = null;
     }
   }
   return { fm: data, body };
@@ -54,11 +72,42 @@ function coerce(s) {
   return v;
 }
 
+function normalizeAgentKind(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().toLowerCase();
+}
+
+function agentKindFromTicket(ticket) {
+  return normalizeAgentKind(ticket.agent_kind || ticket.agent?.kind || "");
+}
+
+function doneAgentKindFromTicket(ticket) {
+  return normalizeAgentKind(ticket.done_agent_kind || ticket.completed_agent_kind || "");
+}
+
+function renderAgentBadges(ticket, runningInfo, options = {}) {
+  const assigned = agentKindFromTicket(ticket) || normalizeAgentKind(options.defaultAgentKind || "");
+  const working = normalizeAgentKind(runningInfo?.agent_kind || "");
+  const done = doneAgentKindFromTicket(ticket) ||
+    (String(ticket.state || "").toLowerCase() === "done" ? agentKindFromTicket(ticket) : "");
+  const badges = [];
+  if (assigned) {
+    badges.push(el("span", { class: "agent-badge assigned" }, `assigned ${assigned}`));
+  }
+  if (working) {
+    badges.push(el("span", { class: "agent-badge working" }, `working ${working}`));
+  }
+  if (done) {
+    badges.push(el("span", { class: "agent-badge done" }, `done by ${done}`));
+  }
+  return badges.length ? el("div", { class: "agent-badges" }, ...badges) : null;
+}
+
 // 카드 DOM 생성
 // handlers (옵션):
 //   { onPause(id, btn), onResume(id, btn) } — 둘 다 e.stopPropagation으로
 //   카드 클릭(=modal-open)과 분리된다. 핸들러가 없으면 버튼 자체가 안 그려진다.
-export function renderCard(ticket, runningInfo, handlers) {
+export function renderCard(ticket, runningInfo, handlers, options = {}) {
   const cls = ["card"];
   if (runningInfo) cls.push("running");
   const paused = !!(runningInfo && runningInfo.paused);
@@ -129,6 +178,7 @@ export function renderCard(ticket, runningInfo, handlers) {
       priorityNode
     ),
     el("div", { class: "card-title" }, ticket.title || ""),
+    renderAgentBadges(ticket, runningInfo, options),
     labels.length ? el("div", { class: "card-labels" }, ...labels) : null,
     actionRow
   );
@@ -180,11 +230,14 @@ export async function openTicketDetail(ticketId, runningInfo) {
     ["state", fm.state],
     ["priority", fm.priority !== undefined ? `P${fm.priority}` : "—"],
     ["labels", Array.isArray(fm.labels) ? fm.labels.join(", ") : (fm.labels || "")],
+    ["agent", normalizeAgentKind(fm.agent_kind || fm.agent?.kind || "") || "—"],
+    ["done_by", normalizeAgentKind(fm.done_agent_kind || fm.completed_agent_kind || "") || "—"],
     ["created_at", fm.created_at || "—"],
     ["updated_at", fm.updated_at || "—"],
   ];
   if (runningInfo) {
     metaRows.push(["running", "yes"]);
+    metaRows.push(["working_agent", normalizeAgentKind(runningInfo.agent_kind || "") || "—"]);
     metaRows.push(["turn", String(runningInfo.turn_count ?? "—")]);
     metaRows.push([
       "tokens",

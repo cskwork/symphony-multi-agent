@@ -34,7 +34,8 @@ WORKFLOW.md  ─▶  Orchestrator  ─poll─▶  kanban/*.md  ─dispatch─▶
                                                                         │
                                                                         ▼
                                                   Agent edits kanban/<ID>.md
-                                                  → state: Done + ## Resolution
+                                                  → Learn merge gate
+                                                  → state: Done + report
 ```
 
 Key invariants:
@@ -45,8 +46,9 @@ Key invariants:
   (default `~/symphony_workspaces/<ID>`). Hooks run inside that directory.
   The shipped `after_create` hook attaches that directory as a `git
   worktree` of the host repo on a `symphony/<ID>` branch — host working
-  tree stays untouched, merge back explicitly via
-  `git -C <host> merge symphony/<ID>` (or open a PR from that branch).
+  tree stays untouched while the ticket runs. After Learn, the default
+  prompt requires merging that feature branch into the target branch before
+  the ticket can move to `Done`.
 - Ticket IDs are an ordering contract. Symphony sorts dispatch candidates by
   stable ticket registration suffix (for example `TASK-001` before
   `TASK-002`) before mutable fields like priority or update time. When
@@ -106,22 +108,24 @@ pointers. Edit only the canonical files under `skills/`. Worker-side
 behavior is unaffected — dispatched codex/claude/gemini/pi workers get
 their guidance from `docs/symphony-prompts/`, not from these skills.
 
-### Preserve the 7-stage pipeline by default (DO NOT simplify)
+### Preserve the 8-stage pipeline by default (DO NOT simplify)
 
 `WORKFLOW.example.md` ships with the full production pipeline
-`[Todo, Explore, "In Progress", Review, QA, Learn]` + `Done` and
+`[Todo, Explore, Plan, "In Progress", Review, QA, Learn]` + `Done` and
 matching `prompts.stages` that wire each lane to a stage-specific prompt
 under `docs/symphony-prompts/<linear|file>/stages/*.md`. This is the
 *supported default*, not a maximalist example — Explore briefs the agent
-from `docs/llm-wiki/`, QA captures evidence, Learn writes back to the wiki,
-and the base prompt's "no skipping" gate refers to these by name.
+from `docs/llm-wiki/`, Plan writes the professional implementation plan
+that In Progress can execute without re-reading Explore by default, QA
+captures evidence, Learn writes back to the wiki, and the base prompt's
+"no skipping" gate refers to these by name.
 
 **When bootstrapping, do not shorten `active_states` or drop
 `prompts.stages` entries** unless the user explicitly asks for a smaller
 workflow. Trimming to `[Todo, "In Progress", Review]` (a common LLM
 "simplification" reflex) silently breaks:
 
-- the `Explore → In Progress → Review → QA → Learn → Done` flow the
+- the `Explore → Plan → In Progress → Review → QA → Learn → Done` flow the
   base prompt assumes,
 - the QA evidence gate that the base prompt requires before `Done`,
 - the Learn write-back to `docs/llm-wiki/` future tickets depend on.
@@ -161,9 +165,11 @@ orchestrators from dispatching the same Kanban board.
 
 Since v0.4.7 the board viewer at `--viewer-port` is no longer read-only:
 running cards expose Pause / Resume buttons and the header refresh button
-triggers an orchestrator `poll + reconcile`. So PMs and non-CLI users can
-hold a ticket at the next turn boundary from the browser without dropping
-into `symphony tui` or curl.
+triggers an orchestrator `poll + reconcile`. It also exposes real local git
+branch dropdowns for `agent.feature_base_branch` and
+`agent.auto_merge_target_branch`, so PMs and non-CLI users can choose the
+feature start branch and Learn merge target from the browser without editing
+YAML by hand.
 
 For foreground TUI work, the operator can still open the board with:
 

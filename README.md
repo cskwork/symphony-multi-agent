@@ -425,6 +425,7 @@ prompts:
   stages:
     Todo: ./docs/symphony-prompts/file/stages/todo.md
     Explore: ./docs/symphony-prompts/file/stages/explore.md
+    Plan: ./docs/symphony-prompts/file/stages/plan.md
     "In Progress": ./docs/symphony-prompts/file/stages/in-progress.md
 ```
 
@@ -511,9 +512,10 @@ path works on macOS, Linux, and Windows.
 
 Since v0.4.7, the board viewer (default `--viewer-port 8765`) is no longer
 read-only: running cards surface **Pause / Resume** buttons and the header
-refresh button triggers an orchestrator `poll + reconcile`. The three POST
-endpoints behind these (`refresh`, `<id>/pause`, `<id>/resume`) are the only
-mutating proxies — everything else stays read-only.
+refresh button triggers an orchestrator `poll + reconcile`. The header also
+shows real local git branch dropdowns for `agent.feature_base_branch` and
+`agent.auto_merge_target_branch`, so operators can choose where new feature
+branches start and where Learn merges land without editing YAML by hand.
 
 #### One-shot launchers
 

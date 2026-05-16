@@ -70,26 +70,36 @@ RETRY_BASE_MS = 10_000  # §8.4
 STALL_FORCE_EJECT_GRACE_S = 30.0
 
 
-# States that, when re-entered from a downstream stage, count as a rewind.
+# Backward stage transitions that count against the rewind budget.
 # `normalize_state` lowercases its input, so compare in lowercase.
-_REWIND_DOWNSTREAM_STATES = frozenset({"review", "qa"})
-_REWIND_TARGET_STATE = "in progress"
+_REWIND_TRANSITIONS = frozenset(
+    {
+        ("review", "in progress"),
+        ("qa", "in progress"),
+        ("in progress", "plan"),
+    }
+)
 
 
 def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
     """True when a phase transition is moving backwards in the pipeline.
 
-    `Review → In Progress` (CRITICAL/HIGH findings) and `QA → In Progress`
-    (test/spec failure) both rewind by design — see WORKFLOW.md hard
-    rules. The agent re-entering In Progress this way needs an explicit
-    template cue: dispatch-level `attempt` only fires on full worker
-    re-dispatch, so an in-flight rewind inside a single worker run would
-    otherwise have no signal beyond the markdown trail itself.
+    `Review → In Progress`, `QA → In Progress`, and the Plan-missing
+    `In Progress → Plan` correction all rewind by design — see WORKFLOW.md
+    hard rules. The agent re-entering a prior stage this way needs an
+    explicit template cue: dispatch-level `attempt` only fires on full
+    worker re-dispatch, so an in-flight rewind inside a single worker run
+    would otherwise have no signal beyond the markdown trail itself.
     """
-    return (
-        prev_state in _REWIND_DOWNSTREAM_STATES
-        and current_state == _REWIND_TARGET_STATE
-    )
+    return (prev_state, current_state) in _REWIND_TRANSITIONS
+
+
+def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:
+    """Env consumed by the default worktree hook when creating a feature branch."""
+    return {
+        "SYMPHONY_FEATURE_BASE_BRANCH": cfg.agent.feature_base_branch or "",
+        "SYMPHONY_MERGE_TARGET_BRANCH": cfg.agent.auto_merge_target_branch or "",
+    }
 
 
 def _requested_agent_kind(issue: Issue) -> str | None:
@@ -267,6 +277,7 @@ class Orchestrator:
             cfg.hooks,
             workflow_dir=cfg.workflow_path.parent,
             reuse_policy=cfg.workspace_reuse_policy,
+            hook_env=_branch_hook_env(cfg),
         )
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
@@ -335,6 +346,7 @@ class Orchestrator:
         return tuple(entry.issue for entry in self._running.values())
 
     def snapshot(self) -> dict[str, Any]:
+        cfg = self._workflow_state.current()
         running_rows = [self._running_row(eid, entry) for eid, entry in self._running.items()]
         retry_rows = [self._retry_row(entry) for entry in self._retry.values()]
         active_seconds = sum(
@@ -353,6 +365,29 @@ class Orchestrator:
                 "seconds_running": round(self._totals.seconds_running + active_seconds, 1),
             },
             "rate_limits": self._latest_rate_limits,
+            "workflow": {
+                "default_agent_kind": cfg.agent.kind if cfg is not None else "",
+                "branch_policy": self._branch_policy_snapshot(cfg),
+            },
+        }
+
+    def _branch_policy_snapshot(self, cfg: ServiceConfig | None) -> dict[str, Any]:
+        if cfg is None:
+            return {
+                "feature_branch_pattern": "symphony/<ID>",
+                "base_branch": "current branch",
+                "merge_target_branch": "current branch",
+                "merge_timing": "after Learn, before Done",
+                "auto_merge_enabled": False,
+            }
+        base = cfg.agent.feature_base_branch or "current branch"
+        target = cfg.agent.auto_merge_target_branch or base
+        return {
+            "feature_branch_pattern": "symphony/<ID>",
+            "base_branch": base,
+            "merge_target_branch": target,
+            "merge_timing": "after Learn, before Done",
+            "auto_merge_enabled": bool(cfg.agent.auto_merge_on_done),
         }
 
     def issue_snapshot(self, identifier: str) -> dict[str, Any] | None:
@@ -614,10 +649,12 @@ class Orchestrator:
                 cfg.hooks,
                 workflow_dir=cfg.workflow_path.parent,
                 reuse_policy=cfg.workspace_reuse_policy,
+                hook_env=_branch_hook_env(cfg),
             )
         elif self._workspace_manager is not None:
             self._workspace_manager.update_hooks(cfg.hooks)
             self._workspace_manager.update_reuse_policy(cfg.workspace_reuse_policy)
+            self._workspace_manager.update_hook_env(_branch_hook_env(cfg))
 
         await self._reconcile_running(cfg)
 
@@ -992,6 +1029,7 @@ class Orchestrator:
                     language=doc_language,
                     max_turns=cfg.agent.max_turns,
                     max_attempts=cfg.agent.max_attempts,
+                    auto_merge_on_done=cfg.agent.auto_merge_on_done,
                 )
                 await client.start_session(
                     initial_prompt=first_prompt,
@@ -1340,6 +1378,7 @@ class Orchestrator:
             max_turns=cfg.agent.max_turns,
             max_attempts=cfg.agent.max_attempts,
             is_rewind=is_rewind,
+            auto_merge_on_done=cfg.agent.auto_merge_on_done,
         )
         await new_client.start_session(
             initial_prompt=first_prompt,

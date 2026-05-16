@@ -7,7 +7,7 @@ the **same** session id back to the backend CLI. Otherwise:
 2. Prompt cache is rebuilt (Claude / Pi pay full cost on the next turn).
 3. Token totals on the JSON snapshot reset to zero, hiding real spend.
 
-This is real money on long-running tickets that flow through the seven-stage
+This is real money on long-running tickets that flow through the eight-stage
 pipeline across days. SMA-20 (round 4) added the persistence layer.
 
 ## On-disk shape
