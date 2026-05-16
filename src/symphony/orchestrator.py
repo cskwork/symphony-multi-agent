@@ -1442,14 +1442,41 @@ class Orchestrator:
                     exit_reason=reason,
                     state=entry.issue.state,
                 )
-            self._schedule_retry(
-                issue_id,
-                identifier=entry.issue.identifier,
-                attempt=1,
-                delay_ms=CONTINUATION_RETRY_DELAY_MS,
-                error=None,
-                kind="continuation",
-            )
+            # When the worker ran the ticket all the way to Done, the
+            # reconcile path that normally fires after_done/auto_merge/remove
+            # will *not* fire here: this entry was just popped from
+            # `_running` and `_reconcile_running` only iterates entries it
+            # finds there. Run the same terminal-state post-processing
+            # inline so a clean win produces the same artefacts as a
+            # reconcile-driven termination.
+            is_done = (entry.issue.state or "").strip().lower() == "done"
+            if is_done and cfg is not None and self._workspace_manager is not None:
+                if cfg.agent.auto_merge_on_done:
+                    await auto_merge_on_done_best_effort(
+                        workflow_dir=cfg.workflow_path.parent,
+                        branch=f"symphony/{entry.issue.identifier}",
+                        identifier=entry.issue.identifier,
+                        title=entry.issue.title,
+                        target_branch=cfg.agent.auto_merge_target_branch,
+                        exclude_paths=cfg.agent.auto_merge_exclude_paths,
+                    )
+                await self._workspace_manager.after_done_best_effort(
+                    entry.workspace_path,
+                    identifier=entry.issue.identifier,
+                    title=entry.issue.title,
+                )
+                await self._workspace_manager.remove(entry.workspace_path)
+                # Don't schedule a continuation — a Done ticket has nothing
+                # to continue. Skip straight to the worker_exit emit below.
+            else:
+                self._schedule_retry(
+                    issue_id,
+                    identifier=entry.issue.identifier,
+                    attempt=1,
+                    delay_ms=CONTINUATION_RETRY_DELAY_MS,
+                    error=None,
+                    kind="continuation",
+                )
         else:
             next_attempt = (entry.retry_attempt or 0) + 1
             cfg = self._workflow_state.current()
