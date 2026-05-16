@@ -10,6 +10,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.7] — 2026-05-16
+
+Board viewer gains runtime controls and the codex backend stops burning
+turns on workspace-write sandbox symlink traps.
+
+### Added
+- `tools/board-viewer/` now mirrors the TUI's most-used runtime controls:
+  per-card **Pause / Resume** buttons on running tickets, and the header
+  refresh button now triggers an `orchestrator refresh` (poll +
+  reconcile) before the local poll. `server.py` whitelists three POST
+  proxies under `/api/symphony/*` (`refresh`, `<id>/pause`,
+  `<id>/resume`); everything else stays read-only. Paused cards get a
+  yellow-toned badge and stopped pulse dot for at-a-glance status.
+
+### Fixed
+- `codex` backend auto-injects `sandbox_workspace_write.writable_roots`
+  for symlinked host paths so workers no longer burn turns repeating
+  "쓰기 불가" when `hooks.after_create` symlinks repo dirs (kanban/,
+  docs/, …) into the workspace. Targets are also exported as
+  `SYMPHONY_CODEX_WRITABLE_ROOTS` so wrapper scripts can forward the
+  same override. No-op when the sandbox is not `workspace-write`.
+
 ## [0.4.3] — 2026-05-16
 
 Managed background service launch, stricter default run serialization, and
