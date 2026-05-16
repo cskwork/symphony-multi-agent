@@ -9,6 +9,8 @@ real-integration runs since CI cannot guarantee those binaries.
 from __future__ import annotations
 
 import asyncio
+import shlex
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -484,18 +486,40 @@ def test_scan_workspace_symlinks_tolerates_missing_root(tmp_path: Path) -> None:
 def test_inject_writable_roots_modifies_direct_codex_command() -> None:
     out = _inject_writable_roots("codex app-server", ["/a", "/b"])
     assert out == (
-        'codex -c sandbox_workspace_write.writable_roots=["/a","/b"] app-server'
+        "codex -c 'sandbox_workspace_write.writable_roots=[\"/a\",\"/b\"]' app-server"
     )
 
 
 def test_inject_writable_roots_modifies_bare_codex_command() -> None:
     out = _inject_writable_roots("codex", ["/a"])
-    assert out == 'codex -c sandbox_workspace_write.writable_roots=["/a"]'
+    assert out == "codex -c 'sandbox_workspace_write.writable_roots=[\"/a\"]'"
 
 
 def test_inject_writable_roots_preserves_leading_whitespace() -> None:
     out = _inject_writable_roots("  codex app-server", ["/a"])
-    assert out.startswith("  codex -c sandbox_workspace_write.writable_roots=")
+    assert out.startswith("  codex -c 'sandbox_workspace_write.writable_roots=")
+
+
+def test_inject_writable_roots_quotes_special_paths_as_one_config_arg() -> None:
+    roots = [
+        '/tmp/root"; touch /tmp/pwn #',
+        "/tmp/space dir/quote'and\\slash",
+    ]
+
+    out = _inject_writable_roots("codex app-server", roots)
+
+    argv = shlex.split(out)
+    assert argv == [
+        "codex",
+        "-c",
+        (
+            'sandbox_workspace_write.writable_roots=["/tmp/root\\"; touch /tmp/pwn #",'
+            '"/tmp/space dir/quote\'and\\\\slash"]'
+        ),
+        "app-server",
+    ]
+    parsed = tomllib.loads(argv[2])
+    assert parsed["sandbox_workspace_write"]["writable_roots"] == roots
 
 
 def test_inject_writable_roots_skips_wrapper_scripts() -> None:
