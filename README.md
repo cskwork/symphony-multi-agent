@@ -347,6 +347,21 @@ progress:
 The mirror is read-only output — Symphony rewrites the file atomically;
 do not edit it by hand.
 
+#### macOS keep-awake
+
+While a run is active, Symphony holds a wake-lock on macOS so the screen
+saver / lock screen cannot interrupt a long unattended pipeline (the
+process itself is fine either way, but a locked display blocks operator
+attention and many auto-suspend policies). Disable per run with
+`--no-keep-awake`, or persist in `WORKFLOW.md`:
+
+```yaml
+system:
+  keep_awake: false   # default true; CLI --no-keep-awake also wins
+```
+
+Non-macOS hosts log `keep_awake_skipped` and continue without a wake-lock.
+
 ### 5. Inspect the result
 
 ```bash

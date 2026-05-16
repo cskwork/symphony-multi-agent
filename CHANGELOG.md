@@ -10,6 +10,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- macOS host wake-lock: while the orchestrator (and the `service start`
+  detached child) is running, Symphony spawns `caffeinate -d -i -w <pid>`
+  so the display and system stay awake, preventing the screen lock from
+  cancelling long unattended runs. Disable with `--no-keep-awake` or set
+  `system.keep_awake: false` in WORKFLOW.md. Non-macOS hosts are no-ops.
+
 ## [0.4.8] — 2026-05-16
 
 Workspace review handoff hardening for long-running file-board workflows.

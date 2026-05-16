@@ -379,6 +379,19 @@ class ProgressConfig:
 
 
 @dataclass(frozen=True)
+class SystemConfig:
+    """Host-OS integration toggles.
+
+    `keep_awake` prevents macOS from sleeping or locking the display while
+    the orchestrator is running. The CLI launches `caffeinate -d -i -w <pid>`
+    as a child; non-macOS hosts treat the flag as a no-op. CLI flag
+    `--no-keep-awake` overrides this for one run.
+    """
+
+    keep_awake: bool = True
+
+
+@dataclass(frozen=True)
 class PromptConfig:
     """External prompt files configured from WORKFLOW.md.
 
@@ -410,6 +423,7 @@ class ServiceConfig:
     server: ServerConfig
     tui: TuiConfig = field(default_factory=TuiConfig)
     progress: ProgressConfig = field(default_factory=ProgressConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
     prompts: PromptConfig = field(default_factory=PromptConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
@@ -921,6 +935,18 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         max_transitions=max_transitions,
     )
 
+    system_raw = cfg.get("system") or {}
+    if not isinstance(system_raw, dict):
+        system_raw = {}
+    raw_keep_awake = system_raw.get("keep_awake", True)
+    if isinstance(raw_keep_awake, bool):
+        keep_awake = raw_keep_awake
+    else:
+        raise ConfigValidationError(
+            "system.keep_awake must be a boolean", value=raw_keep_awake
+        )
+    system = SystemConfig(keep_awake=keep_awake)
+
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
     prompts = _build_prompt_config(cfg.get("prompts"), base_dir)
 
@@ -938,6 +964,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         server=server,
         tui=tui,
         progress=progress,
+        system=system,
         prompts=prompts,
         raw=dict(cfg),
         prompt_template=prompt_template,

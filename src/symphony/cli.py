@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from .errors import SymphonyError
+from .keep_awake import KeepAwake
 from .logging import configure_logging
 from .orchestrator import Orchestrator
 from .progress_md import ProgressFileWriter
@@ -71,6 +72,16 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="override WORKFLOW-PROGRESS.md location (relative to CWD)",
     )
+    parser.add_argument(
+        "--keep-awake",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "prevent host sleep/screen lock while running (macOS only; "
+            "no-op elsewhere). Defaults to on; pass --no-keep-awake to "
+            "disable, or set `system.keep_awake: false` in WORKFLOW.md."
+        ),
+    )
     return parser
 
 
@@ -88,11 +99,22 @@ async def _run(args: argparse.Namespace) -> int:
         log.error("workflow_load_failed", error=str(err))
         return 1
 
+    # CLI flag wins over WORKFLOW.md; both default to on for the macOS
+    # "lock the screen on me and I lose the run" case the user flagged.
+    keep_awake_enabled = (
+        args.keep_awake if args.keep_awake is not None else cfg.system.keep_awake
+    )
+    keep_awake = KeepAwake() if keep_awake_enabled else None
+    if keep_awake is not None:
+        keep_awake.start()
+
     orchestrator = Orchestrator(state)
     try:
         await orchestrator.start()
     except SymphonyError as exc:
         log.error("startup_failed", error=str(exc))
+        if keep_awake is not None:
+            keep_awake.stop()
         return 1
 
     # Register the progress writer BEFORE any subsequent `await` so the
@@ -174,6 +196,8 @@ async def _run(args: argparse.Namespace) -> int:
         await orchestrator.stop()
         if runner is not None:
             await runner.cleanup()
+        if keep_awake is not None:
+            keep_awake.stop()
         log.info("shutdown_complete")
     return 0
 
