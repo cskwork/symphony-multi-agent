@@ -270,7 +270,7 @@ function updateBranchPolicy(policy) {
 function updateBranchPolicyFromGit(gitInfo) {
   if (!state.branchPolicy || !gitInfo?.ok) return;
   const current = gitInfo.current_branch || "current branch";
-  const repo = gitInfo.repo_root ? gitInfo.repo_root.split("/").filter(Boolean).pop() : "";
+  const repo = repoNameFromGitInfo(gitInfo);
   const baseLabel = state.branchPolicy.base_branch === "current branch"
     ? `${repo ? repo + "/" : ""}${current}`
     : state.branchPolicy.base_branch;
@@ -287,6 +287,10 @@ function updateBranchPolicyFromGit(gitInfo) {
   }
 }
 
+function repoNameFromGitInfo(gitInfo) {
+  return gitInfo?.repo_root ? gitInfo.repo_root.split("/").filter(Boolean).pop() : "";
+}
+
 async function refreshBranchControls() {
   if (!branchControlsEl || !featureBaseSelect || !mergeTargetSelect) return;
   if (state.branchRefreshInFlight || state.branchSaveInFlight) return;
@@ -297,19 +301,23 @@ async function refreshBranchControls() {
       branchControlsEl.hidden = true;
       return;
     }
+    const repoSlash = repoNameFromGitInfo(res.data) ? repoNameFromGitInfo(res.data) + "/" : "";
+    // emptyOpt(value="") = 정책에 base 명시 안 함 → runtime current 사용.
+    // list에도 같은 브랜치가 있으니 (default) 표기로 시각적 구분.
+    const currentFull = res.data.current_branch
+      ? `${repoSlash}${res.data.current_branch} (default)`
+      : "current branch (default)";
     renderBranchSelect(featureBaseSelect, res.data.branches || [], {
       current: res.data.current_branch || "",
+      repo: repoNameFromGitInfo(res.data),
       selected: res.data.feature_base_branch || "",
-      emptyLabel: res.data.current_branch
-        ? `current (${res.data.current_branch})`
-        : "current branch",
+      emptyLabel: currentFull,
     });
     renderBranchSelect(mergeTargetSelect, res.data.branches || [], {
       current: res.data.current_branch || "",
+      repo: repoNameFromGitInfo(res.data),
       selected: res.data.merge_target_branch || "",
-      emptyLabel: res.data.current_branch
-        ? `same as base/current`
-        : "same as base/current",
+      emptyLabel: currentFull,
     });
     updateBranchPolicyFromGit(res.data);
     branchControlsEl.hidden = false;
@@ -318,18 +326,28 @@ async function refreshBranchControls() {
   }
 }
 
-function renderBranchSelect(select, branches, { selected, emptyLabel }) {
+function renderBranchSelect(select, branches, { current, repo, selected, emptyLabel }) {
   select.innerHTML = "";
-  select.appendChild(el("option", { value: "" }, emptyLabel));
+  const emptyOpt = el("option", { value: "", title: emptyLabel }, emptyLabel);
+  select.appendChild(emptyOpt);
   for (const branch of branches) {
     if (branch.startsWith("symphony/")) continue;
-    select.appendChild(el("option", { value: branch }, branch));
+    // list 안에서는 repo prefix만 붙이고 (current) suffix는 emptyOpt의 (default)와 분리.
+    const label = branch === current && repo ? `${repo}/${branch}` : branch;
+    select.appendChild(el("option", { value: branch, title: label }, label));
   }
   select.value = selected || "";
   if (selected && select.value !== selected) {
-    select.appendChild(el("option", { value: selected }, selected));
+    select.appendChild(el("option", { value: selected, title: selected }, selected));
     select.value = selected;
   }
+  // 닫힌 select에 hover하면 현재 선택된 옵션의 풀텍스트를 tooltip으로 보여준다.
+  const selectedOpt = select.options[select.selectedIndex];
+  select.title = selectedOpt ? selectedOpt.textContent : "";
+  select.onchange = (e) => {
+    const opt = select.options[select.selectedIndex];
+    select.title = opt ? opt.textContent : "";
+  };
 }
 
 async function saveSelectedBranchPolicy(changedSelect) {

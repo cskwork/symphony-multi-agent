@@ -1,30 +1,67 @@
-/* Symphony Board Viewer — 다크 테마 (TUI 톤) */
+/* Symphony Board Viewer — 한국어 가독성 우선 다크 테마
+   디자인 원칙:
+   - 색은 OKLCH 기반 따뜻한 graphite (순흑/순백 금지, 브랜드 hue쪽 살짝 틴트)
+   - 모노스페이스는 ID/토큰/코드에만 사용, 본문은 Pretendard sans
+   - 한국어는 word-break: keep-all + overflow-wrap: anywhere 로 어절 보존
+   - 1.25 비율 type scale, 카드 in 카드 금지, 사이드 스트라이프 금지
+*/
 
 :root {
-  /* UI scale — board.js가 +/− 버튼/단축키로 갱신하고 localStorage에 저장.
-     header / board / footer 영역에만 적용되어 modal/backdrop 좌표는 보존된다. */
+  /* UI scale */
   --ui-zoom: 1;
-  --bg: #0d1117;
-  --bg-elev-1: #11161d;
-  --bg-elev-2: #161b22;
-  --bg-elev-3: #1c232c;
-  --border: #2a313c;
-  --border-strong: #3b4350;
-  --fg: #e6edf3;
-  --fg-muted: #8b949e;
-  --fg-dim: #6e7681;
-  --accent: #5274ec;
-  --accent-soft: rgba(82, 116, 236, 0.18);
-  --good: #3fb950;
-  --warn: #d29922;
-  --danger: #f85149;
-  --p1: #f85149;
-  --p2: #d29922;
-  --p3: #58a6ff;
-  --p4: #6e7681;
-  --running: #3fb950;
-  --shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-  --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* Base palette — OKLCH로 따뜻한 graphite. lightness가 0/100 근처일수록 chroma는 낮춤. */
+  --bg:          oklch(17.5% 0.012 260);
+  --bg-elev-1:   oklch(20.5% 0.013 260);
+  --bg-elev-2:   oklch(24%   0.014 260);
+  --bg-elev-3:   oklch(28%   0.015 260);
+  --border:      oklch(33%   0.015 260);
+  --border-strong: oklch(42% 0.018 260);
+
+  /* Text — 순흑/순백 피해 살짝 따뜻하게 */
+  --fg:         oklch(96%   0.012 95);
+  --fg-muted:   oklch(74%   0.012 260);
+  --fg-dim:     oklch(58%   0.012 260);
+
+  /* Accent — 절제된 indigo (한국 SaaS 톤) */
+  --accent:        oklch(68% 0.18 270);
+  --accent-strong: oklch(74% 0.20 270);
+  --accent-soft:   oklch(68% 0.18 270 / 0.16);
+  --accent-fg:     oklch(98% 0.005 270);
+
+  /* Semantic */
+  --good:   oklch(74% 0.16 150);
+  --warn:   oklch(78% 0.14  80);
+  --danger: oklch(70% 0.20  25);
+  --info:   oklch(75% 0.13 230);
+
+  /* Priority */
+  --p1: oklch(70% 0.20  25);
+  --p2: oklch(78% 0.14  80);
+  --p3: oklch(75% 0.13 230);
+  --p4: oklch(64% 0.012 260);
+
+  --running: var(--good);
+
+  /* Shadows — 한 단계 더 부드럽게 */
+  --shadow-card: 0 1px 0 oklch(100% 0 0 / 0.03), 0 1px 2px oklch(0% 0 0 / 0.35);
+  --shadow-elev: 0 12px 32px oklch(0% 0 0 / 0.5), 0 2px 6px oklch(0% 0 0 / 0.4);
+
+  /* Type — 한국어 우선 sans, mono는 ID/토큰 전용 */
+  --sans: "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont,
+          "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas,
+          "Liberation Mono", monospace;
+
+  /* Tracking — Pretendard는 한국어에서 약한 음의 트래킹이 가독성 ↑ */
+  --tracking-kr: -0.01em;
+  --tracking-kr-tight: -0.02em;
+
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
 }
 
 * {
@@ -38,10 +75,21 @@ body {
   height: 100%;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo",
-    "Noto Sans KR", system-ui, sans-serif;
-  font-size: 16px;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-feature-settings: "ss01", "cv11", "tnum";   /* Pretendard ss01 = 한국형 글리프 */
+  letter-spacing: var(--tracking-kr);
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+
+  /* 한국어 어절 보존 — 전역 기본값.
+     anywhere가 아니라 break-word: 정상 상황에서는 어절 보존,
+     단어가 컨테이너보다 길 때만 깨짐. anywhere를 쓰면 한국어가 글자 단위로 깨진다. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-break: strict;
 }
 
 body {
@@ -50,56 +98,87 @@ body {
   min-height: 100vh;
 }
 
-/* -------------------- Header -------------------- */
+/* 코드/ID/숫자 등 mono가 필요한 곳은 tracking 0 + 어절 깨짐 허용 */
+code,
+kbd,
+pre,
+.mono,
+[class*="-id"],
+.card-id,
+.card-priority,
+.label-chip,
+.agent-badge,
+.column-count,
+.running-badge,
+.meta-table td,
+.meta-table th,
+.settings-paths,
+.settings-env-preview,
+.last-poll,
+.ticket-count,
+.zoom-value {
+  font-family: var(--mono);
+  letter-spacing: 0;
+  font-feature-settings: "tnum";
+}
+
+/* -------------------- Header --------------------
+   컨텐츠가 많아 한 줄에 못 들어가면 좌/우 그룹이 두 줄로 wrap된다.
+   PC 와이드(>= 1280px) 에서는 보통 한 줄에 들어맞고, 그보다 좁아지면 자연스럽게 분리. */
 .app-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  padding: 14px 22px;
+  gap: 10px 16px;
+  padding: 12px 22px;
   background: var(--bg-elev-1);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
-  /* zoom은 modal-backdrop(고정 좌표)에 영향 주지 않게 header/board/footer에만 적용 */
   zoom: var(--ui-zoom, 1);
 }
 
 .header-left {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
   min-width: 0;
 }
 
 .app-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-kr-tight);
   color: var(--fg);
+  white-space: nowrap;
 }
 
 .repo-name {
   color: var(--fg-muted);
   font-family: var(--mono);
-  font-size: 14px;
+  font-size: 13px;
+  letter-spacing: 0;
 }
 
 .branch-policy {
   color: var(--fg-muted);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11.5px;
+  letter-spacing: 0;
   line-height: 1;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 5px 8px;
+  border-radius: var(--r-pill);
+  padding: 5px 9px;
   white-space: nowrap;
 }
 
 .branch-policy[data-enabled="false"] {
   color: var(--warn);
-  border-color: rgba(210, 153, 34, 0.55);
+  border-color: color-mix(in oklch, var(--warn) 50%, transparent);
 }
 
 .branch-controls {
@@ -111,58 +190,65 @@ body {
 .branch-select-label {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--fg-muted);
-  font-family: var(--mono);
   font-size: 12px;
   white-space: nowrap;
 }
 
 .branch-select {
-  max-width: 170px;
-  min-width: 118px;
+  /* 긴 브랜치명도 잘리지 않게 폭 확장 + 잘릴 경우 ellipsis 처리.
+     <select>는 native 위젯이라 ellipsis 지원이 브라우저별로 불완전하니
+     JS 쪽에서 option.title 을 세팅해 hover 풀텍스트도 보장한다. */
+  max-width: 320px;
+  min-width: 160px;
+  width: auto;
   height: 28px;
   background: var(--bg-elev-2);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--r-sm);
   font-family: var(--mono);
   font-size: 12px;
+  padding: 0 8px;
   outline: none;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s;
 }
 
-.branch-select:focus {
-  border-color: var(--accent);
-}
+.branch-select:hover { border-color: var(--border-strong); }
+.branch-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 
 .header-right {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
+  gap: 8px 12px;
+  justify-content: flex-end;
 }
 
 .status-block {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .status-dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--fg-dim);
   display: inline-block;
+  transition: background 0.2s, box-shadow 0.2s;
 }
 
 .status-dot[data-state="alive"] {
   background: var(--good);
-  box-shadow: 0 0 6px var(--good);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--good) 25%, transparent);
 }
 .status-dot[data-state="down"] {
   background: var(--danger);
-  box-shadow: 0 0 6px var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 25%, transparent);
 }
 .status-dot[data-state="unknown"] {
   background: var(--fg-dim);
@@ -170,62 +256,67 @@ body {
 
 .status-text {
   color: var(--fg-muted);
-  font-family: var(--mono);
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .meta-block {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 12px;
+  letter-spacing: 0;
   color: var(--fg-muted);
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .search-input {
   background: var(--bg-elev-2);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 7px 12px;
-  font-family: var(--mono);
-  font-size: 14px;
-  width: 220px;
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  letter-spacing: var(--tracking-kr);
+  width: 240px;
   outline: none;
-  transition: border-color 0.12s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
+.search-input::placeholder { color: var(--fg-dim); }
+.search-input:hover { border-color: var(--border-strong); }
 .search-input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .refresh-btn {
   background: var(--accent);
-  color: white;
-  border: none;
-  border-radius: 4px;
+  color: var(--accent-fg);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-sm);
   padding: 8px 14px;
-  font-size: 14px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+  letter-spacing: var(--tracking-kr);
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  font-weight: 500;
+  transition: filter 0.15s, transform 0.05s;
 }
-.refresh-btn:hover {
-  filter: brightness(1.1);
-}
-.refresh-btn:active {
-  transform: translateY(1px);
-}
+.refresh-btn:hover { filter: brightness(1.08); }
+.refresh-btn:active { transform: translateY(1px); }
+.refresh-btn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 
 /* -------------------- Zoom controls -------------------- */
 .zoom-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 6px;
+  gap: 2px;
+  margin-left: 4px;
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-sm);
   padding: 3px 4px;
 }
 
@@ -234,34 +325,23 @@ body {
   color: var(--fg-muted);
   border: none;
   border-radius: 4px;
-  width: 30px;
-  height: 28px;
-  font-size: 16px;
+  width: 28px;
+  height: 26px;
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
   font-family: var(--mono);
-  transition: background 0.1s, color 0.1s;
+  transition: background 0.12s, color 0.12s;
 }
-.zoom-btn:hover {
-  background: var(--bg-elev-3);
-  color: var(--fg);
-}
-.zoom-btn:active {
-  transform: translateY(1px);
-}
-.zoom-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.zoom-btn.zoom-reset {
-  font-size: 14px;
-}
+.zoom-btn:hover { background: var(--bg-elev-3); color: var(--fg); }
+.zoom-btn:active { transform: translateY(1px); }
+.zoom-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.zoom-btn.zoom-reset { font-size: 13px; }
 
 .zoom-value {
-  font-family: var(--mono);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--fg-muted);
-  min-width: 44px;
+  min-width: 42px;
   text-align: center;
   user-select: none;
 }
@@ -269,11 +349,10 @@ body {
 /* -------------------- Board (Kanban) -------------------- */
 .board {
   flex: 1 1 0;
-  /* flex item이 100% height을 자식에게 전달하려면 min-height: 0 이 필요. */
   min-height: 0;
   display: flex;
-  gap: 12px;
-  padding: 18px;
+  gap: 14px;
+  padding: 20px 22px;
   overflow-x: auto;
   overflow-y: hidden;
   align-items: stretch;
@@ -281,27 +360,28 @@ body {
 }
 
 .column {
-  flex: 0 0 320px;
+  /* 한국어 제목은 어절 단위로 2~3줄 wrap 되는 게 자연스러움 → 320 → 360 으로 살짝 확장 */
+  flex: 0 0 360px;
   display: flex;
   flex-direction: column;
   background: var(--bg-elev-1);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-md);
   min-height: 0;
-  /* 100% — board(flex:1)가 viewport-header-footer 만큼 자라고, 컬럼은 그 board를 채움.
-     기존 calc(100vh - 150px)은 zoom 적용 시 어긋났음 + 작은 화면에선 카드가 잘림. */
   height: 100%;
   max-height: 100%;
+  box-shadow: var(--shadow-card);
 }
 
 .column-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 11px 14px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--border);
-  font-size: 14.5px;
+  font-size: 14px;
   font-weight: 600;
+  letter-spacing: var(--tracking-kr-tight);
   color: var(--fg);
 }
 
@@ -315,28 +395,25 @@ body {
 .column-count {
   background: var(--bg-elev-3);
   color: var(--fg-muted);
-  border-radius: 10px;
+  border-radius: var(--r-pill);
   padding: 2px 10px;
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 400;
+  font-size: 11.5px;
+  font-weight: 500;
 }
 
 .column-body {
   flex: 1;
   overflow-y: auto;
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
-.column-body::-webkit-scrollbar {
-  width: 6px;
-}
-.column-body::-webkit-scrollbar-track {
-  background: transparent;
-}
+.column-body::-webkit-scrollbar { width: 6px; }
+.column-body::-webkit-scrollbar-track { background: transparent; }
 .column-body::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: 3px;
@@ -346,20 +423,21 @@ body {
   color: var(--fg-dim);
   font-size: 13px;
   text-align: center;
-  padding: 20px 10px;
-  font-style: italic;
+  padding: 24px 12px;
+  font-style: normal;
 }
 
 /* -------------------- Card -------------------- */
 .card {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 12px 13px;
+  border-radius: var(--r-md);
+  padding: 13px 14px;
   cursor: pointer;
   position: relative;
-  transition: border-color 0.12s, background 0.12s, transform 0.05s;
+  transition: border-color 0.15s, background 0.15s, transform 0.05s, box-shadow 0.15s;
   outline: none;
+  box-shadow: var(--shadow-card);
 }
 
 .card:hover {
@@ -370,31 +448,31 @@ body {
 .card:focus-visible,
 .card.focused {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .card.running {
-  border-color: rgba(63, 185, 80, 0.4);
+  border-color: color-mix(in oklch, var(--good) 45%, var(--border));
 }
 
 .card-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 7px;
+  margin-bottom: 8px;
 }
 
 .card-id {
   font-family: var(--mono);
-  font-size: 14px;
-  color: var(--accent);
+  font-size: 13px;
+  color: var(--accent-strong);
   font-weight: 600;
+  letter-spacing: 0;
 }
 
 .card-priority {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
   padding: 2px 7px;
   border-radius: 4px;
   border: 1px solid currentColor;
@@ -406,11 +484,16 @@ body {
 .card-priority[data-p="4"] { color: var(--p4); }
 
 .card-title {
-  font-size: 15.5px;
+  font-size: 14.5px;
+  font-weight: 500;
   color: var(--fg);
-  line-height: 1.4;
-  word-break: break-word;
-  margin-bottom: 8px;
+  line-height: 1.5;
+  letter-spacing: var(--tracking-kr);
+  margin-bottom: 9px;
+  /* 핵심: 한글 어절 단위 줄바꿈 (단어가 컨테이너보다 길 때만 break-word) */
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-break: strict;
 }
 
 .agent-badges {
@@ -422,12 +505,11 @@ body {
 
 .agent-badge {
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--fg-muted);
-  font-family: var(--mono);
-  font-size: 11px;
+  font-size: 10.5px;
   line-height: 1;
-  padding: 4px 6px;
+  padding: 4px 7px;
   white-space: nowrap;
 }
 
@@ -438,12 +520,14 @@ body {
 
 .agent-badge.working {
   color: var(--good);
-  border-color: rgba(63, 185, 80, 0.5);
+  border-color: color-mix(in oklch, var(--good) 50%, transparent);
+  background: color-mix(in oklch, var(--good) 10%, transparent);
 }
 
 .agent-badge.done {
-  color: var(--accent);
-  border-color: rgba(82, 116, 236, 0.55);
+  color: var(--accent-strong);
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
 }
 
 .card-labels {
@@ -454,35 +538,33 @@ body {
 
 .label-chip {
   background: var(--accent-soft);
-  color: #aab9f3;
-  font-family: var(--mono);
-  font-size: 12px;
+  color: color-mix(in oklch, var(--accent-strong) 80%, var(--fg) 20%);
+  font-size: 11px;
   padding: 2px 8px;
-  border-radius: 10px;
-  line-height: 1.5;
+  border-radius: var(--r-pill);
+  line-height: 1.6;
 }
 
 /* Running indicator */
 .running-badge {
   position: absolute;
-  top: 9px;
-  right: 10px;
+  top: 10px;
+  right: 11px;
   display: flex;
   align-items: center;
   gap: 5px;
-  background: rgba(63, 185, 80, 0.12);
+  background: color-mix(in oklch, var(--good) 14%, transparent);
   color: var(--running);
-  font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   padding: 3px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(63, 185, 80, 0.3);
+  border-radius: var(--r-pill);
+  border: 1px solid color-mix(in oklch, var(--good) 35%, transparent);
   line-height: 1.3;
 }
 
 .pulse-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--running);
   animation: pulse 1.4s ease-in-out infinite;
@@ -490,76 +572,78 @@ body {
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.35; transform: scale(0.7); }
+  50%      { opacity: 0.35; transform: scale(0.7); }
 }
 
-/* When card is running, push id row down so it doesn't overlap badge */
-.card.running .card-head {
-  padding-right: 110px;
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot { animation: none; }
+  * { transition-duration: 0.01ms !important; }
 }
 
-/* paused: 진동 멈춰서 일시정지 식별 — 색은 약간 더 노란 톤 */
+.card.running .card-head { padding-right: 110px; }
+
 .card.paused {
-  outline: 1px solid rgba(255, 200, 80, 0.45);
+  outline: 1px solid color-mix(in oklch, var(--warn) 50%, transparent);
 }
 .running-badge.paused {
-  background: rgba(255, 200, 80, 0.12);
-  color: #e3b341;
-  border-color: rgba(255, 200, 80, 0.4);
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
 }
 .running-badge.paused .pulse-dot {
   animation: none;
-  background: #e3b341;
-  opacity: 0.7;
+  background: var(--warn);
+  opacity: 0.75;
 }
 
 /* -------------------- Card action buttons -------------------- */
 .card-actions {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .card-btn {
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: var(--tracking-kr);
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-elev-3);
   color: var(--fg);
   cursor: pointer;
   line-height: 1.3;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .card-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--bg-elev-1);
+  border-color: var(--border-strong);
 }
-.card-btn:disabled {
-  opacity: 0.5;
-  cursor: progress;
-}
+.card-btn:disabled { opacity: 0.5; cursor: progress; }
 .card-btn.pause:hover:not(:disabled) {
-  border-color: rgba(255, 200, 80, 0.55);
-  color: #e3b341;
+  border-color: color-mix(in oklch, var(--warn) 55%, transparent);
+  color: var(--warn);
 }
 .card-btn.resume:hover:not(:disabled) {
-  border-color: rgba(63, 185, 80, 0.55);
+  border-color: color-mix(in oklch, var(--good) 55%, transparent);
   color: var(--running);
 }
 
 /* -------------------- Flash toast -------------------- */
 .flash-toast {
   position: fixed;
-  right: 18px;
-  bottom: 18px;
+  right: 20px;
+  bottom: 20px;
   z-index: 1000;
-  background: rgba(248, 81, 73, 0.92);
-  color: white;
-  padding: 8px 14px;
-  border-radius: 8px;
+  background: color-mix(in oklch, var(--danger) 92%, black 8%);
+  color: var(--accent-fg);
+  padding: 10px 16px;
+  border-radius: var(--r-md);
   font-size: 13px;
-  font-family: var(--mono);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
-  animation: toast-in 160ms ease-out;
+  letter-spacing: var(--tracking-kr);
+  box-shadow: var(--shadow-elev);
+  animation: toast-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
@@ -570,7 +654,8 @@ body {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: color-mix(in oklch, black 65%, transparent);
+  backdrop-filter: blur(2px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -578,23 +663,18 @@ body {
   padding: 24px;
 }
 
-.modal-backdrop[hidden] {
-  display: none;
-}
+.modal-backdrop[hidden] { display: none; }
 
 .modal {
   background: var(--bg-elev-1);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  width: min(900px, 100%);
+  border-radius: var(--r-lg);
+  width: min(920px, 100%);
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow);
-  /* flex 컨테이너 내부의 자식이 overflow-y scroll을 받으려면
-     부모에 overflow: hidden 이 있어야 height 계산이 정상화된다. */
+  box-shadow: var(--shadow-elev);
   overflow: hidden;
-  /* 상세보기 영역에도 zoom 적용 — backdrop은 viewport 그대로, 안쪽만 확대/축소 */
   zoom: var(--ui-zoom, 1);
 }
 
@@ -602,17 +682,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px;
+  padding: 18px 24px;
   border-bottom: 1px solid var(--border);
   gap: 14px;
 }
 
 .modal-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--fg);
-  font-family: var(--mono);
+  letter-spacing: var(--tracking-kr-tight);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -627,26 +707,29 @@ body {
 }
 
 .modal-link {
-  color: var(--accent);
+  color: var(--accent-strong);
   text-decoration: none;
-  font-size: 14px;
-  padding: 6px 10px;
+  font-size: 13px;
+  padding: 6px 11px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--r-sm);
+  transition: border-color 0.15s, background 0.15s;
 }
 .modal-link:hover {
   border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .modal-close {
   background: transparent;
   border: none;
   color: var(--fg-muted);
-  font-size: 26px;
+  font-size: 24px;
   cursor: pointer;
   line-height: 1;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: var(--r-sm);
+  transition: background 0.15s, color 0.15s;
 }
 .modal-close:hover {
   background: var(--bg-elev-3);
@@ -655,20 +738,15 @@ body {
 
 .modal-body {
   flex: 1 1 auto;
-  /* flex item이 overflow-y: auto/scroll 을 정상 동작시키려면 min-height: 0 필수.
-     기본값 auto 이면 컨텐츠 크기만큼 늘어나서 scroll 영역이 생성되지 않는다. */
   min-height: 0;
-  overflow-y: scroll;        /* 항상 scrollbar 트랙을 표시 (auto는 컨텐츠 적을 때 숨김) */
+  overflow-y: scroll;
   overflow-x: hidden;
-  padding: 20px 26px 28px;
-  /* Firefox */
+  padding: 22px 28px 30px;
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
 
-.modal-body::-webkit-scrollbar {
-  width: 10px;
-}
+.modal-body::-webkit-scrollbar { width: 10px; }
 .modal-body::-webkit-scrollbar-track {
   background: var(--bg-elev-2);
   border-radius: 5px;
@@ -678,32 +756,31 @@ body {
   border-radius: 5px;
   border: 2px solid var(--bg-elev-1);
 }
-.modal-body::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
-}
+.modal-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-.modal-meta {
-  margin-bottom: 18px;
-}
+.modal-meta { margin-bottom: 20px; }
 
 .meta-table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 14.5px;
+  font-size: 13.5px;
 }
 
 .meta-table th,
 .meta-table td {
   text-align: left;
   vertical-align: top;
-  padding: 7px 12px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
+  word-break: break-all;       /* 메타값은 경로/해시 등 mono 정보가 많아 break-all 유지 */
+  overflow-wrap: anywhere;
 }
 
 .meta-table th {
   color: var(--fg-muted);
   font-weight: 500;
   font-family: var(--mono);
+  letter-spacing: 0;
   width: 150px;
   white-space: nowrap;
 }
@@ -711,14 +788,19 @@ body {
 .meta-table td {
   color: var(--fg);
   font-family: var(--mono);
-  word-break: break-word;
+  letter-spacing: 0;
 }
 
-/* Markdown body */
+/* Markdown body — 본문은 sans로 한글 가독성 우선 */
 .modal-content {
-  font-size: 16.5px;
-  line-height: 1.7;
+  font-family: var(--sans);
+  font-size: 15.5px;
+  line-height: 1.75;
+  letter-spacing: var(--tracking-kr);
   color: var(--fg);
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  line-break: strict;
 }
 
 .modal-content h1,
@@ -726,30 +808,41 @@ body {
 .modal-content h3,
 .modal-content h4 {
   color: var(--fg);
-  margin-top: 1.4em;
+  margin-top: 1.5em;
   margin-bottom: 0.5em;
+  letter-spacing: var(--tracking-kr-tight);
+  line-height: 1.35;
 }
 
-.modal-content h1 { font-size: 23px; }
-.modal-content h2 { font-size: 19.5px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
-.modal-content h3 { font-size: 17.5px; }
+.modal-content h1 { font-size: 24px; font-weight: 700; }
+.modal-content h2 {
+  font-size: 20px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.modal-content h3 { font-size: 17px; font-weight: 600; }
+.modal-content h4 { font-size: 15px; font-weight: 600; color: var(--fg-muted); }
+
+.modal-content p { margin: 0 0 1em; }
 
 .modal-content code {
   background: var(--bg-elev-3);
   padding: 2px 7px;
-  border-radius: 3px;
+  border-radius: 4px;
   font-family: var(--mono);
-  font-size: 14.5px;
-  color: #f0a070;
+  font-size: 13.5px;
+  letter-spacing: 0;
+  color: oklch(82% 0.13 50);
 }
 
 .modal-content pre {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
-  padding: 14px;
-  border-radius: 5px;
+  padding: 14px 16px;
+  border-radius: var(--r-sm);
   overflow-x: auto;
-  font-size: 14.5px;
+  font-size: 13.5px;
   line-height: 1.6;
 }
 
@@ -760,71 +853,99 @@ body {
 }
 
 .modal-content blockquote {
-  border-left: 4px solid var(--accent);
-  margin: 0;
-  padding: 6px 16px;
+  border-left: 3px solid var(--accent);
+  margin: 0 0 1em;
+  padding: 8px 16px;
   color: var(--fg-muted);
   background: var(--bg-elev-2);
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 
 .modal-content ul,
 .modal-content ol {
   padding-left: 26px;
+  margin: 0 0 1em;
 }
+
+.modal-content li { margin-bottom: 0.35em; }
 
 .modal-content table {
   border-collapse: collapse;
-  margin: 12px 0;
+  margin: 14px 0;
+  width: 100%;
+  font-size: 13.5px;
 }
 .modal-content th,
 .modal-content td {
   border: 1px solid var(--border);
-  padding: 7px 12px;
+  padding: 8px 12px;
+  text-align: left;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
+.modal-content th {
+  background: var(--bg-elev-2);
+  font-weight: 600;
+}
+
 .modal-content a {
-  color: var(--accent);
+  color: var(--accent-strong);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--accent) 35%, transparent);
+  text-underline-offset: 2px;
+  transition: text-decoration-color 0.15s;
+}
+.modal-content a:hover {
+  text-decoration-color: var(--accent);
+}
+
+.modal-content hr {
+  border: 0;
+  height: 1px;
+  background: var(--border);
+  margin: 1.5em 0;
 }
 
 /* -------------------- Footer -------------------- */
 .app-footer {
-  padding: 9px 22px;
+  padding: 10px 24px;
   background: var(--bg-elev-1);
   border-top: 1px solid var(--border);
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: 12.5px;
   text-align: center;
-  font-family: var(--mono);
   zoom: var(--ui-zoom, 1);
 }
 
 .app-footer kbd {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 2px 7px;
-  font-size: 12px;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
   color: var(--fg-muted);
   font-family: var(--mono);
 }
 
 /* -------------------- Filtered (search hidden) -------------------- */
-.card.hidden {
-  display: none;
-}
+.card.hidden { display: none; }
 
 /* -------------------- Settings modal -------------------- */
 .settings-btn {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
   color: var(--fg);
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  letter-spacing: var(--tracking-kr);
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 .settings-btn:hover { background: var(--bg-elev-3); border-color: var(--border-strong); }
-.settings-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .settings-modal {
   max-width: 720px;
@@ -833,7 +954,7 @@ body {
   display: flex;
   flex-direction: column;
 }
-.settings-body { overflow-y: auto; padding: 12px 16px; }
+.settings-body { overflow-y: auto; padding: 14px 18px; }
 
 .settings-paths {
   font-family: var(--mono);
@@ -842,96 +963,107 @@ body {
   margin-right: 8px;
   user-select: text;
   word-break: break-all;
+  letter-spacing: 0;
 }
 
 .settings-status {
   min-height: 18px;
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--fg-muted);
   margin-bottom: 8px;
+  letter-spacing: var(--tracking-kr);
 }
 .settings-status[data-kind="error"] { color: var(--danger); }
 .settings-status[data-kind="ok"] { color: var(--good); }
 
 .settings-section {
   margin: 14px 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: var(--bg-elev-1);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--r-md);
 }
 .settings-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .settings-section-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--fg);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
 }
 .settings-section-head .settings-section-title { margin-bottom: 0; }
 
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
+  gap: 10px 14px;
 }
-.settings-cell { display: flex; flex-direction: column; gap: 3px; }
+.settings-cell { display: flex; flex-direction: column; gap: 4px; }
 .settings-label {
   font-size: 11px;
   color: var(--fg-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  font-weight: 500;
 }
 .settings-input {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--fg);
   font-family: var(--mono);
-  font-size: 12px;
-  padding: 5px 8px;
-  border-radius: 4px;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
   min-width: 0;
+  letter-spacing: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.settings-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-.settings-select { padding: 4px 6px; }
+.settings-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.settings-select { padding: 5px 8px; }
 
 .settings-add-btn {
   background: var(--bg-elev-2);
   border: 1px dashed var(--border-strong);
   color: var(--fg);
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: 4px 12px;
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
   cursor: pointer;
+  letter-spacing: var(--tracking-kr);
+  transition: background 0.15s, border-style 0.15s;
 }
 .settings-add-btn:hover { background: var(--bg-elev-3); border-style: solid; }
 
 .settings-db-list { display: flex; flex-direction: column; gap: 10px; }
-.settings-empty { color: var(--fg-dim); font-size: 12px; margin: 4px 0; }
+.settings-empty { color: var(--fg-dim); font-size: 12.5px; margin: 6px 0; }
 
 .settings-db-card {
   background: var(--bg-elev-2);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
 }
 .settings-db-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 .settings-db-label {
   font-size: 11px;
   color: var(--fg-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
 }
 .settings-db-name { flex: 1 1 auto; max-width: 240px; }
 .settings-db-delete {
@@ -939,22 +1071,27 @@ body {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--danger);
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
   font-size: 11px;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
-.settings-db-delete:hover { background: rgba(248, 81, 73, 0.1); border-color: var(--danger); }
+.settings-db-delete:hover {
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+}
 
 .settings-env-preview {
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
   margin: 0;
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--fg-muted);
+  letter-spacing: 0;
   max-height: 160px;
   overflow: auto;
   white-space: pre-wrap;
@@ -965,16 +1102,20 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 12px 18px;
   border-top: 1px solid var(--border);
   background: var(--bg-elev-1);
 }
 .settings-cancel-btn,
 .settings-save-btn {
-  padding: 5px 14px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 7px 16px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-family: var(--sans);
+  letter-spacing: var(--tracking-kr);
+  white-space: nowrap;
   cursor: pointer;
+  transition: filter 0.15s, background 0.15s;
 }
 .settings-cancel-btn {
   background: transparent;
@@ -985,14 +1126,61 @@ body {
 .settings-save-btn {
   background: var(--accent);
   border: 1px solid var(--accent);
-  color: white;
+  color: var(--accent-fg);
   font-weight: 600;
 }
-.settings-save-btn:hover { filter: brightness(1.1); }
+.settings-save-btn:hover { filter: brightness(1.08); }
 .settings-save-btn:focus-visible,
-.settings-cancel-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.settings-cancel-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* -------------------- Responsive --------------------
+   - PC 와이드(>=1600): 컬럼 폭 살짝 키우고 보드 여백 늘려 한국어 본문이 시원하게.
+   - 데스크탑(1024–1599): 기본.
+   - 태블릿(641–1023): 헤더 두 줄 wrap이 자연스럽게 발동, 검색창 폭 축소.
+   - 모바일(<=640): 컬럼이 가로 스크롤로 한 번에 1개씩, 헤더 wrap, zoom-controls 숨김.
+*/
+
+@media (min-width: 1600px) {
+  .board { padding: 24px 28px; gap: 16px; }
+  .column { flex-basis: 380px; }
+  .app-header { padding: 14px 28px; }
+}
+
+@media (max-width: 1024px) {
+  .search-input { width: 200px; }
+}
+
+@media (max-width: 760px) {
+  .search-input { width: 100%; max-width: 240px; }
+  .app-title { font-size: 16px; }
+  .meta-block { font-size: 11.5px; }
+  .branch-policy { font-size: 11px; }
+}
 
 @media (max-width: 640px) {
   .settings-modal { width: 96vw; }
   .settings-grid { grid-template-columns: 1fr; }
+  .app-header { padding: 10px 14px; gap: 8px 10px; }
+  .board {
+    padding: 12px;
+    gap: 10px;
+    /* 모바일에선 컬럼이 한 번에 한 개씩 보이도록 가로 스크롤 + scroll-snap */
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
+  .column {
+    flex: 0 0 88vw;
+    max-width: 88vw;
+    scroll-snap-align: start;
+  }
+  .header-left { gap: 6px 10px; }
+  .header-right { gap: 6px 10px; width: 100%; justify-content: space-between; }
+  .branch-controls { flex-wrap: wrap; gap: 6px; }
+  .branch-select { min-width: 100px; max-width: 140px; }
+  .meta-block { display: none; }   /* 모바일은 last poll/ticket count 숨김 — 정보 밀도 우선순위 ↓ */
+  .zoom-controls { display: none; } /* 모바일에선 zoom 버튼 대신 시스템 핀치줌 */
+  .app-footer { font-size: 11.5px; padding: 8px 12px; }
+  .app-footer kbd { display: none; }
+  .modal-body { padding: 16px 18px 22px; }
+  .modal-content { font-size: 14.5px; }
 }
