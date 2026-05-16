@@ -88,6 +88,6 @@ part is human-side decomposition:
   must agree on a schema, write the schema down in a third ticket (or in
   a file the workspace will pick up via `after_create`) before launching
   them.
-- Time-box experiments: start with `agent.max_turns: 5` and `agent.max_concurrent_agents: 2`
+- Time-box experiments: start with `agent.max_turns: 5` and `agent.max_concurrent_agents: 1`
   while validating the decomposition. Crank up only after seeing a clean
   run.

@@ -36,12 +36,12 @@ hooks:
 
 agent:
   kind: claude
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_turns: 20
   max_concurrent_agents_by_state:
     Brief: 1
     Plan: 1
-    Build: 4
+    Build: 1
     Verify: 1
     QA: 1
     Polish: 1

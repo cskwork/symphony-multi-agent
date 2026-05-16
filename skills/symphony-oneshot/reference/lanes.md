@@ -242,18 +242,19 @@ to second-guess that file's owner.
 Configure in WORKFLOW.md:
 ```yaml
 agent:
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_concurrent_agents_by_state:
     Brief: 1        # only one brief
     Plan: 1         # only one plan
-    Build: 4        # parallelize implementation
+    Build: 1        # raise only when intentionally parallelizing implementation
     Verify: 1       # one verifier — avoids conflicting reruns
     QA: 1           # one QA — avoids screenshot collisions in artifacts/
     Polish: 1
     Deliver: 1
 ```
-The default `max_concurrent_agents: 4` makes Build the wide step. All other
-lanes are intentionally single-threaded.
+The default `max_concurrent_agents: 1` keeps OneShot sequential. Raise the
+top-level cap and `Build` lane cap together only when you intentionally want
+parallel implementation.
 
 ## Cross-reference
 

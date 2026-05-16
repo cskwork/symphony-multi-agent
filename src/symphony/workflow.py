@@ -32,9 +32,10 @@ DEFAULT_TERMINAL_STATES = ("Closed", "Cancelled", "Canceled", "Duplicate", "Done
 DEFAULT_BOARD_ROOT_NAME = "board"
 DEFAULT_POLL_INTERVAL_MS = 30_000
 DEFAULT_HOOK_TIMEOUT_MS = 60_000
-DEFAULT_MAX_CONCURRENT_AGENTS = 10
+DEFAULT_MAX_CONCURRENT_AGENTS = 1
 DEFAULT_MAX_TURNS = 20
 DEFAULT_MAX_TOTAL_TURNS = 60
+DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_MAX_RETRY_BACKOFF_MS = 300_000
 DEFAULT_CODEX_COMMAND = "codex app-server"
 DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
@@ -213,6 +214,8 @@ class AgentConfig:
     max_retry_backoff_ms: int
     max_concurrent_agents_by_state: dict[str, int]
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
+    # Soft cap for Review/QA rewinds back into In Progress. 0 disables.
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
     # When a ticket reaches the Done state cleanly, snapshot the workspace
     # into a single git commit (`git init` if no enclosing repo found).
     # Default ON so a fresh `pip install symphony-multi-agent` plus a
@@ -691,6 +694,11 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             agent_raw.get("max_concurrent_agents_by_state")
         ),
         max_total_turns=max_total_turns,
+        max_attempts=_validated_nonnegative_or_default(
+            agent_raw.get("max_attempts"),
+            DEFAULT_MAX_ATTEMPTS,
+            name="agent.max_attempts",
+        ),
         auto_commit_on_done=bool(
             agent_raw.get("auto_commit_on_done", True)
         ),
@@ -889,6 +897,23 @@ def _validated_positive_or_default(value: Any, default: int, *, name: str) -> in
         ) from exc
     if ivalue <= 0:
         raise ConfigValidationError(f"{name} must be a positive integer", value=value)
+    return ivalue
+
+
+def _validated_nonnegative_or_default(value: Any, default: int, *, name: str) -> int:
+    """Validate counters where 0 is an explicit off switch."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ConfigValidationError(f"{name} must be a non-negative integer", value=value)
+    try:
+        ivalue = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigValidationError(
+            f"{name} must be a non-negative integer", value=value
+        ) from exc
+    if ivalue < 0:
+        raise ConfigValidationError(f"{name} must be a non-negative integer", value=value)
     return ivalue
 
 

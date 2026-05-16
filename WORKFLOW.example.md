@@ -112,19 +112,21 @@ hooks:
 
 agent:
   kind: codex          # codex | claude | gemini | pi
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_turns: 20
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
+  # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
+  max_attempts: 3
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
-    Todo: 2
-    Explore: 2
-    "In Progress": 4
-    Review: 2
-    QA: 2
-    Learn: 2
+    Todo: 1
+    Explore: 1
+    "In Progress": 1
+    Review: 1
+    QA: 1
+    Learn: 1
   # When a ticket reaches Done cleanly, snapshot the workspace into one
   # git commit (`<identifier>: <title>`). If the workspace is nested
   # inside an existing repo, the commit lands there; otherwise `git init`

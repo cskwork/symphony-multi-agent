@@ -68,6 +68,16 @@ QA_HARD_RULES = (
     "QA Evidence",
 )
 
+REVIEW_REWIND_RULES = (
+    "CRITICAL, HIGH, or MEDIUM finding",
+    "Review Findings",
+)
+
+QA_REWIND_RULES = (
+    "server-reported HIGH",
+    "QA Failure",
+)
+
 DONE_REPORT_SHAPE = (
     "## As-Is -> To-Be Report",
     "### As-Is",
@@ -143,6 +153,30 @@ def test_qa_stage_demands_real_execution(workflow: str) -> None:
     )
     for phrase in QA_HARD_RULES:
         assert phrase in rendered, f"QA stage missing hard rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_review_high_findings_rewind_to_in_progress(workflow: str) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("Review"),
+        build_prompt_env(_issue("Review"), attempt=None),
+    )
+    for phrase in REVIEW_REWIND_RULES:
+        assert phrase in rendered, f"Review stage missing rewind rule: {phrase!r}"
+
+
+@pytest.mark.parametrize("workflow", WORKFLOW_FILES)
+def test_qa_server_reported_high_issues_rewind_to_in_progress(
+    workflow: str,
+) -> None:
+    cfg = _load(workflow)
+    rendered = render(
+        cfg.prompt_template_for_state("QA"),
+        build_prompt_env(_issue("QA"), attempt=None),
+    )
+    for phrase in QA_REWIND_RULES:
+        assert phrase in rendered, f"QA stage missing server-high rewind rule: {phrase!r}"
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

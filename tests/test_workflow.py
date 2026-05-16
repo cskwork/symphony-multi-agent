@@ -120,7 +120,53 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.tracker.api_key == "lin_test_token"
     assert cfg.tracker.project_slug == "my-proj"
     assert cfg.codex.command == "codex app-server"
+    assert cfg.agent.max_concurrent_agents == 1
+    assert cfg.agent.max_attempts == 3
     assert cfg.prompt_template_for_state("Todo") == "Hello {{ issue.identifier }}"
+
+
+def test_build_service_config_reads_agent_max_attempts(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              max_attempts: 3
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_attempts == 3
+
+
+def test_build_service_config_allows_zero_agent_max_attempts(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              max_attempts: 0
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_attempts == 0
 
 
 def test_stage_prompt_files_are_loaded_relative_to_workflow(tmp_path):
@@ -400,6 +446,7 @@ def test_default_max_total_turns_is_sixty(tmp_path):
     ("max_concurrent_agents", -1),
     ("max_retry_backoff_ms", 0),
     ("max_retry_backoff_ms", -100),
+    ("max_attempts", -1),
 ])
 def test_invalid_agent_int_fields_fail_validation(tmp_path, field, raw_value):
     """Regression: previously these silently accepted 0/negative via

@@ -29,7 +29,7 @@ tracker:
 
 agent:
   kind: claude
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_concurrent_agents_by_state:
     "Deploy Ready": 1     # never deploy two things at once
     Verified: 1

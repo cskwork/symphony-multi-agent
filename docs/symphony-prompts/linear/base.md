@@ -173,14 +173,14 @@ line at the end: `_details: docs/<id>/<stage>/details.md_`.
   files. Create the folder yourself (`mkdir -p`). The `docs/llm-wiki/` write-back
   in Learn is a sibling under `docs/`, not under this ticket's root.
 - **Backward transitions are explicit, not failures.** `Review → In Progress`
-  (on CRITICAL/HIGH/MEDIUM findings) and `QA → In Progress` (on test/spec failure)
-  are part of the pipeline. Each rewind starts the next In Progress turn
+  (on CRITICAL/HIGH/MEDIUM findings) and `QA → In Progress` (on test/spec
+  failure, including any server-reported HIGH issue) are part of the pipeline.
+  Each rewind starts the next In Progress turn
   with a **fresh agent context**; the only carry-over is what you wrote
   into the Linear comment thread and `docs/{{ issue.identifier }}/`. Treat
   your own writeups as the contract — what you didn't write down is gone.
-- **Rewind cap.** Count Review Findings + QA Failure comments on this
-  issue. If the count is already at or above `agent.max_attempts` in
-  `WORKFLOW.md` (default 5) and you would otherwise rewind to `In Progress`,
-  transition to `Blocked` instead and post a `## Budget Exceeded` comment
-  naming the loop (which stages, how many rounds, the last unresolved item).
-  `max_attempts: 0` disables the cap.
+- **Rewind cap.** Symphony counts every `Review → In Progress` and
+  `QA → In Progress` transition at runtime. If the rewind count would exceed
+  `agent.max_attempts` in `WORKFLOW.md` (currently `{{ agent.max_attempts }}`),
+  Symphony moves the issue to `Blocked` instead. `max_attempts: 0` disables
+  the cap.

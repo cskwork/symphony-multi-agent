@@ -183,6 +183,7 @@ class _IssueDebug:
     current_retry_attempt: int = 0
     current_attempt_kind: str | None = None
     completed_turn_count: int = 0
+    rewind_count: int = 0
     last_workspace: Path | None = None
     last_error: str | None = None
     recent_events: list[dict[str, Any]] = field(default_factory=list)
@@ -899,6 +900,7 @@ class Orchestrator:
                     attempt=attempt,
                     language=doc_language,
                     max_turns=cfg.agent.max_turns,
+                    max_attempts=cfg.agent.max_attempts,
                 )
                 await client.start_session(
                     initial_prompt=first_prompt,
@@ -953,6 +955,37 @@ class Orchestrator:
                             is_rewind = _is_rewind_transition(
                                 prev_phase_state, current_state
                             )
+                            if is_rewind:
+                                debug = self._issue_debug.setdefault(
+                                    running_issue_id, _IssueDebug()
+                                )
+                                debug.rewind_count += 1
+                                if (
+                                    cfg.agent.max_attempts > 0
+                                    and debug.rewind_count > cfg.agent.max_attempts
+                                ):
+                                    await asyncio.to_thread(
+                                        self._tracker_call_update_state,
+                                        cfg,
+                                        issue,
+                                        "Blocked",
+                                    )
+                                    issue = replace(issue, state="Blocked")
+                                    running_entry = self._running.get(
+                                        running_issue_id
+                                    )
+                                    if running_entry is not None:
+                                        running_entry.issue = issue
+                                    log.warning(
+                                        "rewind_budget_exceeded",
+                                        issue_id=issue.id,
+                                        identifier=issue.identifier,
+                                        from_state=prev_phase_state,
+                                        to_state=current_state,
+                                        rewind_count=debug.rewind_count,
+                                        max_attempts=cfg.agent.max_attempts,
+                                    )
+                                    break
                             client, first_prompt = await self._rebuild_backend_for_phase(
                                 issue=issue,
                                 running_issue_id=running_issue_id,
@@ -1189,6 +1222,7 @@ class Orchestrator:
             attempt=attempt,
             language=doc_language,
             max_turns=cfg.agent.max_turns,
+            max_attempts=cfg.agent.max_attempts,
             is_rewind=is_rewind,
         )
         await new_client.start_session(
@@ -1450,6 +1484,12 @@ class Orchestrator:
             # inline so a clean win produces the same artefacts as a
             # reconcile-driven termination.
             is_done = (entry.issue.state or "").strip().lower() == "done"
+            terminal_states = (
+                {normalize_state(s) for s in cfg.tracker.terminal_states}
+                if cfg is not None
+                else set()
+            )
+            is_terminal = normalize_state(entry.issue.state) in terminal_states
             if is_done and cfg is not None and self._workspace_manager is not None:
                 if cfg.agent.auto_merge_on_done:
                     await auto_merge_on_done_best_effort(
@@ -1469,7 +1509,7 @@ class Orchestrator:
                 await self._workspace_manager.remove(entry.workspace_path)
                 # Don't schedule a continuation — a Done ticket has nothing
                 # to continue. Skip straight to the worker_exit emit below.
-            else:
+            elif not is_terminal:
                 self._schedule_retry(
                     issue_id,
                     identifier=entry.issue.identifier,

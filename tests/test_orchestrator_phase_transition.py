@@ -115,7 +115,11 @@ class _FakeWorkspaceManager:
 
 
 def _make_config(
-    *, max_turns: int = 5, prompt_template: str | None = None, prompts: PromptConfig | None = None
+    *,
+    max_turns: int = 5,
+    max_attempts: int = 3,
+    prompt_template: str | None = None,
+    prompts: PromptConfig | None = None,
 ) -> ServiceConfig:
     # Prompt template references {{ issue.state }} and {{ is_rewind }} so
     # the rendered first prompt is observably different across phase
@@ -133,7 +137,7 @@ def _make_config(
             api_key="tok",
             project_slug="proj",
             active_states=("Todo", "Explore", "In Progress", "Review"),
-            terminal_states=("Done", "Cancelled"),
+            terminal_states=("Done", "Cancelled", "Blocked"),
         ),
         hooks=HooksConfig(None, None, None, None, 60_000),
         agent=AgentConfig(
@@ -142,6 +146,7 @@ def _make_config(
             max_turns=max_turns,
             max_retry_backoff_ms=300_000,
             max_concurrent_agents_by_state={},
+            max_attempts=max_attempts,
         ),
         codex=CodexConfig(
             command="codex app-server",
@@ -644,6 +649,78 @@ def test_forward_transition_does_not_set_is_rewind(
     assert len(first_prompts) == 2
     assert "rewind=False" in first_prompts[0]
     assert "rewind=False" in first_prompts[1]
+
+
+def test_rewind_budget_blocks_fourth_rewind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=12, max_attempts=3)
+    issue = _make_issue(state="Review")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(
+        monkeypatch,
+        [
+            "In Progress",  # rewind 1
+            "Review",
+            "In Progress",  # rewind 2
+            "Review",
+            "In Progress",  # rewind 3
+            "Review",
+            "In Progress",  # rewind 4 => Blocked, no rebuild
+            "Done",
+        ],
+    )
+    updates: list[tuple[str, str]] = []
+
+    def _capture_update(_cfg, issue_arg, target_state):  # noqa: ANN001
+        updates.append((issue_arg.state, target_state))
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(_capture_update),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert updates == [("In Progress", "Blocked")]
+    assert o._issue_debug[issue.id].rewind_count == 4
+    assert issue.id not in o._running
+    assert issue.id not in o._retry
+    # Initial Review plus six allowed phase rebuilds. The fourth rewind is
+    # blocked before a new In Progress backend is created.
+    assert len(instances) == 7
+
+
+def test_rewind_budget_zero_disables_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = _make_config(max_turns=10, max_attempts=0)
+    issue = _make_issue(state="Review")
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    _install_fake_backend(monkeypatch)
+    _install_state_sequence(
+        monkeypatch,
+        ["In Progress", "Review", "In Progress", "Review", "In Progress", "Done"],
+    )
+    updates: list[tuple[str, str]] = []
+
+    def _capture_update(_cfg, issue_arg, target_state):  # noqa: ANN001
+        updates.append((issue_arg.state, target_state))
+
+    monkeypatch.setattr(
+        Orchestrator,
+        "_tracker_call_update_state",
+        staticmethod(_capture_update),
+    )
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert updates == []
+    assert o._issue_debug[issue.id].rewind_count == 3
 
 
 def test_run_agent_attempt_handles_orphaned_running_entry(

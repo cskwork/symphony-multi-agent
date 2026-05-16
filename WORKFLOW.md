@@ -187,22 +187,21 @@ hooks:
 
 agent:
   kind: claude
-  max_concurrent_agents: 3
+  max_concurrent_agents: 1
   max_turns: 20
   max_retry_backoff_ms: 300000
   # Soft cap on stage rewinds (Review→In Progress + QA→In Progress
-  # combined). The base prompt counts `## Review Findings` and
-  # `## QA Failure` sections in the ticket body; on the (max_attempts+1)th
-  # turn that would otherwise rewind, the agent transitions to `Blocked`
-  # with `## Budget Exceeded` instead. Set to 0 to disable the cap.
-  max_attempts: 5
+  # combined). Symphony increments this counter at phase-transition time;
+  # on the (max_attempts+1)th rewind, it moves the ticket to Blocked
+  # instead of starting another In Progress pass. Set to 0 to disable.
+  max_attempts: 3
   max_concurrent_agents_by_state:
-    Todo: 3
-    Explore: 3
-    "In Progress": 3
-    Review: 3
-    QA: 3
-    Learn: 3
+    Todo: 1
+    Explore: 1
+    "In Progress": 1
+    Review: 1
+    QA: 1
+    Learn: 1
 
 claude:
   # `--add-dir "$SYMPHONY_WORKFLOW_DIR/kanban"` (etc.) extends Claude

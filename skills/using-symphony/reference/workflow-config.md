@@ -33,7 +33,7 @@ hooks:
 
 agent:
   kind: claude          # codex | claude | gemini | pi
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_turns: 20
 
 claude:
@@ -303,10 +303,10 @@ workspace:
   root: ~/symphony_workspaces       # one subdirectory per ticket created here
 
 agent:
-  max_concurrent_agents: 4
+  max_concurrent_agents: 1
   max_concurrent_agents_by_state:    # optional per-lane throttle
-    Todo: 2
-    "In Progress": 4
+    Todo: 1
+    "In Progress": 1
     "Deploy Ready": 1                # never deploy two things at once
 ```
 

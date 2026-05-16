@@ -26,7 +26,7 @@ QA must execute real code. Inspecting the diff is not QA.
 
 8. Append `## QA Evidence` to the ticket with: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe used, exact commands run with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run result line for `bug` tickets, and paths under `docs/{{ issue.identifier }}/qa/`.
 
-9. On any failure (correctness, latency, repro): set state to `In Progress`, append `## QA Failure` naming the scenario and exact field/status/latency that regressed, stop. No silencing, retrying, or skipping.
+9. On any failure (correctness, latency, repro, or any server-reported HIGH issue): set state to `In Progress`, append `## QA Failure` naming the scenario and exact field/status/latency/severity that regressed, stop. No silencing, retrying, or skipping.
 
 10. On pass: set state to `Learn`.
 

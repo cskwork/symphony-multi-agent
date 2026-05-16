@@ -26,7 +26,7 @@ QA must execute real code. Inspecting the diff is not QA.
 
 8. Post a `QA Evidence` comment with: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe used, exact commands run with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run result line for `bug` tickets, and links under `docs/{{ issue.identifier }}/qa/`.
 
-9. On any failure (correctness, latency, repro): transition state to `In Progress`, post a `QA Failure` comment naming the scenario and exact field/status/latency that regressed, stop. No silencing, retrying, or skipping.
+9. On any failure (correctness, latency, repro, or any server-reported HIGH issue): transition state to `In Progress`, post a `QA Failure` comment naming the scenario and exact field/status/latency/severity that regressed, stop. No silencing, retrying, or skipping.
 
 10. On pass: transition state to `Learn`.
 

@@ -437,6 +437,7 @@ def build_prompt_env(
     attempt: int | None,
     language: str | None = None,
     is_rewind: bool = False,
+    max_attempts: int = 3,
 ) -> dict[str, Any]:
     """§12.1 — input variables for prompt rendering.
 
@@ -464,6 +465,7 @@ def build_prompt_env(
         "attempt": attempt,
         "language": normalize_language(language),
         "is_rewind": is_rewind,
+        "agent": {"max_attempts": max_attempts},
     }
 
 
@@ -474,6 +476,7 @@ def build_first_turn_prompt(
     attempt: int | None,
     language: str,
     max_turns: int,
+    max_attempts: int = 3,
     is_rewind: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
@@ -494,7 +497,13 @@ def build_first_turn_prompt(
     from .i18n import doc_language_preamble
 
     preamble = doc_language_preamble(language)
-    env = build_prompt_env(issue, attempt, language=language, is_rewind=is_rewind)
+    env = build_prompt_env(
+        issue,
+        attempt,
+        language=language,
+        is_rewind=is_rewind,
+        max_attempts=max_attempts,
+    )
     env["turn_number"] = 1
     env["max_turns"] = max_turns
     body = render(prompt_template, env)

@@ -123,21 +123,26 @@ def test_render_can_branch_on_language():
 
 
 def test_first_turn_prompt_prepends_english_preamble_by_default():
-    body = "Body for {{ issue.identifier }}, turn {{ turn_number }}/{{ max_turns }}."
+    body = (
+        "Body for {{ issue.identifier }}, turn {{ turn_number }}/{{ max_turns }}, "
+        "rewind cap {{ agent.max_attempts }}."
+    )
     prompt, env = build_first_turn_prompt(
         prompt_template=body,
         issue=_issue(),
         attempt=None,
         language="en",
         max_turns=20,
+        max_attempts=3,
     )
     assert prompt.startswith(doc_language_preamble("en"))
     # Two newlines visually separate preamble from rendered body.
     assert "\n\n" in prompt
-    assert "Body for MT-649, turn 1/20." in prompt
+    assert "Body for MT-649, turn 1/20, rewind cap 3." in prompt
     assert env["language"] == "en"
     assert env["turn_number"] == 1
     assert env["max_turns"] == 20
+    assert env["agent"]["max_attempts"] == 3
 
 
 def test_first_turn_prompt_prepends_korean_preamble():
