@@ -103,6 +103,22 @@ echo "tui-open: running doctor preflight..."
   exit 4
 }
 
+# Background: start the kanban board-viewer at http://127.0.0.1:8765 if
+# the workflow ships a copy under tools/board-viewer/ and the port is
+# free. The board-viewer is a read-only proxy over Symphony's HTTP API
+# and a convenient companion to the TUI; nothing about Symphony itself
+# requires it. Skipped silently when the workflow has no board-viewer.
+BV_PORT=8765
+if lsof -nP -iTCP:"${BV_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "tui-open: board-viewer already running on ${BV_PORT}"
+elif [[ -f "${WORKFLOW_DIR}/tools/board-viewer/server.py" ]]; then
+  mkdir -p "${WORKFLOW_DIR}/log"
+  (cd "${WORKFLOW_DIR}" && \
+    nohup /usr/bin/env python3 tools/board-viewer/server.py \
+      >> log/board-viewer.log 2>&1 &)
+  echo "tui-open: board-viewer starting at http://127.0.0.1:${BV_PORT}/ (log: log/board-viewer.log)"
+fi
+
 # The actual command we want a new terminal to run. cd into WORKFLOW_DIR
 # (not SCRIPT_DIR) so tracker.board_root resolves correctly.
 LAUNCH_CMD="cd '${WORKFLOW_DIR}' && '${SYMPHONY}' --tui '${WORKFLOW_ABS}'"
