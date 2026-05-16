@@ -1,6 +1,6 @@
 ### DONE  -- when state is `Done`
 
-Terminal. Ticket has passed QA.
+Terminal. Ticket has passed QA. Post the two comments below, then stop.
 
 1. Post a final comment with `## As-Is -> To-Be Report` in this exact structure:
 
@@ -42,5 +42,5 @@ Terminal. Ticket has passed QA.
      --title "{{ issue.identifier }}: {{ issue.title }}"
    ```
 
-3. If `hooks.after_done` is configured in `WORKFLOW.md`, it fires automatically post-squash; the Merge Command comment is the manual fallback.
+3. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically post-squash; the Merge Command comment is the manual fallback.
 4. Leave state as `Done` and stop.

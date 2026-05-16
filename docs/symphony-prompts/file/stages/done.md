@@ -1,8 +1,8 @@
 ### DONE  -- when state is `Done`
 
-Terminal. Ticket has passed QA.
+Terminal. Ticket has passed QA. Append the two sections below, then stop.
 
-1. Append `## As-Is -> To-Be Report` with this exact structure:
+1. Append `## As-Is -> To-Be Report` in this exact structure:
 
    ```
    ## As-Is -> To-Be Report
@@ -43,5 +43,5 @@ Terminal. Ticket has passed QA.
      --body-file docs/{{ issue.identifier }}/qa/repro-after.log
    ```
 
-3. If `hooks.after_done` is configured in `WORKFLOW.md`, it fires automatically post-squash; the Merge Command block is the manual fallback.
+3. `hooks.after_done` (if configured in `WORKFLOW.md`) fires automatically post-squash; the Merge Command block is the manual fallback.
 4. Leave state as `Done` and stop.

@@ -1,8 +1,8 @@
 ### QA  -- when state is `QA`  (THIS STAGE MUST EXECUTE REAL CODE)
 
-QA must execute real code. Inspecting the diff is not QA.
+You are the QA gate. Execute real code against both builds and prove the diff works. Inspecting the diff is not QA.
 
-1. Read `docs/{{ issue.identifier }}/work/` and the most recent Review / Review Findings comment to learn what the change should deliver.
+1. Read `docs/{{ issue.identifier }}/work/` and the latest Review / Review Findings comment to learn the intended delivery.
 
 2. Map the API surface from the diff: method, path, auth, request schema, response schema. Post as an `API Surface` comment. If no API, jump to **Non-API fallbacks**.
 
@@ -12,21 +12,21 @@ QA must execute real code. Inspecting the diff is not QA.
    - Save as `docs/{{ issue.identifier }}/qa/payloads/<scenario>.json`. Mask PII. Never invent fields the schema does not declare.
 
 4. Boot As-Is and To-Be:
-   - Use `qa.boot.command` from `WORKFLOW.md` if set, exporting `SYMPHONY_QA_PORT` from `qa.boot.asis_port` / `qa.boot.tobe_port`, merging `qa.boot.env`, and bringing up `qa.boot.compose_file` first if specified. Else fall back to the project's standard boot on two free ports.
+   - If `qa.boot.command` is set in `WORKFLOW.md`, run it with `SYMPHONY_QA_PORT` exported from `qa.boot.asis_port` / `qa.boot.tobe_port`, merge `qa.boot.env`, and bring up `qa.boot.compose_file` first if specified. Else use the project's standard boot on two free ports.
    - As-Is = `git config symphony.basesha` checked out via `git worktree add ../asis $(git config symphony.basesha)`. To-Be = current HEAD.
    - If `qa.boot.health_url` is set, poll `${url//\$\{PORT\}/<port>}` until 200 or fail QA.
 
 5. Replay every payload against both builds, capturing status, body, headers of interest, and `latency_ms` (wall-clock). Save raw to `docs/{{ issue.identifier }}/qa/runs/<scenario>.{asis,tobe}.json` with `latency_ms` at top level. Tear down both servers and `git worktree remove ../asis`.
 
 6. Diff and judge:
-   - Per-scenario diff at `docs/{{ issue.identifier }}/qa/diff/<scenario>.diff`. Confirm only the intended change — no surprise renames, leaked PII, broken unrelated scenarios, or status regressions on invalid/unauthorized rows.
-   - Performance gate from `qa.regression_budget`: for each scenario where As-Is `latency_ms` ≥ `min_baseline_ms`, fail if To-Be `latency_ms` > `latency_factor × As-Is`. Record breach as `scenario | as-is ms | to-be ms | factor`. `latency_factor: 0` disables.
+   - Write per-scenario diff to `docs/{{ issue.identifier }}/qa/diff/<scenario>.diff`. Confirm only the intended change — no surprise renames, leaked PII, broken unrelated scenarios, or status regressions on invalid/unauthorized rows.
+   - Apply the performance gate from `qa.regression_budget`: for each scenario where As-Is `latency_ms` ≥ `min_baseline_ms`, fail if To-Be `latency_ms` > `latency_factor × As-Is`. Record breach as `scenario | as-is ms | to-be ms | factor`. `latency_factor: 0` disables.
 
 7. Bug repro closure (only if `bug` label): re-run `docs/{{ issue.identifier }}/reproduce/repro.spec.ts` against To-Be, save to `docs/{{ issue.identifier }}/qa/repro-after.log`, and require it to pass. Never skip.
 
 8. Post a `QA Evidence` comment with: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe used, exact commands run with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run result line for `bug` tickets, and links under `docs/{{ issue.identifier }}/qa/`.
 
-9. On any failure (correctness, latency, repro, or any server-reported HIGH issue): transition state to `In Progress`, post a `QA Failure` comment naming the scenario and exact field/status/latency/severity that regressed, stop. No silencing, retrying, or skipping.
+9. On any failure (correctness, latency, repro, or any server-reported HIGH issue): transition state to `In Progress`, post a `QA Failure` comment naming the scenario and exact field/status/latency/severity that regressed, stop. Never silence, retry, or skip.
 
 10. On pass: transition state to `Learn`.
 

@@ -1,12 +1,12 @@
 ### LEARN  -- when state is `Learn`
 
-Make the next ticket cheaper. Distill what this ticket taught and write it back into `docs/llm-wiki/` in a form **both developers and non-developers can learn from**.
+Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wiki/` so **both developers and non-developers** can learn from it.
 
 1. Read `docs/{{ issue.identifier }}/{explore,work,qa}/` and prior sections (`## Recommendation`, `## Implementation`, `## QA Evidence`) end-to-end.
-2. Compare brief vs reality: which assumptions held or were wrong, which constraint/invariant only surfaced now, which prior wiki entry was incomplete or misleading.
-3. Update `docs/llm-wiki/`: edit existing entry by appending a `YYYY-MM-DD | <issue.identifier> | note` Decision log row and refreshing **Last updated**, OR create `docs/llm-wiki/<topic-slug>.md` using the exact template below; then add/refresh its row in `INDEX.md` (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
+2. Compare brief vs reality: assumptions that held or broke, constraints/invariants that only surfaced now, prior wiki entries that were incomplete or misleading.
+3. Update `docs/llm-wiki/`: either append `YYYY-MM-DD | <issue.identifier> | note` to an existing entry's Decision log and refresh **Last updated**, OR create `docs/llm-wiki/<topic-slug>.md` from the template below; then add/refresh its row in `INDEX.md` (`| topic-slug | one-line summary | YYYY-MM-DD (<issue.identifier>) |`).
 
-   Every wiki entry has two layers stacked top-to-bottom: a **beginner explainer** that any reader (PM, designer, junior dev, future-you with no context) can absorb in two minutes, then a **technical reference** for the engineer who will touch the code next. Both layers live in the same file so the file owns the full picture of the topic.
+   Each entry stacks two layers in one file: a **beginner explainer** any reader (PM, designer, junior dev, future-you) absorbs in two minutes, then a **technical reference** for the next engineer to touch the code.
 
 {% if language == 'ko' %}
    ```
@@ -59,16 +59,16 @@ Make the next ticket cheaper. Distill what this ticket taught and write it back 
    ```
 
    `## 감 잡기` 작성 규칙 (강제):
-   - 처음부터 전문용어를 쏟지 말 것. 어쩔 수 없이 써야 하면 같은 줄에 짧은 괄호 설명을 붙인다.
+   - 전문용어를 앞쪽에 쏟지 말 것. 꼭 써야 하면 같은 줄에 짧은 괄호 설명을 붙인다.
    - 사전식 정의 금지. "X는 ~을 의미한다" 대신 "X는 마치 ~처럼 동작한다" 또는 "X를 쓰면 ~이 된다".
-   - 비유는 사용하되 너무 유치하지 않게. 비즈니스 도메인이 친숙한 비유가 있으면 그걸 우선.
-   - 핵심 흐름 화살표는 3-5단계로 제한. 7개를 늘어놓으면 감이 잡히지 않는다.
+   - 비유는 쓰되 유치하지 않게. 독자가 이미 아는 비즈니스 도메인 비유가 우선.
+   - 핵심 흐름 화살표는 3-5단계. 7개면 감이 아니라 스펙이 된다.
    - 용어 표는 정확히 5개. 더 적으면 부족, 더 많으면 초보자 단계가 아님.
-   - 아직 깊게 들어가면 헷갈리는 내용(엣지 케이스, 내부 구현, 성능 트레이드오프)은 일부러 빼고 마지막 줄에 "나중에 배울 내용"으로 미룬다.
+   - 엣지 케이스·내부 구현·성능 트레이드오프는 빼고 마지막 줄 "나중에 배울 내용"으로 미룬다.
    - 문장은 짧고 명확하게. 한 문장에 한 가지만.
-   - 마지막 "이것만 기억하면 된다"는 정확히 한 문장. 두 문장이면 핵심이 두 개라는 뜻 → 다시 쪼개라.
+   - "이것만 기억하면 된다"는 정확히 한 문장. 두 문장이면 핵심이 둘 → 쪼개라.
 
-   기존 wiki 엔트리에 `## 감 잡기` 섹션이 없다면 이번 Learn 단계에서 추가한다. 이미 있다면, 이번 티켓이 새로 알게 된 사실로 인해 비유나 핵심 흐름이 어긋났을 때만 손본다 (사소한 wording 변경은 금지 — Decision log row 추가로 충분).
+   기존 엔트리에 `## 감 잡기`가 없으면 이번 Learn에서 추가한다. 이미 있다면, 이번 티켓이 비유나 핵심 흐름을 무너뜨렸을 때만 손본다 (사소한 wording 변경 금지 — Decision log row로 충분).
 {% else %}
    ```
    # <Topic Title>
@@ -120,24 +120,24 @@ Make the next ticket cheaper. Distill what this ticket taught and write it back 
    ```
 
    Hard rules for the `## Getting the Feel` block:
-   - Do not front-load jargon. If you must use a domain term, attach a short parenthetical on the same line.
-   - No dictionary definitions. Write "X behaves like ..." or "you use X when ...", not "X is defined as ...".
-   - Analogies are welcome but not childish. Prefer business-domain analogies the reader already lives in.
-   - The arrow flow stays at 3-5 steps. Seven steps stop being a "feel" — they're a spec.
+   - Do not front-load jargon. If a domain term is unavoidable, attach a short parenthetical on the same line.
+   - No dictionary definitions. Write "X behaves like ..." or "you use X when ...", never "X is defined as ...".
+   - Analogies welcome but not childish. Prefer business-domain analogies the reader already lives in.
+   - Arrow flow stays at 3-5 steps. Seven steps stop being a "feel" — they're a spec.
    - Exactly five terms in the table. Fewer = under-explained; more = no longer beginner level.
-   - Defer edge cases, internal implementation, performance trade-offs — list them under "ready to go deeper" instead.
+   - Defer edge cases, internal implementation, performance trade-offs — push them under "ready to go deeper".
    - Short, clear sentences. One idea per sentence.
    - "Just remember this" must be exactly one sentence. Two sentences = two takeaways → split the topic.
 
-   If the existing wiki entry has no `## Getting the Feel` section, add one this Learn turn. If it already exists, touch it only when this ticket invalidated the analogy or the core flow — small wording tweaks are out of scope (a Decision log row is enough).
+   If the entry has no `## Getting the Feel` section, add one this turn. If it already exists, touch it only when this ticket invalidated the analogy or core flow — small wording tweaks are out of scope (a Decision log row is enough).
 {% endif %}
 
 4. Wiki integrity sweep before transitioning:
-   - Duplicates: merge same-slug rows into the entry with newer Last updated, absorb distinct Invariants/Decision log rows, `git rm` loser file and drop its INDEX row.
+   - Duplicates: merge same-slug rows into the entry with newer Last updated, absorb distinct Invariants/Decision log rows, `git rm` the loser file and drop its INDEX row.
    - Orphans: every `docs/llm-wiki/*.md` (except `INDEX.md`) has an INDEX row; every INDEX row has a file. Reconcile both directions.
    - Stale: if Last updated > 90 days, append ` (stale?)` to the INDEX summary cell (idempotent).
    - Contradictions: if this ticket disproves an entry, update it and log the prior wrong claim; for cross-entry conflicts noticed in passing, append a `## Wiki Conflict` section to the ticket pointing at both files.
-   - Beginner block sanity: every entry's `## 감 잡기` / `## Getting the Feel` section, if present, still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
+   - Beginner block sanity: every existing `## 감 잡기` / `## Getting the Feel` still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
 5. Append `## Learnings` to the ticket — 3-4 bullets of new facts/constraints/surprises.
-6. Append `## Wiki Updates` to the ticket — paths created/modified/removed, one line each with changelog (`merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
-7. Set state to `Done`. If nothing new and sweep was clean, say so explicitly under `## Learnings` and still transition.
+6. Append `## Wiki Updates` to the ticket — paths created/modified/removed, one line each with a changelog tag (`merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
+7. Set state to `Done`. If nothing new and sweep was clean, say so under `## Learnings` and still transition.
