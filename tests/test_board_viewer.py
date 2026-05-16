@@ -45,6 +45,8 @@ def test_board_viewer_fallback_states_and_policy_mode() -> None:
     assert "merge off" in js
     assert "fetchGitBranches" in js
     assert "saveBranchPolicy" in js
+    assert "updateBranchPolicyFromGit" in js
+    assert "repo_root" in js
 
 
 def test_kanban_index_exposes_nested_agent_kind(tmp_path, monkeypatch) -> None:
@@ -149,4 +151,6 @@ def test_git_branch_list_reads_real_local_branches(tmp_path, monkeypatch) -> Non
     assert "main" in branches["branches"]
     assert "dev" in branches["branches"]
     assert branches["current_branch"] == "dev"
+    assert branches["repo_root"] == str(repo)
+    assert branches["workflow_path"] == str(workflow)
     assert branches["feature_base_branch"] == "dev"

@@ -83,6 +83,7 @@ const state = {
   terminal_states: [],
   runningById: new Map(), // ticket_id -> running info
   defaultAgentKind: "",
+  branchPolicy: null,
   symphonyAlive: false,
   lastPollAt: null,
   pollTimer: null,
@@ -266,6 +267,26 @@ function updateBranchPolicy(policy) {
   branchPolicyEl.hidden = false;
 }
 
+function updateBranchPolicyFromGit(gitInfo) {
+  if (!state.branchPolicy || !gitInfo?.ok) return;
+  const current = gitInfo.current_branch || "current branch";
+  const repo = gitInfo.repo_root ? gitInfo.repo_root.split("/").filter(Boolean).pop() : "";
+  const baseLabel = state.branchPolicy.base_branch === "current branch"
+    ? `${repo ? repo + "/" : ""}${current}`
+    : state.branchPolicy.base_branch;
+  const targetLabel = state.branchPolicy.merge_target_branch === "current branch"
+    ? current
+    : state.branchPolicy.merge_target_branch;
+  updateBranchPolicy({
+    ...state.branchPolicy,
+    base_branch: baseLabel,
+    merge_target_branch: targetLabel || baseLabel,
+  });
+  if (branchPolicyEl && gitInfo.repo_root) {
+    branchPolicyEl.title = gitInfo.repo_root;
+  }
+}
+
 async function refreshBranchControls() {
   if (!branchControlsEl || !featureBaseSelect || !mergeTargetSelect) return;
   if (state.branchRefreshInFlight || state.branchSaveInFlight) return;
@@ -290,6 +311,7 @@ async function refreshBranchControls() {
         ? `same as base/current`
         : "same as base/current",
     });
+    updateBranchPolicyFromGit(res.data);
     branchControlsEl.hidden = false;
   } finally {
     state.branchRefreshInFlight = false;
@@ -382,7 +404,8 @@ async function pollOnce() {
   if (symRes.ok && symRes.data) {
     state.symphonyAlive = true;
     state.defaultAgentKind = symRes.data.workflow?.default_agent_kind || "";
-    updateBranchPolicy(symRes.data.workflow?.branch_policy || null);
+    state.branchPolicy = symRes.data.workflow?.branch_policy || null;
+    updateBranchPolicy(state.branchPolicy);
     const running = symRes.data.running || [];
     for (const r of running) {
       const id = r.issue_identifier || r.issue_id;
@@ -397,6 +420,7 @@ async function pollOnce() {
   } else {
     state.symphonyAlive = false;
     state.defaultAgentKind = "";
+    state.branchPolicy = null;
     updateBranchPolicy(null);
   }
 

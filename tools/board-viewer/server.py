@@ -259,12 +259,15 @@ def list_git_branches() -> dict[str, Any]:
     try:
         raw = _git("branch", "--format=%(refname:short)")
         current = _git("branch", "--show-current").strip()
+        repo_root = _git("rev-parse", "--show-toplevel").strip()
     except Exception as exc:
         return {
             "ok": False,
             "error": str(exc),
             "branches": [],
             "current_branch": "",
+            "repo_root": "",
+            "workflow_path": str(WORKFLOW_PATH or ""),
             "feature_base_branch": "",
             "merge_target_branch": "",
         }
@@ -274,6 +277,8 @@ def list_git_branches() -> dict[str, Any]:
         "ok": True,
         "branches": branches,
         "current_branch": current,
+        "repo_root": repo_root,
+        "workflow_path": str(WORKFLOW_PATH or ""),
         "feature_base_branch": policy.get("feature_base_branch", ""),
         "merge_target_branch": policy.get("auto_merge_target_branch", ""),
     }
