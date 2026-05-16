@@ -3,13 +3,19 @@
 
 역할:
   1. 정적 파일 serving (이 디렉토리 / index.html, src/*)
-  2. Symphony API 프록시: /api/symphony/state, /api/symphony/<ID>
+  2. Symphony API 프록시:
+       GET  /api/symphony/state            — 보드 스냅샷
+       GET  /api/symphony/<ID>             — 단일 이슈 디버그
+       POST /api/symphony/refresh          — 즉시 reconcile/poll
+       POST /api/symphony/<ID>/pause       — 다음 turn 경계에서 일시정지
+       POST /api/symphony/<ID>/resume      — 일시정지 해제
   3. Kanban 파일 인덱스/원본: /api/kanban/index, /api/kanban/<ID>.md
 
 설계 원칙:
   - stdlib 만 사용 (Python 3.11+)
-  - 모든 동작 READ-ONLY (state-변경 endpoint는 호출하지 않음)
-  - CORS 허용 (`*`) — 같은 origin이므로 사실상 보험
+  - 노출하는 mutating endpoint는 orchestrator가 이미 공개한 3개
+    (refresh / pause / resume)만 화이트리스트로 프록시. 그 외 GET 전부.
+  - 127.0.0.1 바인딩 + CORS `*` — 같은 origin 보험
   - Symphony가 죽어도 board file 인덱스는 동작해야 함 (degraded mode)
 """
 
@@ -150,18 +156,18 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 # ---------------------------------------------------------------------------
-# Symphony API 호출 (전부 GET; mutating endpoint는 호출 안 함)
+# Symphony API 호출 — GET은 자유, POST는 화이트리스트로만 통과
 # ---------------------------------------------------------------------------
 
 
-def symphony_get(path: str) -> tuple[int, bytes, str]:
-    """Symphony API GET. 반환: (status, body_bytes, content_type).
+def _symphony_request(method: str, path: str) -> tuple[int, bytes, str]:
+    """Symphony API 단일 호출. 반환: (status, body_bytes, content_type).
 
     네트워크 실패는 (599, b'{"error":...}', 'application/json') 으로 매핑.
     """
     url = f"{SYMPHONY_BASE.rstrip('/')}{path}"
     try:
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(url, method=method)
         with urllib.request.urlopen(req, timeout=SYMPHONY_TIMEOUT) as resp:
             body = resp.read()
             ct = resp.headers.get("Content-Type", "application/json")
@@ -178,6 +184,14 @@ def symphony_get(path: str) -> tuple[int, bytes, str]:
             {"error": {"code": "symphony_unreachable", "message": str(e)}}
         ).encode("utf-8")
         return 599, msg, "application/json"
+
+
+def symphony_get(path: str) -> tuple[int, bytes, str]:
+    return _symphony_request("GET", path)
+
+
+def symphony_post(path: str) -> tuple[int, bytes, str]:
+    return _symphony_request("POST", path)
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +294,8 @@ class BoardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         # CORS — 같은 origin이지만 보험
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Cache-Control", "no-store")
         if extra_headers:
             for k, v in extra_headers.items():
@@ -296,6 +311,50 @@ class BoardHandler(BaseHTTPRequestHandler):
     # ---- CORS preflight ----
     def do_OPTIONS(self) -> None:  # noqa: N802
         self._send(204, b"", "text/plain")
+
+    # ---- POST ----
+    # 화이트리스트 외 경로는 405. orchestrator의 mutating endpoint
+    # (refresh / pause / resume)만 프록시한다.
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+
+        # refresh — payload 없는 단순 트리거
+        if path == "/api/symphony/refresh":
+            # 클라이언트 body는 무시(stdlib http 서버는 close-notify까지 안 해도 됨).
+            # 단, Content-Length가 와 있으면 소비해서 keepalive 흐름을 깨끗하게.
+            self._drain_request_body()
+            status, body, ct = symphony_post("/api/v1/refresh")
+            self._send(status, body, ct)
+            return
+
+        # pause / resume — {identifier} 화이트리스트
+        m = re.fullmatch(
+            r"/api/symphony/([A-Za-z0-9_\-]+)/(pause|resume)", path
+        )
+        if m:
+            self._drain_request_body()
+            identifier, action = m.group(1), m.group(2)
+            status, body, ct = symphony_post(
+                f"/api/v1/{identifier}/{action}"
+            )
+            self._send(status, body, ct)
+            return
+
+        self._send_json(
+            405,
+            {
+                "error": "method_not_allowed",
+                "message": "POST only allowed on /api/symphony/refresh, /api/symphony/<id>/(pause|resume)",
+            },
+        )
+
+    def _drain_request_body(self) -> None:
+        length = int(self.headers.get("Content-Length") or "0")
+        if length > 0:
+            try:
+                self.rfile.read(length)
+            except OSError:
+                pass
 
     # ---- GET ----
     def do_GET(self) -> None:  # noqa: N802

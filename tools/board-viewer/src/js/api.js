@@ -58,3 +58,30 @@ async function safeJson(r) {
 export function rawKanbanUrl(id) {
   return `/api/kanban/${encodeURIComponent(id)}.md`;
 }
+
+// ---- mutating actions (whitelist: refresh / pause / resume) ----
+//   - 모두 POST, payload 없음. orchestrator는 idempotent하게 처리.
+//   - 응답 { ok, status, data | error }로 정규화. UI에서 분기.
+
+async function postNoBody(url) {
+  try {
+    const r = await fetchWithTimeout(url, { method: "POST" });
+    const data = await safeJson(r);
+    if (!r.ok) return { ok: false, status: r.status, error: data };
+    return { ok: true, status: r.status, data };
+  } catch (e) {
+    return { ok: false, status: 0, error: { message: String(e) } };
+  }
+}
+
+export function pauseTicket(id) {
+  return postNoBody(`/api/symphony/${encodeURIComponent(id)}/pause`);
+}
+
+export function resumeTicket(id) {
+  return postNoBody(`/api/symphony/${encodeURIComponent(id)}/resume`);
+}
+
+export function refreshSymphony() {
+  return postNoBody("/api/symphony/refresh");
+}

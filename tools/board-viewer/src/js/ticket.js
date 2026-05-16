@@ -55,9 +55,14 @@ function coerce(s) {
 }
 
 // 카드 DOM 생성
-export function renderCard(ticket, runningInfo) {
+// handlers (옵션):
+//   { onPause(id, btn), onResume(id, btn) } — 둘 다 e.stopPropagation으로
+//   카드 클릭(=modal-open)과 분리된다. 핸들러가 없으면 버튼 자체가 안 그려진다.
+export function renderCard(ticket, runningInfo, handlers) {
   const cls = ["card"];
   if (runningInfo) cls.push("running");
+  const paused = !!(runningInfo && runningInfo.paused);
+  if (paused) cls.push("paused");
 
   const id = ticket.identifier || ticket.id;
 
@@ -76,12 +81,35 @@ export function renderCard(ticket, runningInfo) {
     const turn = runningInfo.turn_count ?? 0;
     const tok = runningInfo?.tokens?.total_tokens;
     const tokStr = typeof tok === "number" ? formatTokens(tok) : "—";
+    const badgeText = paused
+      ? `paused · turn ${turn} · tok ${tokStr}`
+      : `turn ${turn} · tok ${tokStr}`;
     runningBadge = el(
       "div",
-      { class: "running-badge", title: "실행 중" },
+      { class: paused ? "running-badge paused" : "running-badge", title: paused ? "일시정지됨" : "실행 중" },
       el("span", { class: "pulse-dot" }),
-      `turn ${turn} · tok ${tokStr}`
+      badgeText
     );
+  }
+
+  // pause/resume 버튼은 worker가 잡힌 상태(runningInfo 있음)에서만 의미가 있다.
+  let actionRow = null;
+  if (runningInfo && handlers && (handlers.onPause || handlers.onResume)) {
+    const buttons = [];
+    if (paused && handlers.onResume) {
+      buttons.push(makeActionBtn("Resume", "card-btn resume", (e) => {
+        e.stopPropagation();
+        handlers.onResume(id, e.currentTarget);
+      }));
+    } else if (!paused && handlers.onPause) {
+      buttons.push(makeActionBtn("Pause", "card-btn pause", (e) => {
+        e.stopPropagation();
+        handlers.onPause(id, e.currentTarget);
+      }));
+    }
+    if (buttons.length) {
+      actionRow = el("div", { class: "card-actions" }, ...buttons);
+    }
   }
 
   const card = el(
@@ -101,10 +129,27 @@ export function renderCard(ticket, runningInfo) {
       priorityNode
     ),
     el("div", { class: "card-title" }, ticket.title || ""),
-    labels.length ? el("div", { class: "card-labels" }, ...labels) : null
+    labels.length ? el("div", { class: "card-labels" }, ...labels) : null,
+    actionRow
   );
 
   return card;
+}
+
+function makeActionBtn(label, cls, onClick) {
+  // 카드 클릭 → modal open과 분리. role=button이 nested되지 않도록
+  // 실제 <button> 요소를 쓰고, 키보드 Enter/Space는 브라우저 기본동작에 위임.
+  const btn = el("button", {
+    type: "button",
+    class: cls,
+    "aria-label": label,
+  }, label);
+  btn.addEventListener("click", onClick);
+  // 카드의 keydown(Enter→modal) 처리가 버튼에 버블되지 않도록 차단
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") e.stopPropagation();
+  });
+  return btn;
 }
 
 // 상세 modal 렌더

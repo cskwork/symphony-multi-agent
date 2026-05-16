@@ -416,6 +416,74 @@ body {
   padding-right: 110px;
 }
 
+/* paused: 진동 멈춰서 일시정지 식별 — 색은 약간 더 노란 톤 */
+.card.paused {
+  outline: 1px solid rgba(255, 200, 80, 0.45);
+}
+.running-badge.paused {
+  background: rgba(255, 200, 80, 0.12);
+  color: #e3b341;
+  border-color: rgba(255, 200, 80, 0.4);
+}
+.running-badge.paused .pulse-dot {
+  animation: none;
+  background: #e3b341;
+  opacity: 0.7;
+}
+
+/* -------------------- Card action buttons -------------------- */
+.card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.card-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--fg);
+  cursor: pointer;
+  line-height: 1.3;
+}
+.card-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+}
+.card-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+.card-btn.pause:hover:not(:disabled) {
+  border-color: rgba(255, 200, 80, 0.55);
+  color: #e3b341;
+}
+.card-btn.resume:hover:not(:disabled) {
+  border-color: rgba(63, 185, 80, 0.55);
+  color: var(--running);
+}
+
+/* -------------------- Flash toast -------------------- */
+.flash-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1000;
+  background: rgba(248, 81, 73, 0.92);
+  color: white;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--mono);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  animation: toast-in 160ms ease-out;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
 /* -------------------- Modal -------------------- */
 .modal-backdrop {
   position: fixed;

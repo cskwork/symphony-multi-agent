@@ -1,7 +1,13 @@
 // board.js — 칸반 보드 렌더링 + polling 루프 + 키보드 단축키
 
 import { el, formatTime } from "./utils.js";
-import { fetchSymphonyState, fetchKanbanIndex } from "./api.js";
+import {
+  fetchSymphonyState,
+  fetchKanbanIndex,
+  pauseTicket,
+  resumeTicket,
+  refreshSymphony,
+} from "./api.js";
 import { renderCard, openTicketDetail, closeTicketDetail } from "./ticket.js";
 
 const POLL_INTERVAL_MS = 5000;
@@ -88,6 +94,50 @@ const searchInput = document.getElementById("search-input");
 const modalBackdrop = document.getElementById("modal-backdrop");
 const modalCloseBtn = document.getElementById("modal-close");
 
+// ---- 액션 핸들러: pause / resume / orchestrator refresh ----
+// 모두 optimistic update 없이, 호출 직후 즉시 poll로 정확한 상태 반영.
+// 진행 중인 버튼은 disabled로 잠가서 더블 클릭 방지.
+async function withButtonLock(btn, fn) {
+  if (btn) btn.disabled = true;
+  try {
+    return await fn();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+const cardHandlers = {
+  onPause: (id, btn) => {
+    withButtonLock(btn, async () => {
+      const res = await pauseTicket(id);
+      if (!res.ok) {
+        flashError(`Pause 실패 (${res.status || "network"})`);
+      }
+      // 결과는 다음 poll에서 카드에 반영
+      poll();
+    });
+  },
+  onResume: (id, btn) => {
+    withButtonLock(btn, async () => {
+      const res = await resumeTicket(id);
+      if (!res.ok) {
+        flashError(`Resume 실패 (${res.status || "network"})`);
+      }
+      poll();
+    });
+  },
+};
+
+// 작은 toast 한 줄. CSS .flash-toast 가 있을 때만 시각적, 없어도 console에는 남음.
+function flashError(msg) {
+  console.warn("[board-viewer]", msg);
+  const host = document.body;
+  if (!host) return;
+  const node = el("div", { class: "flash-toast", role: "status" }, msg);
+  host.appendChild(node);
+  setTimeout(() => node.remove(), 3000);
+}
+
 // 컬럼 frame 1회 빌드 (poll마다 reuse)
 function buildColumns() {
   boardEl.innerHTML = "";
@@ -134,7 +184,7 @@ function renderBoard() {
     } else {
       for (const t of tickets) {
         const running = state.runningById.get(t.id) || null;
-        const card = renderCard(t, running);
+        const card = renderCard(t, running, cardHandlers);
         if (filter && !cardMatches(t, filter)) {
           card.classList.add("hidden");
         } else {
@@ -303,7 +353,8 @@ function bindShortcuts() {
       case "r":
       case "R":
         e.preventDefault();
-        poll();
+        // 헤더 버튼과 동일 동작: orchestrator refresh → local poll
+        refreshBtn.click();
         break;
       case "/":
         e.preventDefault();
@@ -350,7 +401,14 @@ function bindShortcuts() {
 }
 
 function bindUi() {
-  refreshBtn.addEventListener("click", () => poll());
+  // 새로고침: orchestrator에 즉시 reconcile 요청 → 그 후 local poll 1회.
+  // orchestrator down이면 refresh는 실패해도 local poll은 계속 진행.
+  refreshBtn.addEventListener("click", async () => {
+    await withButtonLock(refreshBtn, async () => {
+      await refreshSymphony();
+      await poll();
+    });
+  });
   searchInput.addEventListener("input", () => renderBoard());
   modalCloseBtn.addEventListener("click", () => closeTicketDetail());
   modalBackdrop.addEventListener("click", (e) => {
