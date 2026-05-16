@@ -1,0 +1,664 @@
+/* Symphony Board Viewer — 다크 테마 (TUI 톤) */
+
+:root {
+  /* UI scale — board.js가 +/− 버튼/단축키로 갱신하고 localStorage에 저장.
+     header / board / footer 영역에만 적용되어 modal/backdrop 좌표는 보존된다. */
+  --ui-zoom: 1;
+  --bg: #0d1117;
+  --bg-elev-1: #11161d;
+  --bg-elev-2: #161b22;
+  --bg-elev-3: #1c232c;
+  --border: #2a313c;
+  --border-strong: #3b4350;
+  --fg: #e6edf3;
+  --fg-muted: #8b949e;
+  --fg-dim: #6e7681;
+  --accent: #5274ec;
+  --accent-soft: rgba(82, 116, 236, 0.18);
+  --good: #3fb950;
+  --warn: #d29922;
+  --danger: #f85149;
+  --p1: #f85149;
+  --p2: #d29922;
+  --p3: #58a6ff;
+  --p4: #6e7681;
+  --running: #3fb950;
+  --shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo",
+    "Noto Sans KR", system-ui, sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* -------------------- Header -------------------- */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 22px;
+  background: var(--bg-elev-1);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  /* zoom은 modal-backdrop(고정 좌표)에 영향 주지 않게 header/board/footer에만 적용 */
+  zoom: var(--ui-zoom, 1);
+}
+
+.header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.repo-name {
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.status-block {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  display: inline-block;
+}
+
+.status-dot[data-state="alive"] {
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+}
+.status-dot[data-state="down"] {
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+.status-dot[data-state="unknown"] {
+  background: var(--fg-dim);
+}
+
+.status-text {
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.meta-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-muted);
+  line-height: 1.35;
+}
+
+.search-input {
+  background: var(--bg-elev-2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 12px;
+  font-family: var(--mono);
+  font-size: 14px;
+  width: 220px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.search-input:focus {
+  border-color: var(--accent);
+}
+
+.refresh-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.refresh-btn:hover {
+  filter: brightness(1.1);
+}
+.refresh-btn:active {
+  transform: translateY(1px);
+}
+
+/* -------------------- Zoom controls -------------------- */
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 4px;
+}
+
+.zoom-btn {
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  border-radius: 4px;
+  width: 30px;
+  height: 28px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  font-family: var(--mono);
+  transition: background 0.1s, color 0.1s;
+}
+.zoom-btn:hover {
+  background: var(--bg-elev-3);
+  color: var(--fg);
+}
+.zoom-btn:active {
+  transform: translateY(1px);
+}
+.zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.zoom-btn.zoom-reset {
+  font-size: 14px;
+}
+
+.zoom-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg-muted);
+  min-width: 44px;
+  text-align: center;
+  user-select: none;
+}
+
+/* -------------------- Board (Kanban) -------------------- */
+.board {
+  flex: 1 1 0;
+  /* flex item이 100% height을 자식에게 전달하려면 min-height: 0 이 필요. */
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding: 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-items: stretch;
+  zoom: var(--ui-zoom, 1);
+}
+
+.column {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-height: 0;
+  /* 100% — board(flex:1)가 viewport-header-footer 만큼 자라고, 컬럼은 그 board를 채움.
+     기존 calc(100vh - 150px)은 zoom 적용 시 어긋났음 + 작은 화면에선 카드가 잘림. */
+  height: 100%;
+  max-height: 100%;
+}
+
+.column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.column[data-state="Cancelled"] .column-header,
+.column[data-state="Done"] .column-header,
+.column[data-state="Archive"] .column-header,
+.column[data-state="Blocked"] .column-header {
+  color: var(--fg-muted);
+}
+
+.column-count {
+  background: var(--bg-elev-3);
+  color: var(--fg-muted);
+  border-radius: 10px;
+  padding: 2px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.column-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.column-body::-webkit-scrollbar {
+  width: 6px;
+}
+.column-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.column-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+
+.column-empty {
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 10px;
+  font-style: italic;
+}
+
+/* -------------------- Card -------------------- */
+.card {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 13px;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.12s, background 0.12s, transform 0.05s;
+  outline: none;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elev-3);
+}
+
+.card:focus-visible,
+.card.focused {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.card.running {
+  border-color: rgba(63, 185, 80, 0.4);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.card-id {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.card-priority {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  line-height: 1.3;
+}
+.card-priority[data-p="1"] { color: var(--p1); }
+.card-priority[data-p="2"] { color: var(--p2); }
+.card-priority[data-p="3"] { color: var(--p3); }
+.card-priority[data-p="4"] { color: var(--p4); }
+
+.card-title {
+  font-size: 15.5px;
+  color: var(--fg);
+  line-height: 1.4;
+  word-break: break-word;
+  margin-bottom: 8px;
+}
+
+.card-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.label-chip {
+  background: var(--accent-soft);
+  color: #aab9f3;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  line-height: 1.5;
+}
+
+/* Running indicator */
+.running-badge {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(63, 185, 80, 0.12);
+  color: var(--running);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(63, 185, 80, 0.3);
+  line-height: 1.3;
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--running);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+/* When card is running, push id row down so it doesn't overlap badge */
+.card.running .card-head {
+  padding-right: 110px;
+}
+
+/* -------------------- Modal -------------------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  padding: 24px;
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.modal {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  width: min(900px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow);
+  /* flex 컨테이너 내부의 자식이 overflow-y scroll을 받으려면
+     부모에 overflow: hidden 이 있어야 height 계산이 정상화된다. */
+  overflow: hidden;
+  /* 상세보기 영역에도 zoom 적용 — backdrop은 viewport 그대로, 안쪽만 확대/축소 */
+  zoom: var(--ui-zoom, 1);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+  gap: 14px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--fg);
+  font-family: var(--mono);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.modal-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.modal-link:hover {
+  border-color: var(--accent);
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 26px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.modal-close:hover {
+  background: var(--bg-elev-3);
+  color: var(--fg);
+}
+
+.modal-body {
+  flex: 1 1 auto;
+  /* flex item이 overflow-y: auto/scroll 을 정상 동작시키려면 min-height: 0 필수.
+     기본값 auto 이면 컨텐츠 크기만큼 늘어나서 scroll 영역이 생성되지 않는다. */
+  min-height: 0;
+  overflow-y: scroll;        /* 항상 scrollbar 트랙을 표시 (auto는 컨텐츠 적을 때 숨김) */
+  overflow-x: hidden;
+  padding: 20px 26px 28px;
+  /* Firefox */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.modal-body::-webkit-scrollbar {
+  width: 10px;
+}
+.modal-body::-webkit-scrollbar-track {
+  background: var(--bg-elev-2);
+  border-radius: 5px;
+}
+.modal-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid var(--bg-elev-1);
+}
+.modal-body::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+.modal-meta {
+  margin-bottom: 18px;
+}
+
+.meta-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14.5px;
+}
+
+.meta-table th,
+.meta-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.meta-table th {
+  color: var(--fg-muted);
+  font-weight: 500;
+  font-family: var(--mono);
+  width: 150px;
+  white-space: nowrap;
+}
+
+.meta-table td {
+  color: var(--fg);
+  font-family: var(--mono);
+  word-break: break-word;
+}
+
+/* Markdown body */
+.modal-content {
+  font-size: 16.5px;
+  line-height: 1.7;
+  color: var(--fg);
+}
+
+.modal-content h1,
+.modal-content h2,
+.modal-content h3,
+.modal-content h4 {
+  color: var(--fg);
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+}
+
+.modal-content h1 { font-size: 23px; }
+.modal-content h2 { font-size: 19.5px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+.modal-content h3 { font-size: 17.5px; }
+
+.modal-content code {
+  background: var(--bg-elev-3);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 14.5px;
+  color: #f0a070;
+}
+
+.modal-content pre {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  padding: 14px;
+  border-radius: 5px;
+  overflow-x: auto;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.modal-content pre code {
+  background: transparent;
+  padding: 0;
+  color: var(--fg);
+}
+
+.modal-content blockquote {
+  border-left: 4px solid var(--accent);
+  margin: 0;
+  padding: 6px 16px;
+  color: var(--fg-muted);
+  background: var(--bg-elev-2);
+  border-radius: 0 4px 4px 0;
+}
+
+.modal-content ul,
+.modal-content ol {
+  padding-left: 26px;
+}
+
+.modal-content table {
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+.modal-content th,
+.modal-content td {
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+}
+.modal-content a {
+  color: var(--accent);
+}
+
+/* -------------------- Footer -------------------- */
+.app-footer {
+  padding: 9px 22px;
+  background: var(--bg-elev-1);
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 13px;
+  text-align: center;
+  font-family: var(--mono);
+  zoom: var(--ui-zoom, 1);
+}
+
+.app-footer kbd {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 7px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+}
+
+/* -------------------- Filtered (search hidden) -------------------- */
+.card.hidden {
+  display: none;
+}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Symphony Board Viewer — dograh-demo</title>
+  <link rel="stylesheet" href="/src/css/style.css" />
+</head>
+<body>
+  <header class="app-header" role="banner">
+    <div class="header-left">
+      <h1 class="app-title">Symphony Board Viewer</h1>
+      <span class="repo-name">dograh-demo</span>
+    </div>
+    <div class="header-right">
+      <div class="status-block">
+        <span class="status-dot" id="status-dot" data-state="unknown" aria-hidden="true"></span>
+        <span id="status-text" class="status-text">상태 확인 중…</span>
+      </div>
+      <div class="meta-block">
+        <span id="last-poll" class="last-poll">last poll: —</span>
+        <span id="ticket-count" class="ticket-count">tickets: —</span>
+      </div>
+      <input
+        id="search-input"
+        class="search-input"
+        type="search"
+        placeholder="티켓 ID 검색 ( / )"
+        aria-label="티켓 검색"
+        autocomplete="off"
+      />
+      <button id="refresh-btn" class="refresh-btn" type="button" title="즉시 새로고침 (r)">
+        새로고침
+      </button>
+      <div class="zoom-controls" role="group" aria-label="UI 크기 조절">
+        <button id="zoom-out" class="zoom-btn" type="button" aria-label="UI 줄이기" title="줄이기 ( [ )">−</button>
+        <span id="zoom-value" class="zoom-value" aria-live="polite">100%</span>
+        <button id="zoom-in" class="zoom-btn" type="button" aria-label="UI 키우기" title="키우기 ( ] )">+</button>
+        <button id="zoom-reset" class="zoom-btn zoom-reset" type="button" aria-label="UI 크기 리셋" title="리셋 ( \\ )">⟲</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="board" id="board" aria-label="칸반 보드"></main>
+
+  <footer class="app-footer">
+    <span>read-only · 5s polling · keys: <kbd>r</kbd> refresh / <kbd>/</kbd> 검색 / <kbd>j</kbd> <kbd>k</kbd> 이동 / <kbd>Enter</kbd> 열기 / <kbd>Esc</kbd> 닫기 / <kbd>[</kbd> <kbd>]</kbd> 크기 / <kbd>\</kbd> 리셋</span>
+  </footer>
+
+  <!-- 카드 상세 modal -->
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+      id="modal"
+    >
+      <header class="modal-header">
+        <h2 id="modal-title" class="modal-title">—</h2>
+        <div class="modal-actions">
+          <a id="modal-raw-link" class="modal-link" href="#" target="_blank" rel="noopener">원본 보기</a>
+          <button id="modal-close" class="modal-close" type="button" aria-label="닫기">×</button>
+        </div>
+      </header>
+      <div class="modal-body">
+        <section class="modal-meta">
+          <table id="modal-meta-table" class="meta-table"></table>
+        </section>
+        <article id="modal-content" class="modal-content"></article>
+      </div>
+    </div>
+  </div>
+
+  <!-- marked.js for markdown rendering + DOMPurify for XSS sanitization -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.11/dist/purify.min.js"></script>
+  <script type="module" src="/src/js/utils.js"></script>
+  <script type="module" src="/src/js/api.js"></script>
+  <script type="module" src="/src/js/ticket.js"></script>
+  <script type="module" src="/src/js/board.js"></script>
+</body>
+</html>
