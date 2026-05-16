@@ -2,7 +2,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg)](https://www.python.org/)
-[![Tests: 205 passing](https://img.shields.io/badge/tests-205%20passing-brightgreen.svg)](#tests)
+[![Tests](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml/badge.svg)](https://github.com/cskwork/symphony-multi-agent/actions/workflows/tests.yml)
 
 > Drive any coding-agent CLI — Codex, Claude Code, Gemini, or Pi — from one
 > orchestrator, with a Jira-style Kanban board rendered straight in your
@@ -583,12 +583,11 @@ tui-open.bat           Windows equivalent
 pytest -q
 ```
 
-205 tests pass (2 skipped): the upstream conformance suite plus the backend
-unit tests covering the factory, event normalization, Claude / Pi usage
-accumulation, Gemini session synthesis, and Pi failure-reason detection,
-plus Textual `Pilot`-driven smoke tests for the TUI app. Subprocess-driven
-integration tests against real CLIs are intentionally not in CI — run them
-locally.
+The test suite covers the upstream conformance suite, backend unit tests for
+the factory, event normalization, Claude / Pi usage accumulation, Gemini
+session synthesis, and Pi failure-reason detection, plus Textual
+`Pilot`-driven smoke tests for the TUI app. Subprocess-driven integration
+tests against real CLIs are intentionally not in CI — run them locally.
 
 ## Design notes
 
@@ -661,7 +660,9 @@ Fork-specific gaps:
 
 ## Contributing
 
-PRs welcome. Before opening one:
+PRs welcome. External contributions should target `dev` by default; see
+[CONTRIBUTING.md](CONTRIBUTING.md) and the PR template for the full review
+checklist. Before opening one:
 
 ```bash
 pip install -e ".[dev]"
