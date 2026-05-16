@@ -169,6 +169,18 @@ agent:
 codex:
   command: codex app-server
   approval_policy: never
+  # Sandbox trade-off — read before changing:
+  #   `workspace-write` (default below) keeps codex confined to the worker
+  #   workspace and is the safer choice for fresh clones / shared machines.
+  #   It DOES NOT WORK when `after_create` symlinks host-repo dirs (kanban,
+  #   docs, ...) into the workspace — codex resolves symlinks via realpath
+  #   and refuses to write outside the workspace root, so stage-transition
+  #   commits silently fail and the worker burns turns repeating "blocked".
+  #   If you see that pattern: either (a) widen the policy to
+  #   `danger-full-access` (trusted local dev only — git branch isolation
+  #   still scopes the blast radius), or (b) wrap codex in a script that
+  #   adds the symlink targets to `sandbox_workspace_write.writable_roots`
+  #   via `-c` TOML overrides.
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
   turn_timeout_ms: 3600000
