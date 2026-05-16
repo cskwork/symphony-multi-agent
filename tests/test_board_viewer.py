@@ -36,6 +36,19 @@ def test_card_renderer_has_agent_badge_slot() -> None:
     assert 'String(ticket.state || "").toLowerCase() === "done" ? agentKindFromTicket(ticket)' in js
 
 
+def test_card_renderer_has_done_archive_action() -> None:
+    ticket_js = Path("tools/board-viewer/src/js/ticket.js").read_text(encoding="utf-8")
+    board_js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
+    api_js = Path("tools/board-viewer/src/js/api.js").read_text(encoding="utf-8")
+
+    assert 'String(ticket.state || "").trim().toLowerCase() === "done"' in ticket_js
+    assert 'makeActionBtn("Archive", "card-btn archive"' in ticket_js
+    assert "onArchive" in ticket_js
+    assert "archiveTicket" in board_js
+    assert "onArchive" in board_js
+    assert "/api/kanban/${encodeURIComponent(id)}/archive" in api_js
+
+
 def test_board_viewer_fallback_states_and_policy_mode() -> None:
     js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
 
@@ -93,6 +106,62 @@ body
 
     assert tickets[0]["agent_kind"] == "codex"
     assert tickets[0]["done_agent_kind"] == "codex"
+
+
+def test_archive_kanban_ticket_moves_done_to_archive(tmp_path, monkeypatch) -> None:
+    server = _load_server_module()
+    board = tmp_path / "kanban"
+    board.mkdir()
+    ticket = board / "TASK-3.md"
+    ticket.write_text(
+        """---
+id: TASK-3
+identifier: TASK-3
+title: Finished task
+state: Done
+updated_at: 2026-05-01T00:00:00Z
+---
+body stays
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "KANBAN_DIR", board)
+
+    result = server.archive_kanban_ticket("TASK-3")
+    front, body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
+
+    assert result["changed"] is True
+    assert result["previous_state"] == "Done"
+    assert front["state"] == "Archive"
+    assert front["updated_at"] != "2026-05-01T00:00:00Z"
+    assert body == "body stays\n"
+
+
+def test_archive_kanban_ticket_refuses_active_ticket(tmp_path, monkeypatch) -> None:
+    server = _load_server_module()
+    board = tmp_path / "kanban"
+    board.mkdir()
+    ticket = board / "TASK-4.md"
+    ticket.write_text(
+        """---
+id: TASK-4
+title: Active task
+state: Todo
+---
+body
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(server, "KANBAN_DIR", board)
+
+    try:
+        server.archive_kanban_ticket("TASK-4")
+    except ValueError as exc:
+        assert "only Done tickets" in str(exc)
+    else:
+        raise AssertionError("expected active ticket archive to fail")
+    front, _body = server.parse_frontmatter(ticket.read_text(encoding="utf-8"))
+    assert front["state"] == "Todo"
 
 
 def test_workflow_branch_policy_update_preserves_body(tmp_path, monkeypatch) -> None:

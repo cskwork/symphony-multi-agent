@@ -60,6 +60,7 @@ python3 tools/board-viewer/server.py --kanban /path/to/some/kanban --workflow /p
 3. Kanban 파일 인덱스/원본:
    - `GET /api/kanban/index` — `kanban/*.md` 전체 frontmatter 인덱스 (JSON)
    - `GET /api/kanban/<ID>.md` — 단일 ticket 원본 .md
+   - `POST /api/kanban/<ID>/archive` — Done ticket frontmatter를 `Archive`로 갱신
 4. Branch policy:
    - `GET /api/git/branches` — 현재 repo의 실제 local git branch 목록
    - `POST /api/workflow/branch-policy` — `agent.feature_base_branch`와 `agent.auto_merge_target_branch` 갱신
@@ -88,8 +89,8 @@ python3 tools/board-viewer/server.py --kanban /path/to/some/kanban --workflow /p
 
 ## 보안 / 안전성
 
-- 모든 API 호출이 **GET** 한정. Symphony `POST /refresh|/pause|/resume` 같은 mutating endpoint는 **호출하지 않는다.**
-- kanban/*.md 도 read 전용 (Write/Edit 없음).
+- mutating API는 로컬 origin에서만 허용하고, allowlist를 `refresh`, `pause`, `resume`, Done ticket `archive`로 제한한다.
+- kanban/*.md 쓰기는 Done → Archive 상태 전환에만 사용한다.
 - Symphony 가 down 이어도 file-based로 보드 동작 (상단 인디케이터 빨강).
 - path traversal 차단 (정적 root 외부 / kanban_dir 외부 접근 거부).
 - 마크다운 본문은 [DOMPurify](https://github.com/cure53/DOMPurify) 로 sanitize — kanban 본문이 외부 에이전트 prompt-injection 으로 오염돼도 XSS 차단.

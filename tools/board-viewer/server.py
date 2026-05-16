@@ -9,12 +9,13 @@
        POST /api/symphony/refresh          — 즉시 reconcile/poll
        POST /api/symphony/<ID>/pause       — 다음 turn 경계에서 일시정지
        POST /api/symphony/<ID>/resume      — 일시정지 해제
+       POST /api/kanban/<ID>/archive       — Done 티켓을 Archive 상태로 이동
   3. Kanban 파일 인덱스/원본: /api/kanban/index, /api/kanban/<ID>.md
 
 설계 원칙:
   - stdlib 만 사용 (Python 3.11+)
-  - 노출하는 mutating endpoint는 orchestrator가 이미 공개한 3개
-    (refresh / pause / resume)만 화이트리스트로 프록시. 그 외 GET 전부.
+  - 노출하는 mutating endpoint는 refresh / pause / resume / archive
+    allowlist로 제한한다. 그 외 GET 전부.
   - 127.0.0.1 바인딩 + CORS `*` — 같은 origin 보험
   - Symphony가 죽어도 board file 인덱스는 동작해야 함 (degraded mode)
 """
@@ -22,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import re
@@ -799,6 +801,17 @@ def list_kanban_tickets() -> list[dict[str, Any]]:
 
 def read_kanban_file(ticket_id: str) -> bytes | None:
     """단일 .md 원본. path traversal 방어."""
+    path = _kanban_ticket_path(ticket_id)
+    if path is None:
+        return None
+    try:
+        return path.read_bytes()
+    except OSError:
+        return None
+
+
+def _kanban_ticket_path(ticket_id: str) -> Path | None:
+    """Resolve a ticket id to a safe kanban markdown path."""
     safe = re.sub(r"[^A-Za-z0-9_\-]", "", ticket_id)
     if not safe:
         return None
@@ -808,9 +821,82 @@ def read_kanban_file(ticket_id: str) -> bytes | None:
         resolved = candidate.resolve()
         if KANBAN_DIR.resolve() not in resolved.parents:
             return None
-        return resolved.read_bytes()
+        if not resolved.is_file():
+            return None
+        return resolved
     except (OSError, ValueError):
         return None
+
+
+def _split_kanban_frontmatter(text: str) -> tuple[list[str], list[str]]:
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("ticket front matter is missing")
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return lines[1:idx], lines[idx:]
+    raise ValueError("ticket front matter is not terminated")
+
+
+def _frontmatter_scalar(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.:/+\-]+", value):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _upsert_frontmatter_scalar(
+    lines: list[str], key: str, value: str
+) -> list[str]:
+    rendered = f"{key}: {_frontmatter_scalar(value)}\n"
+    for idx, line in enumerate(lines):
+        if re.match(rf"^{re.escape(key)}\s*:", line):
+            lines[idx] = rendered
+            return lines
+    insert_at = len(lines)
+    while insert_at > 0 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+    lines[insert_at:insert_at] = [rendered]
+    return lines
+
+
+def archive_kanban_ticket(ticket_id: str, target_state: str = "Archive") -> dict[str, Any]:
+    """Move a Done ticket to the configured Archive lane.
+
+    Board Viewer is intentionally narrower than the TUI hotkey here: it exposes
+    a per-card button only on Done cards, so active work cannot be archived by
+    an accidental browser click.
+    """
+    path = _kanban_ticket_path(ticket_id)
+    if path is None:
+        raise FileNotFoundError(ticket_id)
+    text = path.read_text(encoding="utf-8")
+    front, _body = parse_frontmatter(text)
+    current_state = str(front.get("state") or "Todo")
+    if current_state.strip().lower() == target_state.strip().lower():
+        return {"id": ticket_id, "state": current_state, "changed": False}
+    if current_state.strip().lower() != "done":
+        raise ValueError(f"only Done tickets can be archived (state={current_state})")
+    front_lines, tail_lines = _split_kanban_frontmatter(text)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    front_lines = _upsert_frontmatter_scalar(front_lines, "state", target_state)
+    front_lines = _upsert_frontmatter_scalar(front_lines, "updated_at", now)
+    next_text = "---\n" + "".join(front_lines) + "".join(tail_lines)
+    tmp = path.with_name(f".tmp-{path.name}")
+    try:
+        tmp.write_text(next_text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return {
+        "id": front.get("identifier") or front.get("id") or ticket_id,
+        "state": target_state,
+        "previous_state": current_state,
+        "updated_at": now,
+        "changed": True,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -930,6 +1016,33 @@ class BoardHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, **result})
             return
 
+        m = re.fullmatch(r"/api/kanban/([A-Za-z0-9_\-]+)/archive", path)
+        if m:
+            if not self._local_origin_allowed():
+                self._drain_request_body()
+                self._send_json(403, {"error": "forbidden_origin"})
+                return
+            self._drain_request_body()
+            try:
+                result = archive_kanban_ticket(m.group(1))
+            except FileNotFoundError:
+                self._send_json(404, {"error": "not_found", "id": m.group(1)})
+                return
+            except ValueError as exc:
+                self._send_json(
+                    409,
+                    {"error": "not_archivable", "message": str(exc)},
+                )
+                return
+            except Exception as exc:
+                self._send_json(
+                    500,
+                    {"error": "archive_failed", "message": str(exc)},
+                )
+                return
+            self._send_json(200, {"ok": True, **result})
+            return
+
         # refresh — payload 없는 단순 트리거
         if path == "/api/symphony/refresh":
             # 클라이언트 body는 무시(stdlib http 서버는 close-notify까지 안 해도 됨).
@@ -956,7 +1069,7 @@ class BoardHandler(BaseHTTPRequestHandler):
             405,
             {
                 "error": "method_not_allowed",
-                "message": "POST only allowed on /api/workflow/branch-policy, /api/settings, /api/symphony/refresh, /api/symphony/<id>/(pause|resume)",
+                "message": "POST only allowed on /api/workflow/branch-policy, /api/settings, /api/kanban/<id>/archive, /api/symphony/refresh, /api/symphony/<id>/(pause|resume)",
             },
         )
 

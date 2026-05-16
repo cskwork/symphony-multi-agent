@@ -5,6 +5,7 @@ import {
   fetchSymphonyState,
   fetchKanbanIndex,
   fetchGitBranches,
+  archiveTicket,
   pauseTicket,
   resumeTicket,
   refreshSymphony,
@@ -108,7 +109,7 @@ const branchControlsEl = document.getElementById("branch-controls");
 const featureBaseSelect = document.getElementById("feature-base-branch");
 const mergeTargetSelect = document.getElementById("merge-target-branch");
 
-// ---- 액션 핸들러: pause / resume / orchestrator refresh ----
+// ---- 액션 핸들러: pause / resume / archive / orchestrator refresh ----
 // 모두 optimistic update 없이, 호출 직후 즉시 poll로 정확한 상태 반영.
 // 진행 중인 버튼은 disabled로 잠가서 더블 클릭 방지.
 async function withButtonLock(btn, fn) {
@@ -136,6 +137,15 @@ const cardHandlers = {
       const res = await resumeTicket(id);
       if (!res.ok) {
         flashError(`Resume 실패 (${res.status || "network"})`);
+      }
+      poll();
+    });
+  },
+  onArchive: (id, btn) => {
+    withButtonLock(btn, async () => {
+      const res = await archiveTicket(id);
+      if (!res.ok) {
+        flashError(`Archive 실패 (${res.status || "network"})`);
       }
       poll();
     });

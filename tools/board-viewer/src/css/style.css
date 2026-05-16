@@ -629,6 +629,10 @@ pre,
   border-color: color-mix(in oklch, var(--good) 55%, transparent);
   color: var(--running);
 }
+.card-btn.archive:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--accent-strong);
+}
 
 /* -------------------- Flash toast -------------------- */
 .flash-toast {

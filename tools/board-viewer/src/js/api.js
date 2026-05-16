@@ -59,7 +59,7 @@ export function rawKanbanUrl(id) {
   return `/api/kanban/${encodeURIComponent(id)}.md`;
 }
 
-// ---- mutating actions (whitelist: refresh / pause / resume) ----
+// ---- mutating actions (whitelist: refresh / pause / resume / archive) ----
 //   - 모두 POST, payload 없음. orchestrator는 idempotent하게 처리.
 //   - 응답 { ok, status, data | error }로 정규화. UI에서 분기.
 
@@ -80,6 +80,10 @@ export function pauseTicket(id) {
 
 export function resumeTicket(id) {
   return postNoBody(`/api/symphony/${encodeURIComponent(id)}/resume`);
+}
+
+export function archiveTicket(id) {
+  return postNoBody(`/api/kanban/${encodeURIComponent(id)}/archive`);
 }
 
 export function refreshSymphony() {

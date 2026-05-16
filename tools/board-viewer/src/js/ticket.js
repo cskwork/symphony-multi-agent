@@ -105,7 +105,7 @@ function renderAgentBadges(ticket, runningInfo, options = {}) {
 
 // 카드 DOM 생성
 // handlers (옵션):
-//   { onPause(id, btn), onResume(id, btn) } — 둘 다 e.stopPropagation으로
+//   { onPause(id, btn), onResume(id, btn), onArchive(id, btn) } — 모두 e.stopPropagation으로
 //   카드 클릭(=modal-open)과 분리된다. 핸들러가 없으면 버튼 자체가 안 그려진다.
 export function renderCard(ticket, runningInfo, handlers, options = {}) {
   const cls = ["card"];
@@ -142,15 +142,23 @@ export function renderCard(ticket, runningInfo, handlers, options = {}) {
   }
 
   // pause/resume 버튼은 worker가 잡힌 상태(runningInfo 있음)에서만 의미가 있다.
+  // Archive는 Done 카드에서만 노출해 active work 오조작을 막는다.
   let actionRow = null;
-  if (runningInfo && handlers && (handlers.onPause || handlers.onResume)) {
+  if (handlers && (handlers.onPause || handlers.onResume || handlers.onArchive)) {
     const buttons = [];
-    if (paused && handlers.onResume) {
+    const isDone = String(ticket.state || "").trim().toLowerCase() === "done";
+    if (isDone && handlers.onArchive) {
+      buttons.push(makeActionBtn("Archive", "card-btn archive", (e) => {
+        e.stopPropagation();
+        handlers.onArchive(id, e.currentTarget);
+      }));
+    }
+    if (runningInfo && paused && handlers.onResume) {
       buttons.push(makeActionBtn("Resume", "card-btn resume", (e) => {
         e.stopPropagation();
         handlers.onResume(id, e.currentTarget);
       }));
-    } else if (!paused && handlers.onPause) {
+    } else if (runningInfo && !paused && handlers.onPause) {
       buttons.push(makeActionBtn("Pause", "card-btn pause", (e) => {
         e.stopPropagation();
         handlers.onPause(id, e.currentTarget);
