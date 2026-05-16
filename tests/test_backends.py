@@ -9,6 +9,7 @@ real-integration runs since CI cannot guarantee those binaries.
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import replace
 from pathlib import Path
 
@@ -533,18 +534,24 @@ def test_scan_workspace_symlinks_tolerates_missing_root(tmp_path: Path) -> None:
 def test_inject_writable_roots_modifies_direct_codex_command() -> None:
     out = _inject_writable_roots("codex app-server", ["/a", "/b"])
     assert out == (
-        'codex -c sandbox_workspace_write.writable_roots=["/a","/b"] app-server'
+        "codex -c 'sandbox_workspace_write.writable_roots=[\"/a\",\"/b\"]' app-server"
     )
+    assert shlex.split(out) == [
+        "codex",
+        "-c",
+        'sandbox_workspace_write.writable_roots=["/a","/b"]',
+        "app-server",
+    ]
 
 
 def test_inject_writable_roots_modifies_bare_codex_command() -> None:
     out = _inject_writable_roots("codex", ["/a"])
-    assert out == 'codex -c sandbox_workspace_write.writable_roots=["/a"]'
+    assert out == "codex -c 'sandbox_workspace_write.writable_roots=[\"/a\"]'"
 
 
 def test_inject_writable_roots_preserves_leading_whitespace() -> None:
     out = _inject_writable_roots("  codex app-server", ["/a"])
-    assert out.startswith("  codex -c sandbox_workspace_write.writable_roots=")
+    assert out.startswith("  codex -c 'sandbox_workspace_write.writable_roots=")
 
 
 def test_inject_writable_roots_skips_wrapper_scripts() -> None:

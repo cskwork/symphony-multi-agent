@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -172,10 +173,10 @@ def _inject_writable_roots(command: str, writable_roots: Sequence[str]) -> str:
         return command
     leading_ws = command[: len(command) - len(stripped)]
     rest = stripped[len("codex"):]
-    roots_toml = "[" + ",".join(f'"{r}"' for r in writable_roots) + "]"
+    roots_toml = json.dumps(list(writable_roots), separators=(",", ":"))
+    config_arg = shlex.quote(f"sandbox_workspace_write.writable_roots={roots_toml}")
     return (
-        f"{leading_ws}codex -c sandbox_workspace_write.writable_roots={roots_toml}"
-        f"{rest}"
+        f"{leading_ws}codex -c {config_arg}{rest}"
     )
 
 
