@@ -13,10 +13,12 @@ import argparse
 import asyncio
 import signal
 import sys
+from pathlib import Path
 
 from .errors import SymphonyError
 from .logging import configure_logging
 from .orchestrator import Orchestrator
+from .progress_md import ProgressFileWriter
 from .server import build_app, run_server
 from .workflow import WorkflowState, resolve_workflow_path
 
@@ -53,6 +55,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="launch the Jira-style CLI Kanban board (same as `symphony tui ...`)",
     )
+    parser.add_argument(
+        "--progress-md",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "mirror live progress to WORKFLOW-PROGRESS.md (default: on). "
+            "Pass --no-progress-md to disable. Path can be set via "
+            "--progress-md-path or `progress.path` in WORKFLOW.md."
+        ),
+    )
+    parser.add_argument(
+        "--progress-md-path",
+        default=None,
+        help="override WORKFLOW-PROGRESS.md location (relative to CWD)",
+    )
     return parser
 
 
@@ -76,6 +93,29 @@ async def _run(args: argparse.Namespace) -> int:
     except SymphonyError as exc:
         log.error("startup_failed", error=str(exc))
         return 1
+
+    # Register the progress writer BEFORE any subsequent `await` so the
+    # first tick's `_notify_observers` sees it. CLI flag > WORKFLOW.md
+    # `progress.enabled` > default True.
+    progress_enabled = (
+        args.progress_md if args.progress_md is not None else cfg.progress.enabled
+    )
+    if progress_enabled:
+        if args.progress_md_path:
+            override = Path(args.progress_md_path)
+            progress_path = override if override.is_absolute() else (Path.cwd() / override).resolve()
+        elif cfg.progress.path is not None:
+            progress_path = cfg.progress.path
+        else:
+            progress_path = (workflow_path.parent / "WORKFLOW-PROGRESS.md").resolve()
+        progress_writer = ProgressFileWriter(
+            orchestrator,
+            state,
+            progress_path,
+            max_transitions=cfg.progress.max_transitions,
+        )
+        progress_writer.register()
+        log.info("progress_md_active", path=str(progress_path))
 
     server_port = args.port if args.port is not None else cfg.server.port
     runner = None

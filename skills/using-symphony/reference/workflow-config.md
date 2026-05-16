@@ -298,8 +298,32 @@ server:
   port: 9999    # omit to disable; --port on CLI overrides
 ```
 
-When unset, the orchestrator runs without an HTTP server and you can only
-observe via stderr logs and the TUI.
+When unset, the orchestrator runs without an HTTP server and you can
+observe via stderr logs, the TUI, or the `WORKFLOW-PROGRESS.md` mirror
+(below).
+
+## Progress mirror (`WORKFLOW-PROGRESS.md`)
+
+Headless invocations (`symphony ./WORKFLOW.md` without `tui`) auto-write
+a Markdown snapshot of the Kanban board next to your workflow file every
+tick and on every state change. It is the lowest-friction way to follow
+along without a TTY or HTTP server.
+
+```yaml
+progress:
+  enabled: true                     # default true; CLI --no-progress-md wins
+  path: docs/STATUS.md              # default: WORKFLOW-PROGRESS.md beside WORKFLOW.md
+  max_transitions: 20               # how many recent state changes to keep
+```
+
+CLI overrides:
+
+```bash
+symphony ./WORKFLOW.md --no-progress-md           # disable
+symphony ./WORKFLOW.md --progress-md-path docs/STATUS.md
+```
+
+Symphony rewrites the file atomically — treat it as read-only output.
 
 ## TUI display tweaks
 

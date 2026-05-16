@@ -256,6 +256,8 @@ backend.
 | Force a state transition              | `symphony board mv <ID> <state>`                             |
 | Launch TUI (preferred, new window)    | `./tui-open.sh ./WORKFLOW.md`                                |
 | Launch TUI (plain CLI, current TTY)   | `symphony tui ./WORKFLOW.md`                                 |
+| Headless (auto-mirrors WORKFLOW-PROGRESS.md) | `symphony ./WORKFLOW.md`                              |
+| Headless without progress mirror      | `symphony ./WORKFLOW.md --no-progress-md`                    |
 | Headless + JSON API                   | `symphony ./WORKFLOW.md --port 9999`                         |
 | Force a poll/reconcile                | `curl -X POST http://127.0.0.1:9999/api/v1/refresh`          |
 | Snapshot state                        | `curl -s http://127.0.0.1:9999/api/v1/state \| jq`           |

@@ -68,6 +68,29 @@ symphony tui ./WORKFLOW.md
 process will exit silently. If you (the agent) want to start Symphony for
 the user from a non-interactive shell, use headless mode below.
 
+### Headless (no TUI)
+
+```bash
+symphony ./WORKFLOW.md                  # progress mirror auto-on
+symphony ./WORKFLOW.md --no-progress-md # disable the WORKFLOW-PROGRESS.md file
+```
+
+A live `WORKFLOW-PROGRESS.md` is rewritten next to your workflow file on
+every tick and on every state change. Open the file in any editor to follow
+along without a TTY — it includes the current Kanban breakdown and the
+last `progress.max_transitions` (default 20) state changes.
+
+Override location and limits in `WORKFLOW.md` frontmatter:
+
+```yaml
+progress:
+  enabled: true                # default true; CLI --no-progress-md wins
+  path: docs/STATUS.md         # default: WORKFLOW-PROGRESS.md beside WORKFLOW.md
+  max_transitions: 20
+```
+
+CLI flag for one-off path overrides: `--progress-md-path docs/STATUS.md`.
+
 ### Headless + JSON API
 
 ```bash

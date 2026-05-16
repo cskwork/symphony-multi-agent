@@ -297,6 +297,21 @@ class TuiConfig:
 
 
 @dataclass(frozen=True)
+class ProgressConfig:
+    """Optional WORKFLOW-PROGRESS.md mirror written by the orchestrator.
+
+    `path` defaults to `WORKFLOW-PROGRESS.md` next to WORKFLOW.md when the
+    user enables progress without specifying a path. `enabled=True` is the
+    out-of-the-box default; the CLI's `--no-progress-md` flag flips it off
+    without editing the workflow file.
+    """
+
+    enabled: bool = True
+    path: Path | None = None
+    max_transitions: int = 20
+
+
+@dataclass(frozen=True)
 class PromptConfig:
     """External prompt files configured from WORKFLOW.md.
 
@@ -327,6 +342,7 @@ class ServiceConfig:
     pi: PiConfig
     server: ServerConfig
     tui: TuiConfig = field(default_factory=TuiConfig)
+    progress: ProgressConfig = field(default_factory=ProgressConfig)
     prompts: PromptConfig = field(default_factory=PromptConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
@@ -746,6 +762,51 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         visible_lanes=visible_lanes,
     )
 
+    progress_raw = cfg.get("progress") or {}
+    if not isinstance(progress_raw, dict):
+        progress_raw = {}
+    raw_enabled = progress_raw.get("enabled", True)
+    if isinstance(raw_enabled, bool):
+        progress_enabled = raw_enabled
+    else:
+        # Mirror archive_after_days: refuse silent coercions of 0/1/"true".
+        raise ConfigValidationError(
+            "progress.enabled must be a boolean", value=raw_enabled
+        )
+    raw_path = progress_raw.get("path")
+    if isinstance(raw_path, str) and raw_path.strip():
+        resolved_path = (
+            resolve_var_indirection(raw_path) if raw_path.startswith("$") else raw_path
+        )
+        candidate = Path(expand_path_value(str(resolved_path)))
+        if not candidate.is_absolute():
+            candidate = (base_dir / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        progress_path: Path | None = candidate
+    else:
+        progress_path = (base_dir / "WORKFLOW-PROGRESS.md").resolve()
+    raw_max_transitions = progress_raw.get("max_transitions")
+    if raw_max_transitions is None:
+        max_transitions = 20
+    elif isinstance(raw_max_transitions, bool) or not isinstance(raw_max_transitions, int):
+        raise ConfigValidationError(
+            "progress.max_transitions must be a non-negative integer",
+            value=raw_max_transitions,
+        )
+    elif raw_max_transitions < 0:
+        raise ConfigValidationError(
+            "progress.max_transitions must be a non-negative integer",
+            value=raw_max_transitions,
+        )
+    else:
+        max_transitions = raw_max_transitions
+    progress = ProgressConfig(
+        enabled=progress_enabled,
+        path=progress_path,
+        max_transitions=max_transitions,
+    )
+
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
     prompts = _build_prompt_config(cfg.get("prompts"), base_dir)
 
@@ -762,6 +823,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         pi=pi,
         server=server,
         tui=tui,
+        progress=progress,
         prompts=prompts,
         raw=dict(cfg),
         prompt_template=prompt_template,

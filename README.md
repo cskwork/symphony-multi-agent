@@ -291,6 +291,48 @@ into **Done**. Quit with `Ctrl-C`.
 > background process / non-interactive shell, the process exits silently —
 > always run it in a foreground terminal.
 
+### 4b. Headless mode + `WORKFLOW-PROGRESS.md`
+
+Drop `tui` to run the orchestrator without opening the Kanban UI:
+
+```bash
+symphony ./WORKFLOW.md                  # headless; progress mirror auto-on
+symphony ./WORKFLOW.md --no-progress-md # headless; no progress file
+```
+
+A live `WORKFLOW-PROGRESS.md` is rewritten next to your workflow file on
+every tick (default ~30s) and on every state change in between. Open it
+in your editor to follow along without a TTY:
+
+```markdown
+# Symphony Progress
+_Updated: 2026-05-16 14:22:31 UTC_
+
+## Kanban
+| State        | Tickets |
+|--------------|---------|
+| Todo         | OLV-005, OLV-006 |
+| In Progress  | OLV-002 (8m12s · 12k tok) |
+| Review       | OLV-001 |
+| Done         | OLV-003, OLV-004 |
+
+## Recent transitions
+- `2026-05-16 14:22:31Z`  **OLV-002**  Todo → In Progress
+- `2026-05-16 14:18:04Z`  **OLV-001**  In Progress → Review
+```
+
+Override location or limits via `WORKFLOW.md` frontmatter (or `--progress-md-path`):
+
+```yaml
+progress:
+  enabled: true                     # default true; CLI --no-progress-md wins
+  path: docs/STATUS.md              # default: WORKFLOW-PROGRESS.md beside WORKFLOW.md
+  max_transitions: 20               # how many recent transitions to keep
+```
+
+The mirror is read-only output — Symphony rewrites the file atomically;
+do not edit it by hand.
+
 ### 5. Inspect the result
 
 ```bash
