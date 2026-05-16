@@ -21,7 +21,8 @@ import asyncio
 import json
 import os
 import time
-from typing import Any
+from pathlib import Path
+from typing import Any, Sequence
 
 from .._shell import resolve_bash, safe_proc_wait
 from ..errors import (
@@ -108,6 +109,76 @@ def _sandbox_policy_to_turn_payload(value: Any) -> Any:
     return {"type": tag}
 
 
+def _sandbox_uses_workspace_write(*values: Any) -> bool:
+    """Whether any of the given sandbox values enforces workspace-write.
+
+    Accepts the kebab-case strings used in WORKFLOW.md (`workspace-write`)
+    and the v2 tagged-enum dicts (`{"type": "workspaceWrite"}`).
+    """
+    for value in values:
+        if value == "workspace-write":
+            return True
+        if isinstance(value, dict) and value.get("type") == "workspaceWrite":
+            return True
+    return False
+
+
+def _scan_workspace_symlinks(*roots: Path) -> list[str]:
+    """Return realpath targets of top-level symlinks in workspace roots.
+
+    Codex with ``sandbox_mode=workspace-write`` resolves symlinks via realpath
+    and refuses to write through paths whose target falls outside the
+    workspace root. When ``after_create`` symlinks host repo directories
+    (kanban/, docs/, prompt/, ...) into the workspace, stage-transition
+    commits silently fail and the worker burns turns repeating "쓰기 불가".
+
+    This scan returns the resolved targets so the backend can pass them to
+    codex as ``sandbox_workspace_write.writable_roots`` — keeping the safer
+    workspace-write default while letting writes succeed through symlinks.
+
+    Top-level only by design — after_create hooks symlink leaf dirs at the
+    workspace root, and recursing would slow start() materially on large
+    repos.
+    """
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            entries = list(root.iterdir())
+        except (OSError, FileNotFoundError):
+            continue
+        for entry in entries:
+            if not entry.is_symlink():
+                continue
+            try:
+                target = entry.resolve(strict=False)
+            except OSError:
+                continue
+            seen.add(str(target))
+    return sorted(seen)
+
+
+def _inject_writable_roots(command: str, writable_roots: Sequence[str]) -> str:
+    """Inject ``-c sandbox_workspace_write.writable_roots=[...]`` after ``codex``.
+
+    Only applies when the command starts with a literal ``codex`` CLI token.
+    When a wrapper script is used (codex is invoked from inside the script),
+    the ``SYMPHONY_CODEX_WRITABLE_ROOTS`` env var carries the same list so
+    the wrapper can append ``-c`` itself.
+    """
+    if not writable_roots:
+        return command
+    stripped = command.lstrip()
+    if not (stripped == "codex" or stripped.startswith(("codex ", "codex\t"))):
+        return command
+    leading_ws = command[: len(command) - len(stripped)]
+    rest = stripped[len("codex"):]
+    roots_toml = "[" + ",".join(f'"{r}"' for r in writable_roots) + "]"
+    return (
+        f"{leading_ws}codex -c sandbox_workspace_write.writable_roots={roots_toml}"
+        f"{rest}"
+    )
+
+
 def _coerce_turn(result: Any) -> dict[str, Any]:
     """Extract the ``turn`` sub-object from a v2 result/notification payload.
 
@@ -128,6 +199,7 @@ class CodexAppServerBackend:
         codex = init.cfg.codex
         self._codex = codex
         self._cwd = init.cwd
+        self._workspace_root = init.workspace_root
         self._on_event = init.on_event
         self._client_tools = init.client_tools
         self._approval_policy = codex.approval_policy
@@ -158,16 +230,17 @@ class CodexAppServerBackend:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
+        command, env = self._prepare_command_and_env()
         try:
             self._process = await asyncio.create_subprocess_exec(
                 resolve_bash(),
                 "-lc",
-                self._codex.command,
+                command,
                 cwd=str(self._cwd),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=os.environ.copy(),
+                env=env,
                 limit=MAX_LINE_BYTES,
             )
         except FileNotFoundError as exc:
@@ -176,6 +249,49 @@ class CodexAppServerBackend:
             raise CodexNotFound("subprocess pipes not available")
         self._reader_task = asyncio.create_task(self._stdout_reader())
         self._stderr_task = asyncio.create_task(self._stderr_reader())
+
+    def _prepare_command_and_env(self) -> tuple[str, dict[str, str]]:
+        """Build the subprocess command and env, auto-fixing the symlink trap.
+
+        When codex runs under ``workspace-write`` sandboxing and the workspace
+        contains symlinks to host repo dirs (the common ``after_create``
+        pattern), codex refuses writes through them. This pre-flight scans
+        the workspace, resolves the symlink targets, and:
+
+          1. injects ``-c sandbox_workspace_write.writable_roots=[...]`` after
+             the ``codex`` token when the command starts with codex directly;
+          2. exports ``SYMPHONY_CODEX_WRITABLE_ROOTS`` (``os.pathsep``-joined)
+             so wrapper scripts can append the same override themselves.
+
+        No-op when sandbox is not workspace-write or no symlinks exist.
+        """
+        env = os.environ.copy()
+        command = self._codex.command
+        if not _sandbox_uses_workspace_write(self._thread_sandbox, self._sandbox_policy):
+            return command, env
+        roots = _scan_workspace_symlinks(self._cwd, self._workspace_root)
+        if not roots:
+            return command, env
+        env["SYMPHONY_CODEX_WRITABLE_ROOTS"] = os.pathsep.join(roots)
+        new_command = _inject_writable_roots(command, roots)
+        if new_command != command:
+            log.info(
+                "codex_writable_roots_injected",
+                roots=roots,
+                source="command",
+            )
+        else:
+            log.info(
+                "codex_writable_roots_exported",
+                roots=roots,
+                source="env",
+                hint=(
+                    "wrapper script detected; append `-c "
+                    "sandbox_workspace_write.writable_roots=...` using "
+                    "$SYMPHONY_CODEX_WRITABLE_ROOTS"
+                ),
+            )
+        return new_command, env
 
     async def stop(self) -> None:
         if self._closed:

@@ -164,13 +164,13 @@ agent:
 codex:
   command: codex app-server
   approval_policy: never
-  # `workspace-write` is the safe default. If `after_create` symlinks host
-  # repo dirs (kanban, docs, ...) into the workspace, codex resolves them
-  # via realpath and refuses to write — stage-transition commits then fail
-  # silently and the worker burns turns repeating the same diagnostic.
-  # Switch to `danger-full-access` (trusted local dev only) or wrap codex
-  # in a script that adds symlink targets to
-  # `sandbox_workspace_write.writable_roots` via `-c` TOML overrides.
+  # `workspace-write` is the safe default. When `after_create` symlinks
+  # host repo dirs (kanban, docs, ...) into the workspace, symphony's codex
+  # backend auto-injects `-c sandbox_workspace_write.writable_roots=[...]`
+  # for direct `codex ...` commands and exports the resolved targets via
+  # `$SYMPHONY_CODEX_WRITABLE_ROOTS` (os.pathsep-joined) for wrapper
+  # scripts to forward themselves. If blocked-write loops still appear,
+  # fall back to `danger-full-access` (trusted local dev only).
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
 

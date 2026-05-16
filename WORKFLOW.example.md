@@ -172,15 +172,15 @@ codex:
   # Sandbox trade-off — read before changing:
   #   `workspace-write` (default below) keeps codex confined to the worker
   #   workspace and is the safer choice for fresh clones / shared machines.
-  #   It DOES NOT WORK when `after_create` symlinks host-repo dirs (kanban,
-  #   docs, ...) into the workspace — codex resolves symlinks via realpath
-  #   and refuses to write outside the workspace root, so stage-transition
-  #   commits silently fail and the worker burns turns repeating "blocked".
-  #   If you see that pattern: either (a) widen the policy to
+  #   When `after_create` symlinks host-repo dirs (kanban, docs, ...) into
+  #   the workspace, symphony's codex backend now scans those symlinks at
+  #   start() and auto-injects `-c sandbox_workspace_write.writable_roots`
+  #   so writes through them succeed without widening the sandbox. Wrapper
+  #   scripts can read `$SYMPHONY_CODEX_WRITABLE_ROOTS` (os.pathsep-joined)
+  #   and pass the same override to codex themselves.
+  #   If you still see "쓰기 불가" / blocked-write loops, fall back to
   #   `danger-full-access` (trusted local dev only — git branch isolation
-  #   still scopes the blast radius), or (b) wrap codex in a script that
-  #   adds the symlink targets to `sandbox_workspace_write.writable_roots`
-  #   via `-c` TOML overrides.
+  #   still scopes the blast radius).
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
   turn_timeout_ms: 3600000

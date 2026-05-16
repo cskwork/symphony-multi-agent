@@ -29,8 +29,11 @@ from symphony.backends.codex import (
     NOTIF_ITEM_COMPLETED,
     NOTIF_TURN_COMPLETED,
     NOTIF_THREAD_TOKEN_USAGE,
+    _inject_writable_roots,
     _normalize_event_name,
     _sandbox_policy_to_turn_payload,
+    _sandbox_uses_workspace_write,
+    _scan_workspace_symlinks,
 )
 from symphony.backends.gemini import GeminiBackend
 from symphony.backends.pi import (
@@ -415,6 +418,246 @@ def test_codex_sandbox_policy_returns_unknown_string_unchanged() -> None:
 
 def test_codex_sandbox_policy_none() -> None:
     assert _sandbox_policy_to_turn_payload(None) is None
+
+
+# ---- Codex workspace-write symlink auto-fix ----------------------------
+
+
+def test_sandbox_uses_workspace_write_recognizes_both_shapes() -> None:
+    assert _sandbox_uses_workspace_write("workspace-write") is True
+    assert _sandbox_uses_workspace_write({"type": "workspaceWrite"}) is True
+    assert _sandbox_uses_workspace_write("workspace-write", None) is True
+
+
+def test_sandbox_uses_workspace_write_negatives() -> None:
+    assert _sandbox_uses_workspace_write("read-only") is False
+    assert _sandbox_uses_workspace_write("danger-full-access") is False
+    assert _sandbox_uses_workspace_write({"type": "dangerFullAccess"}) is False
+    assert _sandbox_uses_workspace_write(None) is False
+    assert _sandbox_uses_workspace_write() is False
+
+
+def test_scan_workspace_symlinks_collects_resolved_targets(tmp_path: Path) -> None:
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "kanban").mkdir()
+    (host / "docs").mkdir()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "kanban").symlink_to(host / "kanban")
+    (workspace / "docs").symlink_to(host / "docs")
+    (workspace / "real_dir").mkdir()  # should NOT be picked up
+
+    roots = _scan_workspace_symlinks(workspace)
+
+    assert str((host / "docs").resolve()) in roots
+    assert str((host / "kanban").resolve()) in roots
+    assert all("real_dir" not in r for r in roots)
+    assert roots == sorted(roots)  # deterministic ordering
+
+
+def test_scan_workspace_symlinks_empty_when_no_symlinks(tmp_path: Path) -> None:
+    (tmp_path / "kanban").mkdir()
+    assert _scan_workspace_symlinks(tmp_path) == []
+
+
+def test_scan_workspace_symlinks_dedupes_across_roots(tmp_path: Path) -> None:
+    host = tmp_path / "host_docs"
+    host.mkdir()
+    ws_a = tmp_path / "a"
+    ws_b = tmp_path / "b"
+    ws_a.mkdir()
+    ws_b.mkdir()
+    (ws_a / "docs").symlink_to(host)
+    (ws_b / "docs").symlink_to(host)
+
+    roots = _scan_workspace_symlinks(ws_a, ws_b)
+
+    assert roots == [str(host.resolve())]
+
+
+def test_scan_workspace_symlinks_tolerates_missing_root(tmp_path: Path) -> None:
+    missing = tmp_path / "does_not_exist"
+    assert _scan_workspace_symlinks(missing) == []
+
+
+def test_inject_writable_roots_modifies_direct_codex_command() -> None:
+    out = _inject_writable_roots("codex app-server", ["/a", "/b"])
+    assert out == (
+        'codex -c sandbox_workspace_write.writable_roots=["/a","/b"] app-server'
+    )
+
+
+def test_inject_writable_roots_modifies_bare_codex_command() -> None:
+    out = _inject_writable_roots("codex", ["/a"])
+    assert out == 'codex -c sandbox_workspace_write.writable_roots=["/a"]'
+
+
+def test_inject_writable_roots_preserves_leading_whitespace() -> None:
+    out = _inject_writable_roots("  codex app-server", ["/a"])
+    assert out.startswith("  codex -c sandbox_workspace_write.writable_roots=")
+
+
+def test_inject_writable_roots_skips_wrapper_scripts() -> None:
+    # Wrapper script path — codex is invoked inside, so command-string
+    # injection can't reach it. Returns unchanged; env-var path takes over.
+    wrapper = "/usr/local/bin/codex-xhigh.sh app-server"
+    assert _inject_writable_roots(wrapper, ["/a"]) == wrapper
+
+
+def test_inject_writable_roots_skips_when_no_roots() -> None:
+    cmd = "codex app-server"
+    assert _inject_writable_roots(cmd, []) == cmd
+
+
+def test_inject_writable_roots_only_substitutes_first_codex_token() -> None:
+    # Defensive: the codex token must be the first token, not an arg value.
+    cmd = "env codex app-server"
+    assert _inject_writable_roots(cmd, ["/a"]) == cmd
+
+
+def test_codex_start_command_prep_injects_when_symlinks_exist(
+    tmp_path: Path,
+) -> None:
+    host_docs = tmp_path / "host_docs"
+    host_docs.mkdir()
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    (cwd / "docs").symlink_to(host_docs)
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    # Force workspace-write so the auto-fix activates.
+    cfg = ServiceConfig(
+        workflow_path=cfg.workflow_path,
+        poll_interval_ms=cfg.poll_interval_ms,
+        workspace_root=cfg.workspace_root,
+        tracker=cfg.tracker,
+        hooks=cfg.hooks,
+        agent=cfg.agent,
+        codex=CodexConfig(
+            command="codex app-server",
+            approval_policy=None,
+            thread_sandbox="workspace-write",
+            turn_sandbox_policy="workspace-write",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+        ),
+        claude=cfg.claude,
+        gemini=cfg.gemini,
+        pi=cfg.pi,
+        server=cfg.server,
+        prompt_template=cfg.prompt_template,
+    )
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    command, env = backend._prepare_command_and_env()
+
+    assert "sandbox_workspace_write.writable_roots" in command
+    assert str(host_docs.resolve()) in command
+    assert "SYMPHONY_CODEX_WRITABLE_ROOTS" in env
+    assert str(host_docs.resolve()) in env["SYMPHONY_CODEX_WRITABLE_ROOTS"]
+
+
+def test_codex_start_command_prep_noop_when_not_workspace_write(
+    tmp_path: Path,
+) -> None:
+    host_docs = tmp_path / "host_docs"
+    host_docs.mkdir()
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    (cwd / "docs").symlink_to(host_docs)
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    # Default cfg from _make_cfg has thread_sandbox=None — auto-fix should skip.
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    command, env = backend._prepare_command_and_env()
+
+    assert command == cfg.codex.command
+    assert "SYMPHONY_CODEX_WRITABLE_ROOTS" not in env
+
+
+def test_codex_start_command_prep_noop_when_no_symlinks(tmp_path: Path) -> None:
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    (cwd / "docs").mkdir()  # real dir, not a symlink
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cfg = ServiceConfig(
+        workflow_path=cfg.workflow_path,
+        poll_interval_ms=cfg.poll_interval_ms,
+        workspace_root=cfg.workspace_root,
+        tracker=cfg.tracker,
+        hooks=cfg.hooks,
+        agent=cfg.agent,
+        codex=CodexConfig(
+            command="codex app-server",
+            approval_policy=None,
+            thread_sandbox="workspace-write",
+            turn_sandbox_policy="workspace-write",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+        ),
+        claude=cfg.claude,
+        gemini=cfg.gemini,
+        pi=cfg.pi,
+        server=cfg.server,
+        prompt_template=cfg.prompt_template,
+    )
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    command, env = backend._prepare_command_and_env()
+
+    assert command == cfg.codex.command
+    assert "SYMPHONY_CODEX_WRITABLE_ROOTS" not in env
+
+
+def test_codex_start_command_prep_uses_env_var_for_wrapper(tmp_path: Path) -> None:
+    """Wrapper script case: -c arg injection can't reach codex, so the env
+    var is the only signal the wrapper has to honor."""
+    host_docs = tmp_path / "host_docs"
+    host_docs.mkdir()
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    (cwd / "docs").symlink_to(host_docs)
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cfg = ServiceConfig(
+        workflow_path=cfg.workflow_path,
+        poll_interval_ms=cfg.poll_interval_ms,
+        workspace_root=cfg.workspace_root,
+        tracker=cfg.tracker,
+        hooks=cfg.hooks,
+        agent=cfg.agent,
+        codex=CodexConfig(
+            command="/opt/wrappers/codex-xhigh.sh app-server",
+            approval_policy=None,
+            thread_sandbox="workspace-write",
+            turn_sandbox_policy="workspace-write",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+        ),
+        claude=cfg.claude,
+        gemini=cfg.gemini,
+        pi=cfg.pi,
+        server=cfg.server,
+        prompt_template=cfg.prompt_template,
+    )
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    command, env = backend._prepare_command_and_env()
+
+    # Command unchanged (wrapper script case).
+    assert command == cfg.codex.command
+    # But env var is set so the wrapper can read it.
+    assert env["SYMPHONY_CODEX_WRITABLE_ROOTS"] == str(host_docs.resolve())
 
 
 @pytest.mark.asyncio

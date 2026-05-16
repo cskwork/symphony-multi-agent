@@ -55,10 +55,11 @@ claude:
 codex:
   command: codex app-server
   approval_policy: never
-  # `workspace-write` is safe by default. If host repo dirs are symlinked
-  # into the workspace and codex refuses to write through them, switch to
-  # `danger-full-access` (trusted local dev only) or wrap codex with `-c`
-  # TOML overrides that add the symlink targets to writable_roots.
+  # `workspace-write` is safe by default. The codex backend auto-detects
+  # host-repo symlinks in the workspace and injects them into
+  # `sandbox_workspace_write.writable_roots` (or exports them as
+  # `$SYMPHONY_CODEX_WRITABLE_ROOTS` for wrapper scripts). Fall back to
+  # `danger-full-access` only if blocked-write loops persist.
   thread_sandbox: workspace-write
   turn_sandbox_policy: workspace-write
 
