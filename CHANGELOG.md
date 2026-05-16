@@ -10,6 +10,26 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-16
+
+Browser HUD for headless operators, plus i18n cleanup for the
+prompt-base templates. No breaking changes — drop-in over 0.4.0.
+
+### Added
+- `tools/board-viewer/` — vanilla HTML/CSS/JS + Python-stdlib browser
+  HUD for Symphony kanban boards. Read-only, runs alongside the
+  headless orchestrator and the textual TUI without conflict. Two
+  modes: **live** proxies `/api/v1/state` every 5s (setTimeout-recursive
+  polling avoids overlapping cycles); **file-only** scans `kanban/*.md`
+  when Symphony is down.
+- `tools/board-viewer/board-viewer-open.sh` — launcher with kanban
+  auto-discovery (`$CWD/kanban` → env → CLI flag) and python3.11+
+  selection.
+- Progress mirror (`WORKFLOW-PROGRESS.md`) now advertises a clickable
+  board-viewer URL header. Defaults to `http://127.0.0.1:8765/`
+  (board-viewer-open.sh default port); override with the
+  `SYMPHONY_BOARD_URL` env var; disable with `SYMPHONY_BOARD_URL=""`.
+
 ### Changed
 - `docs/symphony-prompts/{file,linear}/base.md` now branch the
   "Audience & writing style" block on `{{ language }}`. English operators
@@ -20,10 +40,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both defaults.
 
 ### Docs
-- Add this `CHANGELOG.md` mirroring GitHub Releases through v0.4.0.
+- Add `CHANGELOG.md` mirroring GitHub Releases through v0.4.0.
 - `llm-wiki/agent-observability.md`: drop the dated "fixed in 0.3.3"
   parenthetical from the stall-signature table — the behavior is now
   baseline, not historical.
+
+### Security
+- Board viewer sanitizes ticket markdown via DOMPurify before insertion
+  (kanban .md is agent-authored, prompt-injection surface). `<script>`,
+  `<iframe>`, `on*=` handlers are explicitly forbidden.
+- Path-traversal defense on both static and kanban routes in
+  `tools/board-viewer/server.py`.
 
 ## [0.4.0] — 2026-05-16
 
@@ -143,7 +170,8 @@ First public release of the multi-agent fork.
 - Per-state concurrency caps, `$VAR`/`~` expansion, dynamic WORKFLOW
   reload, structured stderr logging, `symphony doctor`.
 
-[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/cskwork/symphony-multi-agent/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.1
 [0.4.0]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.4.0
 [0.3.4]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.4
 [0.3.3]: https://github.com/cskwork/symphony-multi-agent/releases/tag/v0.3.3

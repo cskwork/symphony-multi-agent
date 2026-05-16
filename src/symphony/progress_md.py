@@ -118,6 +118,24 @@ def _ordered_states(cfg: ServiceConfig) -> list[str]:
     return out
 
 
+def _resolve_board_url() -> str | None:
+    """Return the board-viewer URL to advertise in the progress header.
+
+    Resolution:
+    - `SYMPHONY_BOARD_URL` env var unset → default ``http://127.0.0.1:8765/``
+      (the port used by ``tools/board-viewer/board-viewer-open.sh``).
+    - `SYMPHONY_BOARD_URL=""` (explicit empty) → disabled, no header line.
+    - Any other value → that exact URL.
+    """
+    raw = os.environ.get("SYMPHONY_BOARD_URL")
+    if raw is None:
+        return "http://127.0.0.1:8765/"
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    return stripped
+
+
 def render_progress_md(
     cfg: ServiceConfig,
     issues: Iterable[Issue],
@@ -126,8 +144,14 @@ def render_progress_md(
     transitions: Iterable[_Transition],
     *,
     generated_at: datetime,
+    board_url: str | None = None,
 ) -> str:
-    """Render the progress markdown body. Pure function — easy to test."""
+    """Render the progress markdown body. Pure function — easy to test.
+
+    ``board_url`` is rendered as a clickable header line so headless operators
+    can jump straight to the browser board-viewer that ships in
+    ``tools/board-viewer/``. Defaults via :func:`_resolve_board_url` when None.
+    """
     state_order = _ordered_states(cfg)
     by_state: dict[str, list[Issue]] = {s: [] for s in state_order}
     catchall: list[Issue] = []
@@ -139,6 +163,9 @@ def render_progress_md(
         else:
             by_state[bucket].append(issue)
 
+    if board_url is None:
+        board_url = _resolve_board_url()
+
     lines: list[str] = []
     lines.append("# Symphony Progress")
     lines.append(
@@ -146,6 +173,10 @@ def render_progress_md(
     )
     lines.append("")
     lines.append(f"_Workflow: {cfg.workflow_path}_")
+    if board_url:
+        # Clickable in any markdown viewer (GitHub, VS Code, Obsidian, etc.)
+        lines.append("")
+        lines.append(f"_Board viewer:_ [{board_url}]({board_url})")
     lines.append("")
     lines.append("## Kanban")
     lines.append("")

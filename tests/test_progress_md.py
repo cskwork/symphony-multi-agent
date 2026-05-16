@@ -196,6 +196,54 @@ def test_render_unknown_state_lands_in_other(tmp_path):
     assert "MT-9 [Triage]" in text
 
 
+def test_render_includes_default_board_url(tmp_path, monkeypatch):
+    """SYMPHONY_BOARD_URL unset → default board-viewer URL is advertised."""
+    monkeypatch.delenv("SYMPHONY_BOARD_URL", raising=False)
+    cfg = _cfg(tmp_path)
+    text = render_progress_md(
+        cfg,
+        [],
+        running_by_id={},
+        retry_by_id={},
+        transitions=(),
+        generated_at=datetime(2026, 5, 16, 14, 22, 31, tzinfo=timezone.utc),
+    )
+    assert "_Board viewer:_" in text
+    assert "[http://127.0.0.1:8765/](http://127.0.0.1:8765/)" in text
+
+
+def test_render_board_url_can_be_disabled(tmp_path, monkeypatch):
+    """SYMPHONY_BOARD_URL="" → header line is omitted."""
+    monkeypatch.setenv("SYMPHONY_BOARD_URL", "")
+    cfg = _cfg(tmp_path)
+    text = render_progress_md(
+        cfg,
+        [],
+        running_by_id={},
+        retry_by_id={},
+        transitions=(),
+        generated_at=datetime(2026, 5, 16, 14, 22, 31, tzinfo=timezone.utc),
+    )
+    assert "_Board viewer:_" not in text
+
+
+def test_render_explicit_board_url_overrides_env(tmp_path, monkeypatch):
+    """Explicit `board_url=` argument wins over env."""
+    monkeypatch.setenv("SYMPHONY_BOARD_URL", "http://example.invalid/from-env")
+    cfg = _cfg(tmp_path)
+    text = render_progress_md(
+        cfg,
+        [],
+        running_by_id={},
+        retry_by_id={},
+        transitions=(),
+        generated_at=datetime(2026, 5, 16, 14, 22, 31, tzinfo=timezone.utc),
+        board_url="https://board.example/",
+    )
+    assert "[https://board.example/](https://board.example/)" in text
+    assert "example.invalid" not in text
+
+
 def test_atomic_write_replaces_existing(tmp_path):
     target = tmp_path / "progress.md"
     target.write_text("OLD")
