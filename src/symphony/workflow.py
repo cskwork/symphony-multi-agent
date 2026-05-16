@@ -41,6 +41,8 @@ DEFAULT_CODEX_COMMAND = "codex app-server"
 DEFAULT_CODEX_TURN_TIMEOUT_MS = 3_600_000
 DEFAULT_CODEX_READ_TIMEOUT_MS = 5_000
 DEFAULT_CODEX_STALL_TIMEOUT_MS = 300_000
+DEFAULT_CODEX_MODEL = "gpt-5.5"
+DEFAULT_CODEX_REASONING_EFFORT = "high"
 
 DEFAULT_PROMPT = "You are working on an issue from Linear."
 
@@ -270,6 +272,9 @@ class AgentConfig:
     # progress-timestamp stall predicate can't see because turns ARE
     # completing.
     max_total_tokens: int = 0
+    # Optional per-state override for `max_total_tokens`. Keys are state
+    # names lowercased by the parser, e.g. "review" or "in progress".
+    max_total_tokens_by_state: dict[str, int] = field(default_factory=dict)
     # Target tracker state to transition the ticket to when
     # `max_total_turns` is exhausted. Empty string (default, legacy) =
     # no transition; the in-memory `_turn_budget_exhausted` guard alone
@@ -291,6 +296,8 @@ class CodexConfig:
     turn_timeout_ms: int
     read_timeout_ms: int
     stall_timeout_ms: int
+    model: str = DEFAULT_CODEX_MODEL
+    reasoning_effort: str = DEFAULT_CODEX_REASONING_EFFORT
 
 
 @dataclass(frozen=True)
@@ -753,6 +760,9 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
             0,
             name="agent.max_total_tokens",
         ),
+        max_total_tokens_by_state=_normalize_state_map(
+            agent_raw.get("max_total_tokens_by_state")
+        ),
         budget_exhausted_state=_as_str(
             agent_raw.get("budget_exhausted_state"), ""
         ) or "",
@@ -775,6 +785,10 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         stall_timeout_ms=_validated_positive_or_default(
             codex_raw.get("stall_timeout_ms"), DEFAULT_CODEX_STALL_TIMEOUT_MS, name="codex.stall_timeout_ms"
         ),
+        model=_as_str(codex_raw.get("model"), DEFAULT_CODEX_MODEL) or DEFAULT_CODEX_MODEL,
+        reasoning_effort=_as_str(
+            codex_raw.get("reasoning_effort"), DEFAULT_CODEX_REASONING_EFFORT
+        ) or DEFAULT_CODEX_REASONING_EFFORT,
     )
 
     claude_raw = cfg.get("claude") or {}

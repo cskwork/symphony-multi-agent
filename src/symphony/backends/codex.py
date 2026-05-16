@@ -411,6 +411,10 @@ class CodexAppServerBackend:
             params["sandboxPolicy"] = sandbox_payload
         if self._approval_policy is not None:
             params["approvalPolicy"] = self._approval_policy
+        if self._codex.model:
+            params["model"] = self._codex.model
+        if self._codex.reasoning_effort:
+            params["effort"] = self._codex.reasoning_effort
         return params
 
     def _arm_completion_waiter(self) -> asyncio.Future[dict[str, Any]]:
@@ -635,6 +639,16 @@ class CodexAppServerBackend:
                         )
                     else:
                         self._latest_assistant_message = text
+                    await self._emit(
+                        EVENT_OTHER_MESSAGE,
+                        {
+                            "type": "assistant",
+                            "message": self._latest_assistant_message,
+                            "item": item,
+                        },
+                    )
+            elif isinstance(item, dict):
+                await self._emit(EVENT_OTHER_MESSAGE, {"item": item})
             return
         # ----- legacy approval / tool-call requests -----
         if method == "approval.requested":

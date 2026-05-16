@@ -147,6 +147,14 @@ agent:
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
+  max_total_tokens: 10000000
+  max_total_tokens_by_state:
+    Review: 5000000
+    QA: 10000000
+    "In Progress": 10000000
+    Learn: 5000000
+    Learning: 5000000
+  budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
   max_concurrent_agents_by_state:
@@ -163,6 +171,8 @@ agent:
 
 codex:
   command: codex app-server
+  model: gpt-5.5
+  reasoning_effort: high
   approval_policy: never
   # `workspace-write` is the safe default. When `after_create` symlinks
   # host repo dirs (kanban, docs, ...) into the workspace, symphony's codex

@@ -120,6 +120,8 @@ def test_build_service_config_defaults(tmp_path, monkeypatch):
     assert cfg.tracker.api_key == "lin_test_token"
     assert cfg.tracker.project_slug == "my-proj"
     assert cfg.codex.command == "codex app-server"
+    assert cfg.codex.model == "gpt-5.5"
+    assert cfg.codex.reasoning_effort == "high"
     assert cfg.agent.max_concurrent_agents == 1
     assert cfg.agent.max_attempts == 3
     assert cfg.prompt_template_for_state("Todo") == "Hello {{ issue.identifier }}"
@@ -145,6 +147,66 @@ def test_build_service_config_reads_agent_max_attempts(tmp_path):
     cfg = build_service_config(load_workflow(path))
 
     assert cfg.agent.max_attempts == 3
+
+
+def test_build_service_config_reads_state_token_budgets(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            agent:
+              max_total_tokens: 10000000
+              max_total_tokens_by_state:
+                Review: 5000000
+                QA: 10000000
+                "In Progress": 10000000
+                Learn: 5000000
+                Learning: 5000000
+                Invalid: 0
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.agent.max_total_tokens == 10_000_000
+    assert cfg.agent.max_total_tokens_by_state == {
+        "review": 5_000_000,
+        "qa": 10_000_000,
+        "in progress": 10_000_000,
+        "learn": 5_000_000,
+        "learning": 5_000_000,
+    }
+
+
+def test_build_service_config_reads_codex_model_and_reasoning(tmp_path):
+    path = _write(
+        tmp_path,
+        textwrap.dedent(
+            """\
+            ---
+            tracker:
+              kind: file
+              board_root: ./board
+            codex:
+              model: gpt-5.4
+              reasoning_effort: medium
+            ---
+            Hello
+            """
+        ),
+    )
+
+    cfg = build_service_config(load_workflow(path))
+
+    assert cfg.codex.model == "gpt-5.4"
+    assert cfg.codex.reasoning_effort == "medium"
 
 
 def test_build_service_config_allows_zero_agent_max_attempts(tmp_path):

@@ -634,6 +634,64 @@ def test_codex_other_message_with_input_only_token_growth_does_not_advance_progr
     asyncio.run(_run())
 
 
+def test_on_codex_event_extracts_nested_item_preview_without_stall_progress():
+    """Codex app-server sends assistant/tool previews as nested item payloads.
+
+    The dashboard should show what the worker is doing, but a tool preview
+    must not reset stall detection as if it were model output.
+    """
+    orch = _orch()
+    issue = _issue("OBS-1", state="Review")
+
+    async def _run() -> None:
+        baseline = datetime.now(timezone.utc) - timedelta(minutes=10)
+        entry = RunningEntry(
+            issue=issue,
+            started_at=baseline,
+            retry_attempt=None,
+            worker_task=None,  # type: ignore[arg-type]
+            workspace_path=Path("/tmp"),
+            last_progress_timestamp=baseline,
+        )
+        orch._running[issue.id] = entry
+
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "item": {
+                        "type": "toolCall",
+                        "name": "exec_command",
+                        "arguments": {"cmd": "pytest -q"},
+                    }
+                },
+            },
+        )
+
+        assert entry.last_codex_message == "tool: exec_command pytest -q"
+        assert entry.last_progress_timestamp == baseline
+
+        await orch._on_codex_event(
+            issue.id,
+            {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {
+                    "type": "assistant",
+                    "item": {"type": "agentMessage", "text": "Review passed."},
+                },
+            },
+        )
+
+        assert entry.last_codex_message == "Review passed."
+        assert entry.last_progress_timestamp is not None
+        assert entry.last_progress_timestamp > baseline
+
+    asyncio.run(_run())
+
+
 # ---------------------------------------------------------------------------
 # Auto-commit at Done — see workspace.commit_workspace_on_done.
 # ---------------------------------------------------------------------------
@@ -923,6 +981,9 @@ def test_max_total_turns_exhaustion_persists_via_tracker_transition(monkeypatch)
         monkeypatch.setattr(
             orch, "_tracker_call_update_state", _capture_update_state
         )
+        monkeypatch.setattr(
+            orch, "_tracker_call_states_by_ids", lambda cfg, ids: [issue]
+        )
 
         try:
             await orch._on_worker_exit(issue.id, reason="normal", error=None)
@@ -962,6 +1023,9 @@ def test_max_total_turns_exhaustion_no_transition_when_state_unset(monkeypatch):
 
         monkeypatch.setattr(
             orch, "_tracker_call_update_state", _capture_update_state
+        )
+        monkeypatch.setattr(
+            orch, "_tracker_call_states_by_ids", lambda cfg, ids: [issue]
         )
 
         try:
@@ -1042,6 +1106,244 @@ def test_max_total_tokens_cap_cancels_worker(monkeypatch):
                 await worker_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+    asyncio.run(_run())
+
+
+def test_max_total_tokens_by_state_overrides_global_cap(monkeypatch):
+    """Review can have a tighter budget than In Progress/QA."""
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(
+        base_cfg,
+        max_total_tokens=10_000_000,
+        max_total_tokens_by_state={"review": 5_000_000, "qa": 10_000_000},
+    )
+    orch = _orch()
+    review_issue = _issue("MT-REVIEW", state="Review")
+    qa_issue = _issue("MT-QA", state="QA")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        orch._workflow_state.current = lambda: cfg_capped  # type: ignore[assignment]
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        review_task = asyncio.create_task(_noop())
+        qa_task = asyncio.create_task(_noop())
+        try:
+            review_entry = RunningEntry(
+                issue=review_issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=review_task,
+                workspace_path=Path("/tmp"),
+            )
+            qa_entry = RunningEntry(
+                issue=qa_issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=qa_task,
+                workspace_path=Path("/tmp"),
+            )
+            orch._running[review_issue.id] = review_entry
+            orch._running[qa_issue.id] = qa_entry
+
+            event = {
+                "event": "other_message",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "payload": {"type": "assistant"},
+                "usage": {
+                    "input_tokens": 5_100_000,
+                    "output_tokens": 1,
+                    "total_tokens": 5_100_001,
+                },
+            }
+            await orch._on_codex_event(review_issue.id, event)
+            await orch._on_codex_event(qa_issue.id, event)
+
+            assert review_entry.cancelled_at is not None
+            assert review_entry.token_budget_cap == 5_000_000
+            assert qa_entry.cancelled_at is None
+        finally:
+            for task in (review_task, qa_task):
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    asyncio.run(_run())
+
+
+def test_max_total_tokens_exhaustion_persists_via_tracker_transition(monkeypatch):
+    """`agent.max_total_tokens` must honor `budget_exhausted_state`.
+
+    Regression for IB-006: Codex crossed the token cap, Symphony cancelled
+    that worker, then a clean worker exit scheduled a continuation because
+    the ticket was still in Review. The cap must persist the configured
+    budget state so the same ticket does not re-dispatch forever.
+    """
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(
+        base_cfg,
+        max_total_tokens=1_000,
+        budget_exhausted_state="Blocked",
+    )
+    orch = _orch()
+    issue = _issue("MT-CAP-PERSIST", state="Review")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _stub_workflow_state_returning(orch, cfg_capped, monkeypatch)
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+        transitions: list[tuple[str, str]] = []
+        notes: list[tuple[str, str, str]] = []
+
+        def _capture_update_state(cfg, captured_issue, target_state):
+            transitions.append((captured_issue.identifier, target_state))
+
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", _capture_update_state
+        )
+        monkeypatch.setattr(
+            orch,
+            "_tracker_call_append_note",
+            lambda cfg, captured_issue, heading, body: notes.append(
+                (captured_issue.identifier, heading, body)
+            ),
+        )
+
+        try:
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 1_500,
+                        "output_tokens": 200,
+                        "total_tokens": 1_700,
+                    },
+                    "rate_limits": None,
+                },
+            )
+
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+            assert transitions == [("MT-CAP-PERSIST", "Blocked")], (
+                "token-budget exhaustion must persist budget_exhausted_state"
+            )
+            assert notes
+            assert notes[0][0] == "MT-CAP-PERSIST"
+            assert notes[0][1] == "Budget Exceeded"
+            assert "tokens" in notes[0][2]
+            assert "1700/1000" in notes[0][2]
+            assert issue.id in orch._turn_budget_exhausted
+            assert issue.id in orch._claimed
+            assert issue.id not in orch._retry
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
+def test_max_total_tokens_allows_continuation_when_ticket_advanced(monkeypatch):
+    """If the capped worker already moved the ticket, run the next stage.
+
+    Token caps are a runaway guard, not a stage-failure verdict. If the
+    ticket file/API already says Review advanced to QA, Symphony should not
+    overwrite that with Blocked.
+    """
+    base_cfg = _make_config(max_concurrent=1)
+    cfg_capped = _replace_agent_field(
+        base_cfg,
+        max_total_tokens=1_000,
+        budget_exhausted_state="Blocked",
+    )
+    orch = _orch()
+    issue = _issue("MT-CAP-ADVANCE", state="Review")
+    advanced = _issue("MT-CAP-ADVANCE", state="QA")
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _stub_workflow_state_returning(orch, cfg_capped, monkeypatch)
+        monkeypatch.setattr(
+            orch, "_tracker_call_states_by_ids", lambda cfg, ids: [advanced]
+        )
+
+        transitions: list[tuple[str, str]] = []
+
+        def _capture_update_state(cfg, captured_issue, target_state):
+            transitions.append((captured_issue.identifier, target_state))
+
+        monkeypatch.setattr(
+            orch, "_tracker_call_update_state", _capture_update_state
+        )
+
+        async def _noop() -> None:
+            await asyncio.sleep(3600)
+
+        worker_task = asyncio.create_task(_noop())
+
+        try:
+            orch._running[issue.id] = RunningEntry(
+                issue=issue,
+                started_at=datetime.now(timezone.utc),
+                retry_attempt=None,
+                worker_task=worker_task,
+                workspace_path=Path("/tmp"),
+            )
+
+            await orch._on_codex_event(
+                issue.id,
+                {
+                    "event": "other_message",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "payload": {"type": "assistant"},
+                    "usage": {
+                        "input_tokens": 1_500,
+                        "output_tokens": 200,
+                        "total_tokens": 1_700,
+                    },
+                    "rate_limits": None,
+                },
+            )
+
+            await orch._on_worker_exit(issue.id, reason="normal", error=None)
+
+            assert transitions == []
+            assert issue.id not in orch._turn_budget_exhausted
+            retry = orch._retry.get(issue.id)
+            assert retry is not None
+            assert retry.kind == "continuation"
+        finally:
+            worker_task.cancel()
+            try:
+                await worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
 
     asyncio.run(_run())
 

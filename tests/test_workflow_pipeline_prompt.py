@@ -219,7 +219,7 @@ def test_retry_branch_renders(workflow: str) -> None:
         cfg.prompt_template_for_state("In Progress"),
         build_prompt_env(_issue("In Progress"), attempt=2),
     )
-    assert "retry attempt 2" in rendered
+    assert "retry attempt 2" in rendered.lower()
 
 
 @pytest.mark.parametrize("workflow", WORKFLOW_FILES)

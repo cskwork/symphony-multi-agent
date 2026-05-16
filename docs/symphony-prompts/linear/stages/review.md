@@ -24,9 +24,13 @@ You are the reviewer. Find issues; do not fix them.
    artefacts under `docs/{{ issue.identifier }}/verify/`), and STOP. Do
    NOT fix findings inside Review — that is In Progress's job, with a
    fresh context. Symphony dispatches a new fix turn automatically.
-7. If the only findings are LOW (or none): post a Review comment with
+7. If prior Review Findings are resolved and no CRITICAL, HIGH, or
+   MEDIUM finding remains, do not post another Review Findings comment.
+   Post a Review comment and transition state to `QA` in the same turn;
+   staying in `Review` after a clean review is a workflow failure.
+8. If the only findings are LOW (or none): post a Review comment with
    the Plain-Korean header + the same severity table — flag deferred LOW
    items in the same comment so Learn can address them — and transition
    state to `QA`.
-8. If something is genuinely unfixable / out of scope: transition state
+9. If something is genuinely unfixable / out of scope: transition state
    to `Blocked`, post a Blocker comment with what is needed and stop.

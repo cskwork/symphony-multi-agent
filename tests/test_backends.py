@@ -9,6 +9,7 @@ real-integration runs since CI cannot guarantee those binaries.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -418,6 +419,54 @@ def test_codex_sandbox_policy_returns_unknown_string_unchanged() -> None:
 
 def test_codex_sandbox_policy_none() -> None:
     assert _sandbox_policy_to_turn_payload(None) is None
+
+
+def test_codex_turn_params_include_configured_model_and_reasoning(tmp_path: Path) -> None:
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cfg = replace(
+        cfg,
+        codex=replace(cfg.codex, model="gpt-5.5", reasoning_effort="high"),
+    )
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    backend._thread_id = "thread-1"
+
+    params = backend._build_turn_params("hello")
+
+    assert params["model"] == "gpt-5.5"
+    assert params["effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_codex_item_completed_emits_live_preview_event(tmp_path: Path) -> None:
+    events: list[dict] = []
+
+    async def _capture_event(event: dict) -> None:
+        events.append(event)
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_capture_event)
+    )
+
+    await backend._handle_notification(
+        {
+            "method": NOTIF_ITEM_COMPLETED,
+            "params": {"item": {"type": "agentMessage", "text": "Reading files"}},
+        }
+    )
+
+    assert events[-1]["event"] == EVENT_OTHER_MESSAGE
+    assert events[-1]["payload"] == {
+        "type": "assistant",
+        "message": "Reading files",
+        "item": {"type": "agentMessage", "text": "Reading files"},
+    }
 
 
 # ---- Codex workspace-write symlink auto-fix ----------------------------

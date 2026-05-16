@@ -411,6 +411,21 @@ class FileBoardTracker:
         """TrackerClient protocol mutation hook (delegates to `transition`)."""
         self.transition(issue.identifier, target_state)
 
+    def append_note(self, issue: Issue, heading: str, body: str) -> None:
+        """Append an orchestrator-authored Markdown note to a ticket file."""
+        path = self.find_path(issue.identifier)
+        if path is None:
+            raise SymphonyError("ticket not found", identifier=issue.identifier)
+        front, existing_body = parse_ticket_file(path)
+        front["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        clean_heading = heading.strip().lstrip("#").strip() or "Note"
+        clean_body = body.strip()
+        note = f"## {clean_heading}"
+        if clean_body:
+            note = f"{note}\n\n{clean_body}"
+        combined = "\n\n".join(part for part in (existing_body.strip(), note) if part)
+        write_ticket_atomic(path, front, combined)
+
     def record_agent_kind(self, identifier: str, agent_kind: str) -> Path | None:
         """Write ``agent_kind`` to ticket frontmatter when missing.
 

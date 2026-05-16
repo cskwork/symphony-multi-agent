@@ -117,6 +117,17 @@ agent:
   # Hard per-ticket budget across continuation attempts. Prevents an
   # active-state ticket from restarting forever and wasting tokens.
   max_total_turns: 60
+  # Hard token ceiling by workflow state. The global cap stays available as
+  # a fallback; these tighter stage caps stop review loops before they burn
+  # the larger build/QA budget.
+  max_total_tokens: 10000000
+  max_total_tokens_by_state:
+    Review: 5000000
+    QA: 10000000
+    "In Progress": 10000000
+    Learn: 5000000
+    Learning: 5000000
+  budget_exhausted_state: Blocked
   # Soft cap for Review/QA rewinds back into In Progress. Set 0 to disable.
   max_attempts: 3
   max_retry_backoff_ms: 300000
@@ -168,6 +179,8 @@ agent:
 
 codex:
   command: codex app-server
+  model: gpt-5.5
+  reasoning_effort: high
   approval_policy: never
   # Sandbox trade-off — read before changing:
   #   `workspace-write` (default below) keeps codex confined to the worker

@@ -160,6 +160,10 @@ class RunningEntry:
     # non-success outcome in `_on_worker_exit`: no automatic continuation is
     # scheduled. The operator must transition the ticket or resume manually.
     hit_max_turns: bool = False
+    # Set when `agent.max_total_tokens` is crossed. Worker exit refreshes
+    # the ticket: a stage change continues, unchanged state is budget-blocked.
+    hit_token_budget: bool = False
+    token_budget_cap: int = 0
 
 
 @dataclass
@@ -672,6 +676,18 @@ class Orchestrator:
         client = build_tracker_client(cfg)
         try:
             client.update_state(issue, target_state)
+        finally:
+            client.close()
+
+    @staticmethod
+    def _tracker_call_append_note(
+        cfg: ServiceConfig, issue: Issue, heading: str, body: str
+    ) -> None:
+        client = build_tracker_client(cfg)
+        try:
+            append_note = getattr(client, "append_note", None)
+            if append_note is not None:
+                append_note(issue, heading, body)
         finally:
             client.close()
 
@@ -1315,9 +1331,102 @@ class Orchestrator:
                 return issue
         return None
 
+    async def _persist_budget_exhausted_state(
+        self,
+        *,
+        cfg: ServiceConfig,
+        entry: RunningEntry,
+        issue_id: str,
+        target_state: str,
+        budget_kind: str,
+    ) -> None:
+        if not target_state:
+            return
+        if budget_kind == "tokens":
+            budget_detail = (
+                f"({entry.codex_total_tokens}/"
+                f"{entry.token_budget_cap or cfg.agent.max_total_tokens})"
+            )
+        else:
+            budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
+        note_body = (
+            f"{budget_kind} budget exceeded {budget_detail} while state stayed "
+            f"{entry.issue.state}. Symphony moved this ticket to {target_state} "
+            f"to prevent automatic re-dispatch."
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                entry.issue,
+                target_state,
+            )
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                entry.issue,
+                "Budget Exceeded",
+                note_body,
+            )
+            log.info(
+                "budget_exhausted_persisted",
+                issue_id=issue_id,
+                issue_identifier=entry.issue.identifier,
+                target_state=target_state,
+                budget_kind=budget_kind,
+            )
+        except Exception as persist_exc:
+            # Lenient: the in-memory guard still prevents another dispatch in
+            # this process; the log explains why restart persistence failed.
+            log.warning(
+                "budget_exhausted_persist_failed",
+                issue_id=issue_id,
+                identifier=entry.issue.identifier,
+                target_state=target_state,
+                budget_kind=budget_kind,
+                error=str(persist_exc),
+            )
+
     # ------------------------------------------------------------------
     # codex events
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _token_cap_for_entry(cfg: ServiceConfig | None, entry: RunningEntry) -> int:
+        if cfg is None:
+            return 0
+        state = normalize_state(entry.issue.state)
+        by_state = cfg.agent.max_total_tokens_by_state
+        cap = by_state.get(state)
+        if cap is None and state == "learn":
+            cap = by_state.get("learning")
+        if cap is None and state == "learning":
+            cap = by_state.get("learn")
+        return cap if cap is not None else cfg.agent.max_total_tokens
+
+    @staticmethod
+    def _preview_from_payload(payload: dict[str, Any]) -> str:
+        for key in ("message", "lastMessage", "text", "summary"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        item = payload.get("item")
+        if isinstance(item, dict):
+            item_type = str(item.get("type") or "").lower()
+            text = item.get("text") or item.get("message")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+            name = item.get("name") or item.get("tool") or item.get("command")
+            args = item.get("arguments")
+            command = ""
+            if isinstance(args, dict):
+                raw_cmd = args.get("cmd") or args.get("command")
+                if isinstance(raw_cmd, str):
+                    command = raw_cmd.strip()
+            if name and ("tool" in item_type or command):
+                suffix = f" {command}" if command else ""
+                return f"tool: {name}{suffix}".strip()
+        return ""
 
     async def _on_codex_event(self, issue_id: str, event: dict[str, Any]) -> None:
         entry = self._running.get(issue_id)
@@ -1340,8 +1449,8 @@ class Orchestrator:
             entry.codex_app_server_pid = pid
         payload = event.get("payload") or {}
         if isinstance(payload, dict):
-            msg = payload.get("message") or payload.get("lastMessage") or ""
-            if isinstance(msg, str):
+            msg = self._preview_from_payload(payload)
+            if msg:
                 entry.last_codex_message = msg[:400]
         # Token deltas (§13.5).
         usage = event.get("usage") or {}
@@ -1355,7 +1464,7 @@ class Orchestrator:
         # 0 = disabled (legacy default). On breach: cancel the worker and
         # record the reason so the operator finds out without log-diving.
         cfg = self._workflow_state.current()
-        cap = cfg.agent.max_total_tokens if cfg is not None else 0
+        cap = self._token_cap_for_entry(cfg, entry)
         if (
             cap > 0
             and entry.cancelled_at is None
@@ -1373,6 +1482,8 @@ class Orchestrator:
                 f"token budget exceeded "
                 f"({entry.codex_total_tokens}/{cap}) — worker cancelled"
             )
+            entry.hit_token_budget = True
+            entry.token_budget_cap = cap
             if entry.worker_task is not None:
                 entry.worker_task.cancel()
             entry.cancelled_at = datetime.now(timezone.utc)
@@ -1553,6 +1664,56 @@ class Orchestrator:
 
         if reason == "normal":
             cfg = self._workflow_state.current()
+            if entry.hit_token_budget:
+                if cfg is not None:
+                    before_state = normalize_state(entry.issue.state)
+                    refreshed = await self._refresh_issue_state(cfg, issue_id)
+                    if refreshed is not None:
+                        entry.issue = refreshed
+                    after_state = normalize_state(entry.issue.state)
+                    if refreshed is not None and after_state != before_state:
+                        log.info(
+                            "token_budget_stage_advanced",
+                            issue_id=issue_id,
+                            issue_identifier=entry.issue.identifier,
+                            from_state=before_state,
+                            to_state=after_state,
+                        )
+                    else:
+                        self._turn_budget_exhausted.add(issue_id)
+                        self._claimed.add(issue_id)
+                        cap = entry.token_budget_cap or self._token_cap_for_entry(
+                            cfg, entry
+                        )
+                        debug.last_error = (
+                            f"max_total_tokens reached "
+                            f"({entry.codex_total_tokens}/{cap}); "
+                            f"state still {entry.issue.state}"
+                        )
+                        log.warning(
+                            "worker_token_budget_exhausted",
+                            issue_id=issue_id,
+                            issue_identifier=entry.issue.identifier,
+                            total_tokens=entry.codex_total_tokens,
+                            max_total_tokens=cap,
+                            state=entry.issue.state,
+                        )
+                        await self._persist_budget_exhausted_state(
+                            cfg=cfg,
+                            entry=entry,
+                            issue_id=issue_id,
+                            target_state=cfg.agent.budget_exhausted_state,
+                            budget_kind="tokens",
+                        )
+                        return
+                else:
+                    self._turn_budget_exhausted.add(issue_id)
+                    self._claimed.add(issue_id)
+                    debug.last_error = (
+                        "max_total_tokens reached; workflow config unavailable"
+                    )
+                    return
+
             max_total_turns = cfg.agent.max_total_turns if cfg is not None else 60
             if debug.completed_turn_count >= max_total_turns:
                 self._turn_budget_exhausted.add(issue_id)
@@ -1578,32 +1739,13 @@ class Orchestrator:
                     cfg.agent.budget_exhausted_state if cfg is not None else ""
                 )
                 if target_state and cfg is not None:
-                    try:
-                        await asyncio.to_thread(
-                            self._tracker_call_update_state,
-                            cfg,
-                            entry.issue,
-                            target_state,
-                        )
-                        log.info(
-                            "budget_exhausted_persisted",
-                            issue_id=issue_id,
-                            issue_identifier=entry.issue.identifier,
-                            target_state=target_state,
-                        )
-                    except Exception as persist_exc:
-                        # Lenient — a failed tracker write must not block
-                        # worker cleanup. The in-memory guard still
-                        # suppresses re-dispatch until restart, at which
-                        # point the operator notices because the ticket
-                        # is still in its original state.
-                        log.warning(
-                            "budget_exhausted_persist_failed",
-                            issue_id=issue_id,
-                            identifier=entry.issue.identifier,
-                            target_state=target_state,
-                            error=str(persist_exc),
-                        )
+                    await self._persist_budget_exhausted_state(
+                        cfg=cfg,
+                        entry=entry,
+                        issue_id=issue_id,
+                        target_state=target_state,
+                        budget_kind="turns",
+                    )
                 return
             self._completed.add(issue_id)
             if cfg is not None and cfg.agent.auto_commit_on_done:

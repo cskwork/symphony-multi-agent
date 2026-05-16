@@ -31,6 +31,10 @@ class TrackerClient(Protocol):
         """
         ...
 
+    def append_note(self, issue: Issue, heading: str, body: str) -> None:
+        """Append a tracker-native note/comment when the backend supports it."""
+        ...
+
     def close(self) -> None: ...
 
 

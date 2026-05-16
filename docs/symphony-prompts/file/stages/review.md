@@ -25,9 +25,13 @@ You are the reviewer. Find issues; do not fix them.
    `docs/{{ issue.identifier }}/verify/`), and STOP. Do NOT fix findings
    inside Review — that is In Progress's job, with a fresh context.
    Symphony dispatches a new fix turn automatically.
-7. If the only findings are LOW (or none): append `## Review` with the
+7. If prior `## Review Findings` are resolved and no CRITICAL, HIGH, or
+   MEDIUM finding remains, do not append another `## Review Findings`
+   section. Append `## Review` and set state to `QA` in the same turn;
+   staying in `Review` after a clean review is a workflow failure.
+8. If the only findings are LOW (or none): append `## Review` with the
    Plain-Korean header + the same severity table — flag deferred LOW
    items in the same section so Learn can address them — and set state
    to `QA`.
-8. If something is genuinely out of scope or unfixable: set state to
+9. If something is genuinely out of scope or unfixable: set state to
    `Blocked` and append `## Blocker` explaining what is needed.

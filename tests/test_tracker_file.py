@@ -410,6 +410,26 @@ def test_update_state_protocol_hook(tmp_path):
     assert after is not None and after.state == "Archive"
 
 
+def test_append_note_protocol_hook_records_budget_reason(tmp_path):
+    """File tracker can persist orchestrator-authored budget notes."""
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+    path = fbt.create(identifier="X-BUDGET", title="t", state="Review")
+    issue = issue_from_file(path)
+    assert issue is not None
+
+    fbt.append_note(
+        issue,
+        "Budget Exceeded",
+        "Token budget exceeded (5100001/5000000) while state stayed Review.",
+    )
+
+    front, body = parse_ticket_file(path)
+    assert front["state"] == "Review"
+    assert "## Budget Exceeded" in body
+    assert "5100001/5000000" in body
+
+
 def test_serialize_round_trip(tmp_path):
     front = {"id": "X-1", "title": "t", "state": "Todo", "priority": 1}
     body = "hello"
