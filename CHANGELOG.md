@@ -10,6 +10,63 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-16
+
+Builtin auto-merge on Done, board-viewer launcher integration, and a
+StreamReader limit fix that unblocks long agent turns. Drop-in over
+0.4.1; auto-merge is ON by default but safe-by-default (dirty host or
+missing branch skips silently).
+
+### Added
+- `agent.auto_merge_on_done` (default **true**) — when a ticket reaches
+  Done, fold the `symphony/<ID>` branch into the host repo's
+  development branch as one selective-apply commit. Paths in
+  `agent.auto_merge_exclude_paths` (default
+  `kanban/llm-wiki/prompt/docs`) are stripped first so the workspace
+  symlinks that `hooks.after_create` installs never reach the host
+  repo. `agent.auto_merge_target_branch` defaults to `""` = the host
+  repo's currently-checked-out branch.
+- `tui-open.sh` now auto-starts `tools/board-viewer/server.py` in the
+  background at `http://127.0.0.1:8765/` when the workflow ships one.
+  Skipped silently if the port is held or the file is absent.
+- `src/symphony/auto_merge.py` — new module owning the selective-apply
+  flow with five outcome events: `auto_merge_completed`,
+  `auto_merge_skipped_dirty`, `auto_merge_skipped_missing_branch`,
+  `auto_merge_nothing_to_apply`, `auto_merge_failed`.
+- Learn-stage wiki entries now open with a **beginner explainer block**
+  (`## 감 잡기` in Korean, `## Getting the Feel` in English) ahead of
+  the existing Summary / Invariants / Files / Decision-log technical
+  reference. Same file, two layered audiences — PMs and 기획자 land on
+  the beginner block, engineers scroll past it. The prompt enforces the
+  tutor shape: 3-5 step core flow, exactly five plain-language terms,
+  one realistic scenario, one-sentence takeaway, and a "ready to go
+  deeper" pointer. Branch is `{% if language == 'ko' %}` keyed on the
+  same `{{ language }}` env that drives the chrome/doc directive, so
+  switching the TUI language (or `SYMPHONY_LANG`) flips both halves of
+  the wiki entry in lockstep. Both `docs/symphony-prompts/file/stages/learn.md`
+  and `docs/symphony-prompts/linear/stages/learn.md` updated.
+
+### Fixed
+- `claude_code`, `pi`, `gemini` backends now spawn their subprocess with
+  `limit=10 MiB` on the asyncio `StreamReader`, matching `codex`. The
+  asyncio default of 64 KiB was raising `LimitOverrunError` on
+  stream-json events whose `result`/tool-use payload exceeded that on a
+  single line, dropping the rest of the turn into `stalled_session`
+  recovery. Caught on a live IB-002 turn before the fix landed.
+- `_on_worker_exit(reason="normal")` at Done now fires
+  `auto_merge_on_done`, `after_done` user hook, and `workspace.remove`
+  inline. Previously those only ran on the reconcile-driven termination
+  path; a worker that finished cleanly at Done was popped from
+  `_running` *before* the next reconcile cycle, so the entire
+  terminal-state post-processing was silently skipped — the host repo
+  never saw the auto-merge commit and the workspace lingered.
+  `_reconcile_running` remains the safety net for stale workers.
+
+### Tests
+- `tests/test_auto_merge.py` — five scenarios: happy path,
+  dirty host, missing branch, implicit current-branch target,
+  all-paths-excluded. Full suite: **353 passed, 6 skipped**.
+
 ## [0.4.1] — 2026-05-16
 
 Browser HUD for headless operators, plus i18n cleanup for the
