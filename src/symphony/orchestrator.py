@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -34,6 +34,7 @@ from .backends import (
 from .archive import select_archivable
 from .backends.codex import linear_graphql_tool
 from .errors import (
+    ConfigValidationError,
     SymphonyError,
     TurnFailed,
     TurnInputRequired,
@@ -46,6 +47,7 @@ from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .tracker import build_tracker_client
 from .workflow import (
     ServiceConfig,
+    SUPPORTED_AGENT_KINDS,
     WorkflowState,
     validate_for_dispatch,
 )
@@ -89,6 +91,27 @@ def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
     )
 
 
+def _requested_agent_kind(issue: Issue) -> str | None:
+    if not issue.agent_kind:
+        return None
+    kind = issue.agent_kind.strip().lower()
+    return kind or None
+
+
+def _config_for_issue_agent(cfg: ServiceConfig, issue: Issue) -> ServiceConfig:
+    """Return a per-worker config with the ticket's backend override applied."""
+    kind = _requested_agent_kind(issue)
+    if kind is None or kind == cfg.agent.kind:
+        return cfg
+    if kind not in SUPPORTED_AGENT_KINDS:
+        raise ConfigValidationError(
+            f"ticket agent.kind must be one of {sorted(SUPPORTED_AGENT_KINDS)}",
+            value=kind,
+            issue=issue.identifier,
+        )
+    return replace(cfg, agent=replace(cfg.agent, kind=kind))
+
+
 # ---------------------------------------------------------------------------
 # Runtime data structures
 # ---------------------------------------------------------------------------
@@ -102,6 +125,7 @@ class RunningEntry:
     worker_task: asyncio.Task[None] | None
     workspace_path: Path
     attempt_kind: str = "initial"
+    agent_kind: str = ""
     session_id: str | None = None
     thread_id: str | None = None
     turn_id: str | None = None
@@ -365,6 +389,7 @@ class Orchestrator:
             "issue_id": issue_id,
             "issue_identifier": entry.issue.identifier,
             "state": entry.issue.state,
+            "agent_kind": self._entry_agent_kind(entry),
             "session_id": entry.session_id,
             "turn_count": total_turn_count,
             "total_turn_count": total_turn_count,
@@ -383,6 +408,15 @@ class Orchestrator:
             },
             "worker_task": _task_debug(entry.worker_task),
         }
+
+    def _entry_agent_kind(self, entry: RunningEntry) -> str:
+        if entry.agent_kind:
+            return entry.agent_kind
+        requested = _requested_agent_kind(entry.issue)
+        if requested is not None:
+            return requested
+        cfg = self._workflow_state.current()
+        return cfg.agent.kind if cfg is not None else ""
 
     # ------------------------------------------------------------------
     # operator-driven pause / resume
@@ -634,6 +668,16 @@ class Orchestrator:
             return False
         if not (issue.id and issue.identifier and issue.title and issue.state):
             return False
+        requested_agent = _requested_agent_kind(issue)
+        if requested_agent is not None and requested_agent not in SUPPORTED_AGENT_KINDS:
+            log.warning(
+                "ticket_agent_kind_unsupported",
+                issue_id=issue.id,
+                identifier=issue.identifier,
+                agent_kind=requested_agent,
+                supported=sorted(SUPPORTED_AGENT_KINDS),
+            )
+            return False
         # Per-state limit (§8.3).
         per_state_cap = cfg.agent.max_concurrent_agents_by_state.get(state)
         if per_state_cap is not None:
@@ -687,6 +731,7 @@ class Orchestrator:
             if self._workspace_manager
             else Path("/"),
             attempt_kind=attempt_kind or ("retry" if attempt is not None else "initial"),
+            agent_kind=_requested_agent_kind(issue) or cfg.agent.kind,
         )
         self._running[issue.id] = entry
         self._claimed.add(issue.id)
@@ -712,6 +757,7 @@ class Orchestrator:
             issue_id=issue.id,
             issue_identifier=issue.identifier,
             attempt=attempt,
+            agent_kind=_requested_agent_kind(issue) or cfg.agent.kind,
         )
 
     def _on_worker_task_done(self, issue_id: str, task: asyncio.Task[None]) -> None:
@@ -793,6 +839,10 @@ class Orchestrator:
         outcome: str = "normal"
         error: str | None = None
         try:
+            cfg = _config_for_issue_agent(cfg, issue)
+            running = self._running.get(running_issue_id)
+            if running is not None:
+                running.agent_kind = cfg.agent.kind
             assert self._workspace_manager is not None
             workspace = await self._workspace_manager.create_or_reuse(issue.identifier)
             running = self._running.get(running_issue_id)

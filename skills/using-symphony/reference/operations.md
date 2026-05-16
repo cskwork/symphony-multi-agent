@@ -19,12 +19,14 @@ safe.
 symphony board new TASK-1 "Fix flaky pagination test" \
   --priority 2 \
   --labels backend,test \
+  --agent-kind claude \
   --description "tests/test_pagination.py::test_cursor_advance is flaky on CI."
 ```
 
 Identifiers are free-form strings (`TASK-1`, `BUG-007`, `PROD-2026-05-09`).
 Convention is `<PREFIX>-<NUMBER>` but it is not enforced. The file lands at
-`kanban/<ID>.md`.
+`kanban/<ID>.md`. Omit `--agent-kind` to use the global `agent.kind` from
+`WORKFLOW.md`; set it only for tickets that need a different backend.
 
 When creating more than one ticket, assign IDs in the same order as the task
 list: `TASK-001`, then `TASK-002`, then `TASK-003`. Symphony uses the stable

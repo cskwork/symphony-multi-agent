@@ -67,6 +67,8 @@ _CANONICAL_FRONT_MATTER_KEYS = {
     "url",
     "labels",
     "blocked_by",
+    "agent",
+    "agent_kind",
     "created_at",
     "updated_at",
 }
@@ -198,7 +200,20 @@ def issue_from_file(path: Path) -> Issue | None:
         or parse_iso_timestamp(_file_ctime_iso(path)),
         updated_at=parse_iso_timestamp(front.get("updated_at"))
         or parse_iso_timestamp(_file_mtime_iso(path)),
+        agent_kind=_parse_agent_kind(front),
     )
+
+
+def _parse_agent_kind(front: dict[str, Any]) -> str | None:
+    raw = front.get("agent_kind")
+    if raw is None:
+        agent = front.get("agent")
+        if isinstance(agent, dict):
+            raw = agent.get("kind")
+    if not isinstance(raw, str):
+        return None
+    kind = raw.strip().lower()
+    return kind or None
 
 
 def _parse_blockers(value: Any) -> list[BlockerRef]:
@@ -250,6 +265,8 @@ def serialize_ticket(front: dict[str, Any], body: str) -> str:
         "url",
         "labels",
         "blocked_by",
+        "agent",
+        "agent_kind",
         "created_at",
         "updated_at",
     ]
@@ -345,6 +362,7 @@ class FileBoardTracker:
                         description=None,
                         priority=None,
                         state=issue.state,
+                        agent_kind=issue.agent_kind,
                     )
                 )
         return out
@@ -402,6 +420,7 @@ class FileBoardTracker:
         priority: int | None = None,
         labels: list[str] | None = None,
         description: str = "",
+        agent_kind: str | None = None,
     ) -> Path:
         path = self._root / f"{identifier}.md"
         if path.exists():
@@ -417,6 +436,8 @@ class FileBoardTracker:
             "created_at": now,
             "updated_at": now,
         }
+        if isinstance(agent_kind, str) and agent_kind.strip():
+            front["agent"] = {"kind": agent_kind.strip().lower()}
         write_ticket_atomic(path, front, description)
         return path
 

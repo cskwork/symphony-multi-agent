@@ -29,6 +29,7 @@ class Issue:
     blocked_by: tuple[BlockerRef, ...] = field(default_factory=tuple)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    agent_kind: str | None = None
 
     def to_template_dict(self) -> dict[str, Any]:
         """§12.2 — convert keys to strings, preserve nested arrays/maps."""
@@ -48,6 +49,7 @@ class Issue:
             ],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "agent_kind": self.agent_kind or "",
         }
 
 

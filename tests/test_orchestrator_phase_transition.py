@@ -29,6 +29,7 @@ from symphony.workflow import (
     PromptConfig,
     ServerConfig,
     ServiceConfig,
+    SUPPORTED_AGENT_KINDS,
     TrackerConfig,
     TuiConfig,
     WorkflowState,
@@ -218,8 +219,8 @@ def _install_fake_backend(monkeypatch: pytest.MonkeyPatch) -> list[_FakeBackend]
     instances: list[_FakeBackend] = []
 
     def _factory(init: Any) -> _FakeBackend:
-        del init
         backend = _FakeBackend(init_id=len(instances))
+        backend.calls.append(("factory", {"agent_kind": init.cfg.agent.kind}))
         instances.append(backend)
         return backend
 
@@ -318,6 +319,33 @@ def test_phase_transition_rebuilds_backend_with_fresh_first_prompt(
     # And the prompt sent on that run_turn equals the freshly rendered
     # first-turn prompt (not a build_continuation_prompt body).
     assert second_run[0][1]["prompt"] == first_prompts[1]
+
+
+@pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))
+def test_run_agent_attempt_uses_ticket_agent_kind_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_kind: str
+) -> None:
+    cfg = _make_config(max_turns=5)
+    issue = Issue(
+        id="iss-1",
+        identifier="MT-1",
+        title="ticket-level backend",
+        description=None,
+        priority=2,
+        state="Todo",
+        agent_kind=agent_kind,
+        blocked_by=(),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    o = _orch(tmp_path)
+    _seed_running_entry(o, issue, tmp_path)
+    instances = _install_fake_backend(monkeypatch)
+    _install_state_sequence(monkeypatch, ["Done"])
+
+    asyncio.run(o._run_agent_attempt(issue, attempt=None, cfg=cfg))
+
+    assert cfg.agent.kind == "codex"
+    assert instances[0].calls[0] == ("factory", {"agent_kind": agent_kind})
 
 
 def test_phase_transition_uses_stage_specific_prompt_template(

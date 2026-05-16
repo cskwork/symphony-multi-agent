@@ -119,7 +119,7 @@ files so each turn stays focused and smaller.
 
 | Want                                                | Status | Workaround                                                                  |
 |-----------------------------------------------------|--------|-----------------------------------------------------------------------------|
-| Per-state agent kind (e.g. claude for Review, codex for Implement) | ❌      | Single `agent.kind` only. Use stage prompt files to vary behavior instead.  |
+| Per-state agent kind (e.g. claude for Review, codex for Implement) | ❌      | Use per-ticket `agent.kind` frontmatter for exceptions; use stage prompts for lane-specific behavior. |
 | Per-state turn limits / timeouts                    | ❌      | Globals (`agent.max_turns`, `<kind>.turn_timeout_ms`). PR territory to add. |
 | Auto-progression without an agent edit              | ❌      | The agent itself rewrites `kanban/<ID>.md` `state:` to advance.             |
 | Hard ordering between lanes                         | ⚠      | Use `blocked_by` in ticket frontmatter; advisory only.                      |
@@ -137,6 +137,7 @@ The renderer exposes these to the body (see `prompt.py` + `issue.py`):
 | `{{ issue.priority }}`    | int     | nullable                                             |
 | `{{ issue.labels }}`      | list    | use `{{ labels \| join: ", " }}`                     |
 | `{{ issue.blocked_by }}`  | list    | each item has `.id`, `.identifier`, `.state`         |
+| `{{ issue.agent_kind }}`  | string  | per-ticket backend override, or empty when global    |
 | `{{ attempt }}`           | int     | retry attempt; null on first try                     |
 
 Unknown variables / filters intentionally raise `TemplateRenderError` —

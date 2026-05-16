@@ -104,6 +104,7 @@ class _CardStatus:
     attempt: int | None = None
     error: str | None = None
     last_message: str = ""
+    agent_kind: str = ""
     # True when the orchestrator has been asked to hold this worker at the
     # next turn boundary. Surfaced from `snapshot()["running"][N]["paused"]`.
     paused: bool = False
@@ -201,6 +202,7 @@ def _build_runtime_index(snap: dict[str, Any]) -> dict[str, _CardStatus]:
             input_tokens=int(tokens_block.get("input_tokens") or 0),
             output_tokens=int(tokens_block.get("output_tokens") or 0),
             last_message=str(row.get("last_message") or ""),
+            agent_kind=str(row.get("agent_kind") or ""),
             paused=bool(row.get("paused", False)),
         )
     for row in snap.get("retrying", []) or []:
@@ -376,6 +378,10 @@ class IssueCard(Static):
                     f"{t('card.paused', language)}  ",
                     style="bold bright_magenta",
                 )
+            if status.agent_kind:
+                agent_color = AGENT_COLOR.get(status.agent_kind, "white")
+                meta.append(status.agent_kind, style=f"bold {agent_color}")
+                meta.append("  ")
             meta.append(f"{t('card.turn', language)} {status.turn}", style="green")
             if status.attempt_kind in ("continuation", "retry") and status.attempt_turn:
                 meta.append(
@@ -690,6 +696,8 @@ class DetailPane(Vertical):
             )
             runtime_style = "bright_magenta" if status.paused else "green"
             meta.append(f"\n{runtime_label}", style=runtime_style)
+            if status.agent_kind:
+                meta.append(f"  agent={status.agent_kind}", style="dim")
             if status.turn:
                 meta.append(f"  turn={status.turn}", style="dim")
             if status.attempt:

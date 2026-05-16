@@ -1197,6 +1197,17 @@ def test_running_snapshot_uses_total_turn_count_across_continuations():
     assert row["attempt_kind"] == "continuation"
 
 
+def test_running_snapshot_includes_effective_agent_kind():
+    orch = _orch()
+    issue = _issue("MT-1", state="Todo")
+    entry = _install_running_entry(orch, issue)
+    entry.agent_kind = "pi"
+
+    row = orch._running_row(issue.id, entry)
+
+    assert row["agent_kind"] == "pi"
+
+
 def test_normal_exit_does_not_continue_after_total_turn_budget():
     orch = _orch()
     issue = _issue("MT-1", state="Todo")

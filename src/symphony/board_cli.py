@@ -21,6 +21,7 @@ from .errors import SymphonyError
 from .tracker_file import FileBoardTracker, parse_ticket_file
 from .workflow import (
     DEFAULT_BOARD_ROOT_NAME,
+    SUPPORTED_AGENT_KINDS,
     TrackerConfig,
     build_service_config,
     load_workflow,
@@ -60,6 +61,8 @@ def _tracker_from_root(root: Path) -> TrackerConfig:
 
 
 def _get_tracker(args: argparse.Namespace) -> TrackerConfig:
+    if args.root is not None:
+        return _tracker_from_root(Path(args.root))
     cfg = _resolve_tracker(args)
     if cfg is not None:
         return cfg
@@ -132,6 +135,7 @@ def cmd_new(args: argparse.Namespace) -> int:
             priority=args.priority,
             labels=args.labels.split(",") if args.labels else None,
             description=args.description or "",
+            agent_kind=args.agent_kind,
         )
     except SymphonyError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -166,6 +170,11 @@ def cmd_show(args: argparse.Namespace) -> int:
         print(f"priority: {front['priority']}")
     if front.get("labels"):
         print(f"labels: {', '.join(front['labels'])}")
+    agent = front.get("agent")
+    if isinstance(agent, dict) and agent.get("kind"):
+        print(f"agent: {agent['kind']}")
+    elif front.get("agent_kind"):
+        print(f"agent: {front['agent_kind']}")
     if body:
         print()
         print(body)
@@ -206,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument("--priority", type=int, default=None)
     p_new.add_argument("--labels", default=None, help="comma-separated labels")
     p_new.add_argument("--description", default=None)
+    p_new.add_argument(
+        "--agent-kind",
+        choices=sorted(SUPPORTED_AGENT_KINDS),
+        default=None,
+        help="override backend for this ticket (default: WORKFLOW.md agent.kind)",
+    )
     p_new.set_defaults(func=cmd_new)
 
     p_mv = sub.add_parser("mv", help="change a ticket state")

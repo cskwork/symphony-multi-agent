@@ -299,6 +299,7 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
                 "last_event_at": "2026-05-09T23:51:21Z",
                 "tokens": {"total_tokens": 100, "input_tokens": 60, "output_tokens": 40},
                 "last_message": "hello",
+                "agent_kind": "pi",
             }
         ],
         "retrying": [
@@ -312,6 +313,7 @@ def test_build_runtime_index_extracts_running_and_retrying() -> None:
     assert idx["id-1"].attempt_kind == "continuation"
     assert idx["id-1"].tokens == 100
     assert idx["id-1"].last_event_at is not None
+    assert idx["id-1"].agent_kind == "pi"
     assert idx["id-2"].runtime == "retrying"
     assert idx["id-2"].attempt == 2
     assert idx["id-2"].error == "timeout"

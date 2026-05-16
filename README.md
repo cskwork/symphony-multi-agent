@@ -88,6 +88,20 @@ Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); only the
 one matching `agent.kind` is used at runtime. The Codex `linear_graphql`
 client tool is only advertised when `agent.kind=codex`.
 
+`agent.kind` is the global default. A file-board ticket can opt into a
+different backend by adding ticket frontmatter:
+
+```yaml
+agent:
+  kind: codex
+```
+
+The flat alias `agent_kind: codex` is also accepted for hand-edited cards.
+All backend command and timeout settings still come from the matching global
+`codex:`, `claude:`, `gemini:`, or `pi:` block in `WORKFLOW.md`.
+When creating file-board tickets from the CLI, use
+`symphony board new TASK-2 "title" --agent-kind codex`.
+
 ## Install
 
 ```bash

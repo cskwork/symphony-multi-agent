@@ -15,7 +15,7 @@ from symphony.tracker_file import (
     serialize_ticket,
     write_ticket_atomic,
 )
-from symphony.workflow import TrackerConfig
+from symphony.workflow import SUPPORTED_AGENT_KINDS, TrackerConfig
 
 
 def _tracker(root: Path, **kwargs) -> TrackerConfig:
@@ -91,6 +91,53 @@ def test_issue_from_file_normalizes(tmp_path):
     assert issue.blocked_by[0].identifier == "DEV-99"
     assert issue.blocked_by[0].state == "Done"
     assert issue.blocked_by[1].identifier == "DEV-77"
+
+
+def test_issue_from_file_reads_nested_agent_kind_override(tmp_path):
+    path = _write(
+        tmp_path,
+        "DEV-AGENT.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: DEV-AGENT
+            title: Route to Codex
+            state: Todo
+            agent:
+              kind: Codex
+            ---
+            body
+            """
+        ),
+    )
+
+    issue = issue_from_file(path)
+
+    assert issue is not None
+    assert issue.agent_kind == "codex"
+
+
+def test_issue_from_file_reads_flat_agent_kind_override(tmp_path):
+    path = _write(
+        tmp_path,
+        "DEV-FLAT.md",
+        textwrap.dedent(
+            """\
+            ---
+            id: DEV-FLAT
+            title: Route to Claude
+            state: Todo
+            agent_kind: Claude
+            ---
+            body
+            """
+        ),
+    )
+
+    issue = issue_from_file(path)
+
+    assert issue is not None
+    assert issue.agent_kind == "claude"
 
 
 def test_issue_from_file_returns_none_when_required_missing(tmp_path):
@@ -245,6 +292,20 @@ def test_create_and_transition_round_trip(tmp_path):
         "---\nid: X-2\ntitle: t\nstate: Todo\n---\nbody\n", encoding="utf-8"
     )
     assert fbt.find_path("X-2") == odd
+
+
+@pytest.mark.parametrize("agent_kind", sorted(SUPPORTED_AGENT_KINDS))
+def test_create_can_write_agent_kind_override(tmp_path, agent_kind):
+    root = tmp_path / "board"
+    fbt = FileBoardTracker(_tracker(root))
+
+    path = fbt.create(identifier="X-AGENT", title="t", agent_kind=agent_kind)
+
+    front, _ = parse_ticket_file(path)
+    assert front["agent"] == {"kind": agent_kind}
+    issue = issue_from_file(path)
+    assert issue is not None
+    assert issue.agent_kind == agent_kind
 
 
 def test_update_state_protocol_hook(tmp_path):

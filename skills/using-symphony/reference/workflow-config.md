@@ -71,6 +71,25 @@ Each backend reads its own block (`codex`, `claude`, `gemini`, `pi`); the
 others are ignored. The `codex.linear_graphql` client tool is only
 advertised when `agent.kind: codex`.
 
+`agent.kind` is the workflow-wide default. For file-backed boards, one ticket
+can opt into a different backend with frontmatter:
+
+```yaml
+---
+id: TASK-001
+title: Run this one with Codex
+state: Todo
+agent:
+  kind: codex
+---
+```
+
+Symphony also accepts the flat alias `agent_kind: codex` for hand-edited
+cards. The override chooses only the backend kind; command, timeout, resume,
+and sandbox settings still come from the matching global backend block in
+`WORKFLOW.md`. When creating a ticket from the file-board CLI, use
+`symphony board new TASK-001 "title" --agent-kind codex`.
+
 ## Prompt files
 
 Preferred current shape:
