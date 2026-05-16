@@ -60,6 +60,25 @@ Use this only to unstick — the agent normally transitions tickets itself.
 
 ## Running the orchestrator
 
+### Managed service (normal headless mode)
+
+```bash
+symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
+symphony service status ./WORKFLOW.md
+symphony service restart ./WORKFLOW.md
+symphony service stop ./WORKFLOW.md
+```
+
+Use `symphony service ...` for normal headless operation. It records a
+per-workflow run-state file under `.symphony/run/` and refuses to start the
+same `WORKFLOW.md` a second time on another port, which prevents duplicate
+orchestrators from dispatching the same board.
+
+Since v0.4.7 the board viewer at `--viewer-port` is not read-only: running
+cards expose Pause / Resume buttons, the header refresh button triggers an
+orchestrator `poll + reconcile`, and local git branch dropdowns control
+`agent.feature_base_branch` and `agent.auto_merge_target_branch`.
+
 ### TUI mode (interactive)
 
 ```bash

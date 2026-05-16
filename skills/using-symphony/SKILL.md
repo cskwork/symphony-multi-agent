@@ -1,235 +1,74 @@
 ---
 name: using-symphony
-description: Use when the user wants to dispatch coding agents (Codex / Claude Code / Gemini / Pi) against a Kanban board via this `symphony-multi-agent` repo — adding/listing/transitioning tickets, launching the TUI, inspecting orchestrator state, customizing the workflow (lanes, per-state prompts), delegating sub-tasks to free up context, or diagnosing dispatch failures. Triggers on phrases like "add a symphony task", "run symphony", "dispatch this ticket", "symphony board", "WORKFLOW.md", "symphony tui won't start", "ticket failed with worker_exit", "customize kanban states", "deploy pipeline workflow", "delegate to symphony", "agent.kind: pi", "agent silent for N seconds".
+description: Use for Symphony Kanban operations including tickets, TUI/service runs, workflow prompts, delegation, and dispatch or worker failure triage.
 ---
 
 # Using Symphony
 
-Symphony is a polling orchestrator that takes Kanban tickets and runs a
-coding-agent CLI (Codex, Claude Code, Gemini, or Pi) against each one in an
-isolated per-ticket workspace. This skill covers the operator's day-to-day:
-authoring tickets, launching the orchestrator, and triaging failures.
+Symphony is a polling orchestrator that reads Kanban tickets and runs a
+coding-agent CLI (Codex, Claude Code, Gemini, or Pi) against each ticket in
+an isolated workspace. Use this skill for operator work: creating tickets,
+running the orchestrator, editing workflow config, bootstrapping Symphony into
+another repo, and triaging worker failures.
 
-> Always read `WORKFLOW.md` and one or two `kanban/*.md` files first to
-> ground recommendations in the project's actual config — settings vary
-> across forks.
+Start by reading the target `WORKFLOW.md` and one or two real `kanban/*.md`
+files. Symphony behavior is workflow-specific, and forks commonly customize
+lanes, prompts, hooks, workspace roots, and agent backends.
 
-## Mental model in 30 seconds
+## Core Model
 
-```
-WORKFLOW.md  ─▶  Orchestrator  ─poll─▶  kanban/*.md  ─dispatch─▶  AgentBackend
-   (config)                  (every                                (codex |
-                              polling.                              claude |
-                              interval_ms)                          gemini |
-                                                                    pi)
-                                                                        │
-                                                                        ▼
-                                                            workspace.root/<ID>
-                                                            (after_create hook
-                                                             ran once here)
-                                                                        │
-                                                              turn loop with
-                                                              before_run / after_run
-                                                              hooks per turn
-                                                                        │
-                                                                        ▼
-                                                  Agent edits kanban/<ID>.md
-                                                  → Learn merge gate
-                                                  → state: Done + report
-```
+- The orchestrator reads ticket files and dispatches eligible work; the worker
+  agent edits the ticket file to move state and append reports.
+- Each ticket runs in its own workspace under `workspace.root` (default
+  `~/symphony_workspaces/<ID>`). The default hooks attach that directory as a
+  `git worktree` on `symphony/<ID>`, leaving the host working tree untouched.
+- Ticket IDs are an ordering contract. For multi-ticket work, create
+  `TASK-001`, then `TASK-002`, then `TASK-003` in task-list order; Symphony
+  sorts by stable numeric suffix before mutable fields like priority.
+- The default Learn prompt expects the `symphony/<ID>` branch to be merged into
+  the configured target branch before the ticket moves to `Done`.
 
-Key invariants:
-- The **orchestrator only reads** ticket files. It never writes them.
-- The **agent writes** ticket files (via its filesystem tool) to transition
-  state. That's how a ticket moves to `Done`.
-- Each ticket runs in its own **workspace directory** under `workspace.root`
-  (default `~/symphony_workspaces/<ID>`). Hooks run inside that directory.
-  The shipped `after_create` hook attaches that directory as a `git
-  worktree` of the host repo on a `symphony/<ID>` branch — host working
-  tree stays untouched while the ticket runs. After Learn, the default
-  prompt requires merging that feature branch into the target branch before
-  the ticket can move to `Done`.
-- Ticket IDs are an ordering contract. Symphony sorts dispatch candidates by
-  stable ticket registration suffix (for example `TASK-001` before
-  `TASK-002`) before mutable fields like priority or update time. When
-  creating multiple tickets, assign numeric suffixes in the same order as the
-  task list and create the files in that order.
+## Non-Negotiable Preflight
 
-## Always run preflight first
+Run this before launching or debugging a workflow:
 
 ```bash
 symphony doctor ./WORKFLOW.md
 ```
 
-Catches port collision, missing agent CLI on `$PATH`, missing pi auth
-(`~/.pi/agent/auth.json` when `agent.kind: pi`), the shipped placeholder
-clone URL, unwritable workspace, and missing board directory in one pass.
-Exit 0 if green; otherwise read FAIL lines and fix before launching.
+Fix FAIL lines first. Doctor catches the common launch blockers: port
+collisions, missing agent CLI, missing Pi auth, placeholder clone URLs,
+unwritable workspaces, and missing board directories.
 
-## Bootstrapping Symphony into another project (REQUIRED)
+## Guardrails
 
-Whenever you introduce Symphony to a project that does **not** live inside
-this repo, **always copy `tui-open.sh` (and `tui-open.bat` for Windows)
-alongside `WORKFLOW.md`** so the operator has a one-shot Kanban-UI
-launcher. Do this every time — even if the user only asks for tickets or
-headless mode — because they will want the board view sooner or later,
-and the launcher carries safety logic (`lsof` port-collision check,
-doctor preflight, new-window spawn) that plain `symphony tui` does not.
+- When bootstrapping Symphony into another project, copy the launcher scripts,
+  skill pointers, `docs/symphony-prompts`, and platform entry files. Do not
+  leave the operator with only a bare `WORKFLOW.md`; read
+  `reference/bootstrapping.md` for the exact bundle.
+- Preserve the shipped 8-stage pipeline (`Todo`, `Explore`, `Plan`,
+  `In Progress`, `Review`, `QA`, `Learn`, `Done`) unless the user explicitly
+  requests a smaller workflow. If you change lanes, update both
+  `tracker.active_states` and `prompts.stages`.
+- Pick the prompt flavor that matches the tracker:
+  `tracker.kind: file` uses `docs/symphony-prompts/file/...`;
+  `tracker.kind: linear` uses `docs/symphony-prompts/linear/...`.
+- Keep detailed lane behavior in `prompts.base` and `prompts.stages` files,
+  not in a huge inline `WORKFLOW.md` body.
+- Do not use `git reset --hard` in `before_run`; it can erase the agent's
+  previous-turn work before it is finalized.
 
-```bash
-# from inside the symphony-multi-agent checkout, into the target project:
-TARGET=/path/to/target-project
-cp tui-open.sh tui-open.bat       "$TARGET/"
-cp WORKFLOW.example.md            "$TARGET/WORKFLOW.md"            # then edit
-mkdir -p                          "$TARGET/docs"
-cp -R docs/symphony-prompts       "$TARGET/docs/"                  # MANDATORY — see below
-cp -R skills                      "$TARGET/"                       # operator skills (source of truth)
-cp AGENTS.md GEMINI.md            "$TARGET/"                       # codex / gemini entry points
-mkdir -p                          "$TARGET/.claude/skills"
-ln -s ../../skills/using-symphony   "$TARGET/.claude/skills/using-symphony"
-ln -s ../../skills/symphony-oneshot "$TARGET/.claude/skills/symphony-oneshot"
-chmod +x "$TARGET/tui-open.sh"
-```
+## Common Starts
 
-### Why all four (skills/, .claude/skills/ symlinks, AGENTS.md, GEMINI.md)
-
-The same skill content has to be discoverable from whichever CLI the
-**operator** runs. Each platform looks in a different place:
-
-| Operator CLI       | Discovery path                                                |
-|--------------------|---------------------------------------------------------------|
-| Claude Code        | `.claude/skills/<name>/SKILL.md` (symlink → `skills/<name>/`) |
-| Codex              | `AGENTS.md` at repo root (references `skills/<name>/SKILL.md`) |
-| Gemini CLI         | `GEMINI.md` at repo root (references `skills/<name>/SKILL.md`) |
-| Pi                 | No documented skill convention — read `skills/` manually       |
-
-`skills/<name>/` is the **single source of truth**; the other three are
-pointers. Edit only the canonical files under `skills/`. Worker-side
-behavior is unaffected — dispatched codex/claude/gemini/pi workers get
-their guidance from `docs/symphony-prompts/`, not from these skills.
-
-### Preserve the 8-stage pipeline by default (DO NOT simplify)
-
-`WORKFLOW.example.md` ships with the full production pipeline
-`[Todo, Explore, Plan, "In Progress", Review, QA, Learn]` + `Done` and
-matching `prompts.stages` that wire each lane to a stage-specific prompt
-under `docs/symphony-prompts/<linear|file>/stages/*.md`. This is the
-*supported default*, not a maximalist example — Explore briefs the agent
-from `docs/llm-wiki/`, Plan writes the professional implementation plan
-that In Progress can execute without re-reading Explore by default, QA
-captures evidence, Learn writes back to the wiki, and the base prompt's
-"no skipping" gate refers to these by name.
-
-**When bootstrapping, do not shorten `active_states` or drop
-`prompts.stages` entries** unless the user explicitly asks for a smaller
-workflow. Trimming to `[Todo, "In Progress", Review]` (a common LLM
-"simplification" reflex) silently breaks:
-
-- the `Explore → Plan → In Progress → Review → QA → Learn → Done` flow the
-  base prompt assumes,
-- the QA evidence gate that the base prompt requires before `Done`,
-- the Learn write-back to `docs/llm-wiki/` future tickets depend on.
-
-If the target project does need a different workflow (e.g. deploy
-pipeline), edit *both* `tracker.active_states` and the `prompts.stages`
-map together, and add matching stage files under
-`docs/symphony-prompts/<flavor>/stages/`. See
-`reference/customization.md` for the lane-rename recipe.
-
-### Pick the right prompt flavor
-
-- `tracker.kind: file` (default for repos that want kanban as files)
-  → keep `docs/symphony-prompts/file/...` and point `prompts.base` and
-  `prompts.stages` at the `file/` subtree.
-- `tracker.kind: linear` (Linear-backed) → keep
-  `docs/symphony-prompts/linear/...` (the example ships pointing here).
-
-The two flavors differ in *where* the agent writes stage notes
-(ticket-file body vs Linear comments) — picking the wrong one will
-generate artefacts in the wrong place. You can copy only the flavor
-you need if disk hygiene matters, but copying both is fine.
-
-Then the operator starts the managed background service with:
+Add one file-board ticket and open the managed TUI launcher:
 
 ```bash
-symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
-symphony service status ./WORKFLOW.md
-symphony service restart ./WORKFLOW.md
-symphony service stop ./WORKFLOW.md
-```
-
-Use `symphony service ...` for normal headless operation. It records a
-per-workflow run-state file under `.symphony/run/` and refuses to start the
-same `WORKFLOW.md` a second time on another port, which prevents duplicate
-orchestrators from dispatching the same Kanban board.
-
-Since v0.4.7 the board viewer at `--viewer-port` is no longer read-only:
-running cards expose Pause / Resume buttons and the header refresh button
-triggers an orchestrator `poll + reconcile`. It also exposes real local git
-branch dropdowns for `agent.feature_base_branch` and
-`agent.auto_merge_target_branch`, so PMs and non-CLI users can choose the
-feature start branch and Learn merge target from the browser without editing
-YAML by hand.
-
-For foreground TUI work, the operator can still open the board with:
-
-```bash
-./tui-open.sh                 # macOS/Linux — uses ./WORKFLOW.md
-./tui-open.sh path/to/WORKFLOW.md
-tui-open.bat                  # Windows — uses .\WORKFLOW.md
-```
-
-Why the launcher matters (don't skip it):
-- Auto-detects an existing TUI on the workflow's `server.port` and raises
-  the existing window instead of crashing on `EADDRINUSE`.
-- Runs `symphony doctor` before swapping the screen, so failures stay
-  readable.
-- Prefers `<project>/.venv/bin/symphony` over PATH — works without global
-  install.
-- Spawns a real new window (macOS `.command` via iTerm/Terminal,
-  Linux via `$TERMINAL`/gnome-terminal/konsole/xterm), avoiding the
-  `osascript do script` "silent tab in another Space" trap.
-
-If the target project has no `.venv`, also remind the user to run
-`python3.11 -m venv .venv && .venv/bin/pip install -e <symphony-multi-agent>`
-(or `pip install symphony-multi-agent` once published) so the launcher's
-venv-first lookup succeeds.
-
-## Headless visibility — what to grep for in `log/symphony.log`
-
-When running without the TUI, these INFO/WARN lines tell you the run is
-actually progressing (vs. hung):
-
-| Log message                           | Means                                                |
-|---------------------------------------|------------------------------------------------------|
-| `dispatch issue_id=...`               | Orchestrator picked up a ticket                      |
-| `hook_completed hook=after_create`    | Workspace seeded; per-ticket cwd is ready            |
-| `agent_session_started session_id=`   | Agent CLI booted and minted a session id             |
-| `agent_turn_completed turn=N total_tokens=...` | Turn finished; tokens accumulated; live preview snippet attached |
-| `worker_turn_completed turn=N ...`    | Worker-side mirror of the above; guaranteed to fire even when reconcile races in |
-| `agent_turn_failed reason=... stderr_tail=[...]` | Backend reported a turn-level failure; last 20 stderr lines attached |
-| `agent_compaction phase=start/end`    | Pi only — context compaction (auto or `/compact`)    |
-| `agent_internal_retry phase=start/end` | Pi only — backend-internal LLM retry on transient error |
-| `reconcile_skip_active_worker`        | Reconcile saw terminal state but worker is still emitting events; lets it exit naturally |
-| `reconcile_terminate_terminal state=` | Ticket reached a terminal state and worker is stale (>10 s silent) — force-cancel |
-| `worker_exit reason=normal`           | Successful end-to-end run                            |
-
-If you see `dispatch` but no `agent_session_started` within a minute, the
-backend is stuck before its first event — inspect `pi`/`claude`/`codex`
-stdin and auth (see troubleshooting reference).
-
-## Top three recipes
-
-### 1. Add and run a single ticket
-
-```bash
-symphony board init ./kanban                                  # once per repo
+symphony board init ./kanban
 symphony board new TASK-001 "<title>" --description "<spec>"
-./tui-open.sh ./WORKFLOW.md                                   # preferred — see "Bootstrapping" above
-# or: symphony tui ./WORKFLOW.md                              # plain CLI; TTY required
+./tui-open.sh ./WORKFLOW.md
 ```
 
-### 2. Managed headless launch + JSON observation (no TTY)
+Run headless with service state and browser viewer:
 
 ```bash
 symphony service start ./WORKFLOW.md --port 9999 --viewer-port 8765
@@ -237,61 +76,49 @@ symphony service status ./WORKFLOW.md
 curl -s http://127.0.0.1:9999/api/v1/state | jq
 ```
 
-### 3. Demo without an agent CLI installed
+Use `symphony service ...` for normal headless operation. It writes
+per-workflow run state under `.symphony/run/` and refuses duplicate starts for
+the same `WORKFLOW.md`, preventing two orchestrators from dispatching the same
+board.
 
-Set `codex.command: python -m symphony.mock_codex` in WORKFLOW.md. The mock
-speaks the same JSON-RPC protocol as Codex and emits simulated turns —
-useful to verify orchestrator + TUI wiring before installing a real
-backend.
+For smoke demos without an installed agent CLI, set `codex.command: python -m
+symphony.mock_codex`; see `reference/operations.md`.
 
-## Decision: which reference page do I open?
+## What To Read Next
 
-| If the user wants to…                                      | Read                                       |
-|------------------------------------------------------------|--------------------------------------------|
-| Add / list / show / move tickets, run the TUI or API       | `reference/operations.md`                  |
-| Edit `WORKFLOW.md` (agent kind, hooks, tracker, workspace) | `reference/workflow-config.md`             |
-| Add custom lanes, per-state prompts, deploy pipelines      | `reference/customization.md`               |
-| Offload sub-tasks from the calling agent's context         | `reference/delegation.md`                  |
-| Diagnose `worker_exit`, `hook_failed`, blank TUI, etc.     | `reference/troubleshooting.md`             |
-| Set up / debug on Windows or macOS, or port to a new platform | `reference/platform-compat.md`          |
-| Configure .gitignore so per-ticket docs don't bloat history | `reference/gitignore-recommendations.md` |
+| Need | Read |
+| --- | --- |
+| Bootstrap Symphony into a project | `reference/bootstrapping.md` |
+| Add/list/show/move tickets, run TUI/API/service | `reference/operations.md` |
+| Edit `WORKFLOW.md`, agent kind, hooks, tracker, workspace | `reference/workflow-config.md` |
+| Rename lanes, add per-state prompts, customize pipelines | `reference/customization.md` |
+| Delegate independent sub-tasks to Symphony workers | `reference/delegation.md` |
+| Diagnose `worker_exit`, `hook_failed`, blank TUI, auth stalls | `reference/troubleshooting.md` |
+| Set up/debug Windows, macOS, Linux behavior | `reference/platform-compat.md` |
+| Configure `.gitignore` for Symphony-generated docs/logs | `reference/gitignore-recommendations.md` |
 
-## When NOT to use this skill
+## Headless Triage Signals
 
-- The user wants to write code inside a workspace symphony already created
-  for them — that's a normal coding task; use the agent backend's
-  conventions, not symphony's CLI.
-- The user is in a different repo (not `symphony-multi-agent`) — the
-  `symphony` CLI is project-tooling specific to this repo.
-- The user wants Linear integration — see `README.md` and
-  `WORKFLOW.example.md` for the `tracker.kind: linear` config; then
-  upstream Symphony docs apply.
-- The user wants a *whole product* built end-to-end from a single prompt
-  (with shared-knowledge vault, multi-lane workflow, and PDF-gated
-  verification) — use `symphony-oneshot` instead. That skill builds on
-  this one; understand `using-symphony` first, then layer the OneShot
-  pattern on top.
+If a service appears stuck, read `log/symphony.log` and the JSON state. Useful
+events include:
 
-## Quick reference
+- `dispatch issue_id=...` - ticket picked up
+- `hook_completed hook=after_create` - workspace seeded
+- `agent_session_started session_id=` - backend CLI started
+- `agent_turn_completed turn=N total_tokens=...` - a turn finished
+- `agent_turn_failed ... stderr_tail=[...]` - backend failure; inspect stderr
+- `worker_exit reason=normal` - clean end-to-end completion
 
-| You want to…                          | Run                                                          |
-|---------------------------------------|--------------------------------------------------------------|
-| Preflight                             | `symphony doctor ./WORKFLOW.md`                              |
-| Init the file-based board             | `symphony board init ./kanban`                               |
-| Add a ticket                          | `symphony board new <ID> "<title>" --priority N`             |
-| List tickets                          | `symphony board ls [--state STATE]`                          |
-| Show a ticket                         | `symphony board show <ID>`                                   |
-| Force a state transition              | `symphony board mv <ID> <state>`                             |
-| Launch TUI (preferred, new window)    | `./tui-open.sh ./WORKFLOW.md`                                |
-| Launch TUI (plain CLI, current TTY)   | `symphony tui ./WORKFLOW.md`                                 |
-| Headless (auto-mirrors WORKFLOW-PROGRESS.md) | `symphony ./WORKFLOW.md`                              |
-| Headless without progress mirror      | `symphony ./WORKFLOW.md --no-progress-md`                    |
-| Headless + JSON API                   | `symphony ./WORKFLOW.md --port 9999`                         |
-| Force a poll/reconcile                | `curl -X POST http://127.0.0.1:9999/api/v1/refresh`          |
-| Pause a running ticket (next turn)    | `curl -X POST http://127.0.0.1:9999/api/v1/<ID>/pause`       |
-| Resume a paused ticket                | `curl -X POST http://127.0.0.1:9999/api/v1/<ID>/resume`      |
-| Browser controls (pause/resume/refresh) | open `http://127.0.0.1:8765/` (v0.4.7+ board-viewer)       |
-| Snapshot state                        | `curl -s http://127.0.0.1:9999/api/v1/state \| jq`           |
-| Issue debug                           | `curl -s http://127.0.0.1:9999/api/v1/<ID> \| jq`            |
-| Stop a stuck server                   | `lsof -ti :9999 \| xargs -r kill`                            |
-| Capture logs                          | `symphony … 2>> log/symphony.log` then `tail -F log/...`     |
+If `dispatch` appears but no `agent_session_started` follows within about a
+minute, inspect backend auth, command, and stdin behavior. See
+`reference/troubleshooting.md`.
+
+## When Not To Use This Skill
+
+- The user wants to write code inside a workspace Symphony already created for
+  them; handle it as a normal coding task using that agent backend's
+  conventions.
+- The user wants a whole product built end-to-end from a single prompt with the
+  OneShot knowledge-vault and PDF-gated workflow; use `symphony-oneshot`.
+- The user is asking general Linear API questions outside a Symphony workflow;
+  use the project README and upstream Linear docs instead.
