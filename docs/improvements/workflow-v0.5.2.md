@@ -391,6 +391,24 @@ not blockers for v0.6.0; future tickets:
 - **C3 EMA `.json.tmp` rename on Windows.** POSIX rename is atomic; on
   Windows the rename can fail if a concurrent reader holds the file.
   Best-effort log only; no data loss.
+- **C3 EMA records the destination state, not the source state.** Live
+  claude demo (2026-05-17) revealed that `_update_token_ema` uses
+  `entry.issue.state` at `EVENT_TURN_COMPLETED` time — but the agent
+  flips `state:` in the ticket body before the turn ends, so the EMA
+  for an Explore-stage run lands under `"plan"`, the Plan-stage run
+  under `"in progress"`, and so on. The dispatched env var
+  `SYMPHONY_TOKEN_EMA` therefore over-references the prior stage's
+  cost when the budget directive is read. Functionally still works
+  (every stage gets some signal), but the mapping is shifted by one.
+  Fix is to capture the state at turn START (`worker_turn_started`)
+  and record against THAT state in `_update_token_ema`.
+- **A3 candidate-table format unspecified.** `plan.md` asks for a
+  `reuse_from` column and `observability` column, but the prompt does
+  not specify a table format. Live claude demo (2026-05-17) emitted
+  Plan Candidates as bullets, not a table — both columns silently
+  absent. Either (a) update prompts with an explicit table template,
+  or (b) drop "column" wording and accept bullet-per-candidate with
+  inline `(reuse_from=foo)` tags.
 
 Two HIGH items from the same review were fixed in the v0.6.0 bundle:
 - C1 backticked-path-with-spaces regex (split into

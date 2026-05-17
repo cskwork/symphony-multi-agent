@@ -21,3 +21,8 @@ htmlcov/
 
 # Runtime cache written by tui-open.sh on each launch (contains absolute paths)
 /.tui-launcher.command
+kanban_demo_claude/
+kanban_demo_codex/
+tmp_workspaces/
+WORKFLOW.demo.*.md
+/.symphony*-demo/

@@ -2621,6 +2621,39 @@ def test_touched_files_for_missing_section_returns_empty_set():
     assert orch._touched_files_for(issue_none) == set()
 
 
+def test_touched_files_for_accepts_real_agent_bullet_annotations():
+    """Real agent output uses ` (new)` / ` (deleted)` / ` (M)` annotations.
+
+    A live claude demo (2026-05-17) emitted::
+
+        - `src/demo_math.py` (new)
+        - `tests/test_demo_math.py` (new)
+
+    A previous strict-`$` regex silently dropped both rows from the
+    conflict pre-check. Lock in the lenient trailing-content match so
+    that regression cannot return.
+    """
+    orch = _orch()
+    issue = _issue(
+        "MT-1",
+        description=(
+            "## Touched Files\n"
+            "- `src/demo_math.py` (new)\n"
+            "- `tests/test_demo_math.py` (new)\n"
+            "- `src/legacy/old.py` (deleted)\n"
+            "- src/plain.py (M)\n"
+            "- `src/has spaces/file.py` (modified)\n"
+        ),
+    )
+    assert orch._touched_files_for(issue) == {
+        "src/demo_math.py",
+        "tests/test_demo_math.py",
+        "src/legacy/old.py",
+        "src/plain.py",
+        "src/has spaces/file.py",
+    }
+
+
 def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
     """Two tickets, one running with `src/foo.py`; candidate also touches it.
 

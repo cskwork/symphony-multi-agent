@@ -125,13 +125,20 @@ _QA_FAILURE_HEADING_RE = re.compile(
 _NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 # Bullet list rows: `- path/to/file.py` (optionally with surrounding backticks).
 # Two forms, tried in order:
-#   1. `- \`path with spaces/foo.py\` — note`  (backticks delimit; spaces OK)
-#   2. `- path/to/file.py — note`              (no backticks; first token only)
+#   1. `- \`path with spaces/foo.py\` <anything>`  (backticks delimit; spaces OK
+#      inside; ANY trailing annotation like `(new)`, `(deleted)`, `— note`
+#      after the closing backtick is accepted and ignored)
+#   2. `- path/to/file.py <anything>`              (no backticks; first token only)
+#
+# The lenient trailing-content match is intentional — real agent output
+# routinely uses `(new)`, `(deleted)`, `(M)`, `- modified` and similar
+# annotations after the path. A strict `$` anchor would silently drop
+# real entries from the conflict pre-check (verified live 2026-05-17).
 _BULLET_PATH_BACKTICK_RE = re.compile(
-    r"^\s*[-*]\s+`(?P<path>[^`]+)`\s*(?:[—\-].*)?$"
+    r"^\s*[-*]\s+`(?P<path>[^`]+)`"
 )
 _BULLET_PATH_PLAIN_RE = re.compile(
-    r"^\s*[-*]\s+(?P<path>[^\s`]+)\s*(?:[—\-].*)?$"
+    r"^\s*[-*]\s+(?P<path>[^\s`]+)"
 )
 
 
@@ -385,6 +392,15 @@ class RunningEntry:
     # 0 alongside `codex_state_total_tokens` on phase transitions so the
     # EMA samples turn-cost-within-stage, not cross-stage history.
     last_ema_state_total_tokens: int = 0
+    # The state the current turn STARTED in. Captured at worker_turn_started
+    # so the EMA samples the stage that actually consumed the tokens. Without
+    # this, `_update_token_ema` reads `entry.issue.state` at
+    # EVENT_TURN_COMPLETED time — but the agent may already have flipped
+    # `state:` in the ticket body before the turn ends, so the sample would
+    # land under the destination state, not the source. Live claude demo
+    # 2026-05-17 reproduced this: Explore turn cost recorded under "plan",
+    # Plan turn cost under "in progress", etc.
+    state_at_turn_start: str = ""
     codex_app_server_pid: int | None = None
     last_error: str | None = None
     # Set to `now` the first time stall detection cancels this worker. Used
@@ -1949,6 +1965,13 @@ class Orchestrator:
                         )
                         return
                     running.turn_count = turn_number
+                    # Capture the state THIS turn is starting in. C3 EMA
+                    # samples need the source state, not the destination
+                    # the agent flips to mid-turn — without this, every
+                    # stage's tokens get attributed to the next stage.
+                    running.state_at_turn_start = (
+                        running.issue.state or ""
+                    ).lower()
                     # Symmetry with worker_turn_completed — a single line per
                     # turn-start so multi-turn runs (especially slow ones
                     # like gemini -p where a single turn can take 60-90s)
@@ -2429,8 +2452,15 @@ class Orchestrator:
                 0,
             )
             if turn_sample > 0:
+                # Prefer the source state (captured at worker_turn_started)
+                # so a stage that flipped the ticket mid-turn still has its
+                # cost attributed correctly. Fall back to current state for
+                # event-injection unit tests that bypass turn_started.
+                target_state = (
+                    entry.state_at_turn_start or entry.issue.state
+                )
                 self._update_token_ema(
-                    entry.issue.state, turn_sample, cfg
+                    target_state, turn_sample, cfg
                 )
                 entry.last_ema_state_total_tokens = (
                     entry.codex_state_total_tokens
