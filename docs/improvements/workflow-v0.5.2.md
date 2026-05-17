@@ -408,7 +408,63 @@ not blockers for v0.6.0; future tickets:
   Plan Candidates as bullets, not a table — both columns silently
   absent. Either (a) update prompts with an explicit table template,
   or (b) drop "column" wording and accept bullet-per-candidate with
-  inline `(reuse_from=foo)` tags.
+  inline `(reuse_from=foo)` tags. **Fixed in this PR** by adopting (a).
+  Run 2 confirmed both backends emit the full 3-row table.
+
+---
+
+## Post-fix live re-verification (2026-05-17, run 2)
+
+Re-ran both backends after the C1 / C3 / A3 / B1 fixes landed,
+max_turns=2 (Explore→Plan only) to cut cost. Both reset to a clean
+workspace + EMA before launch.
+
+**C1 regex (`(new)` annotation)** — confirmed parser extracts both
+`src/demo_math.py` and `tests/test_demo_math.py` from the live claude
+ticket body where the pre-fix parser returned `set()`.
+
+**C3 EMA source-state attribution** — confirmed on BOTH backends:
+
+| Backend | Run 1 EMA keys (BUG) | Run 2 EMA keys (FIX) |
+|---------|----------------------|----------------------|
+| claude  | `plan, in progress, review` | `explore, plan` |
+| codex   | `in progress, plan, review` | `explore, plan` |
+
+Each key now matches the stage that ACTUALLY consumed the tokens
+(captured at `worker_turn_started`, not at `EVENT_TURN_COMPLETED`).
+
+**A3 explicit Plan candidate table** — confirmed on BOTH backends.
+Both emitted the spec table header `| option | summary | reuse_from |
+observability |` with three rows (A chosen, B/C rejected). The
+pre-fix prompt let claude fall back to bullets; the new explicit
+template anchors the format.
+
+**B1 marker bash classifier** — verified through 10 hermetic shell
+tests covering prod-only, paired-test, root *.md carve-outs, scope
+expansion under SYMPHONY_REWIND_SCOPE, and marker stacking. Live agent
+runs never naturally fire the marker because both backends practice
+TDD (src + test added in the same turn).
+
+## Out-of-scope findings (filed, not in this PR)
+
+- **Codex sandbox blocks symlinked board writes.** Codex Review turn
+  4 burned 11.9M tokens producing a clean review draft but could not
+  persist the `## Security Audit` / `## Review` sections back to
+  `kanban_demo_codex/DEMO-LIVE-002.md` because that path resolves
+  outside the codex sandbox writable root once symlink resolution
+  runs. Pre-existing codex backend integration issue; unrelated to
+  v0.6.0 prompt contracts. Workaround: bind-mount the host board path
+  into codex's writable roots more aggressively, or stop using
+  symlinks for the board injection.
+
+- **EMA last-writer-wins under multiple co-located orchestrators.**
+  Two demo orchestrators sharing the same `.symphony/token_ema.json`
+  see only their own in-memory EMA dict, so the second persist
+  overwrites the first. Production runs each have an isolated
+  `.symphony/` directory next to their WORKFLOW.md, so this is a
+  test-harness curiosity, not a runtime defect. If multi-tenant
+  orchestrators ever share state, switch to read-modify-write under a
+  flock or move per-state EMA into a per-orchestrator namespace.
 
 Two HIGH items from the same review were fixed in the v0.6.0 bundle:
 - C1 backticked-path-with-spaces regex (split into
