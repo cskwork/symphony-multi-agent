@@ -225,6 +225,16 @@ backends can override consistently.
 **Out of scope**: changing stall_timeout_ms semantics; adding new
 backends.
 
+**Implementation note (spec deviation, intentional)**: the brief said
+`codex.py` keeps the default predicate, but the existing tests
+`test_on_codex_event_extracts_nested_item_preview_without_stall_progress`
+and `test_codex_other_message_with_input_only_token_growth_does_not_advance_progress`
+prove codex's OTHER_MESSAGE bucket carries both real assistant previews
+and tool / item notifications. Removing the filter regresses those tests.
+`CodexAppServerBackend` therefore overrides `is_progress_event` with the
+same `type == "assistant"` predicate as claude. Pi and gemini still
+inherit the default.
+
 ---
 
 ### C3. Adaptive token budget per state
@@ -362,3 +372,33 @@ Windows / Git Bash branch already present in the current hook.
 G2 + G4 both edit WORKFLOW*.md: G2 owns `after_run` blocks; G4 owns
 `after_create` block + new `wiki:` config block. No overlapping line
 ranges.
+
+---
+
+## Post-review follow-ups (filed but not in v0.6.0)
+
+Code review on 2026-05-17 flagged the following MEDIUM items. They are
+not blockers for v0.6.0; future tickets:
+
+- **C1 retry overlap is best-effort.** Retry-queue entries don't carry
+  the full `Issue` body, so the conflict pre-check only inspects
+  entries that are also in `_running`. Pulling the body from the
+  tracker at dispatch time would make this complete; deferred to keep
+  the dispatch hot path single-source.
+- **C3 dispatch env mutates process-global `os.environ`.** Safe under
+  `max_concurrent_agents=1` (current default). Future `>1` concurrency
+  needs per-subprocess `env=` instead of in-place mutation.
+- **C3 EMA `.json.tmp` rename on Windows.** POSIX rename is atomic; on
+  Windows the rename can fail if a concurrent reader holds the file.
+  Best-effort log only; no data loss.
+
+Two HIGH items from the same review were fixed in the v0.6.0 bundle:
+- C1 backticked-path-with-spaces regex (split into
+  `_BULLET_PATH_BACKTICK_RE` + `_BULLET_PATH_PLAIN_RE`).
+- C5 `_done_count` persistence (mirrors the EMA load/persist pattern;
+  survives orchestrator restarts so sweep cadence holds).
+
+One MEDIUM item also fixed in the bundle:
+- B1 docs-only carve-out expanded to include `*.md`, `LICENSE*`,
+  `NOTICE`, `CHANGELOG*`, `README*`, `AGENTS.md`, `GEMINI.md` so root
+  documentation edits don't trip the `[no-test]` marker.

@@ -99,8 +99,8 @@ hooks:
           ;;
       esac
       case "$f" in
-        tests/*|docs/*|kanban/*|.symphony/*)
-          : # carve-out: never counts as production change
+        tests/*|docs/*|kanban/*|.symphony/*|*.md|LICENSE|LICENSE.*|NOTICE|CHANGELOG*|README*|AGENTS.md|GEMINI.md)
+          : # carve-out: docs/license/wiki edits never count as production change
           ;;
         *)
           PROD_CHANGED=1

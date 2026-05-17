@@ -49,6 +49,7 @@ from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
 from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .tracker import build_tracker_client
+from . import wiki_sweep as _wiki_sweep_module
 from .workflow import (
     ServiceConfig,
     SUPPORTED_AGENT_KINDS,
@@ -123,8 +124,14 @@ _QA_FAILURE_HEADING_RE = re.compile(
 )
 _NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 # Bullet list rows: `- path/to/file.py` (optionally with surrounding backticks).
-_BULLET_PATH_RE = re.compile(
-    r"^\s*[-*]\s+`?(?P<path>[^\s`]+)`?\s*(?:[—\-].*)?$"
+# Two forms, tried in order:
+#   1. `- \`path with spaces/foo.py\` — note`  (backticks delimit; spaces OK)
+#   2. `- path/to/file.py — note`              (no backticks; first token only)
+_BULLET_PATH_BACKTICK_RE = re.compile(
+    r"^\s*[-*]\s+`(?P<path>[^`]+)`\s*(?:[—\-].*)?$"
+)
+_BULLET_PATH_PLAIN_RE = re.compile(
+    r"^\s*[-*]\s+(?P<path>[^\s`]+)\s*(?:[—\-].*)?$"
 )
 
 
@@ -161,7 +168,7 @@ def _parse_touched_files(text: str | None) -> set[str]:
         return set()
     out: set[str] = set()
     for line in body.splitlines():
-        m = _BULLET_PATH_RE.match(line)
+        m = _BULLET_PATH_BACKTICK_RE.match(line) or _BULLET_PATH_PLAIN_RE.match(line)
         if not m:
             continue
         path = m.group("path").strip()
@@ -512,6 +519,7 @@ class Orchestrator:
             hook_env=_branch_hook_env(cfg),
         )
         self._load_token_ema(cfg)
+        self._load_done_count(cfg)
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -813,6 +821,45 @@ class Orchestrator:
             "paused": self.is_paused(entry.issue_id),
         }
 
+    def _done_count_path(self, cfg: ServiceConfig) -> Path:
+        """On-disk location for the persisted Done counter."""
+        return cfg.workflow_path.parent / ".symphony" / "done_count.json"
+
+    def _load_done_count(self, cfg: ServiceConfig) -> None:
+        """Restore the Done counter across orchestrator restarts.
+
+        Without persistence, every restart resets `_done_count` to 0 and
+        the C5 wiki-sweep cadence skips indefinitely on a frequently
+        restarted backend. Malformed payloads degrade to 0 rather than
+        crash startup.
+        """
+        path = self._done_count_path(cfg)
+        try:
+            if not path.exists():
+                return
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("done_count_load_failed", path=str(path), error=str(exc))
+            return
+        if isinstance(raw, dict):
+            value = raw.get("done_count")
+            if isinstance(value, int) and value >= 0:
+                self._done_count = value
+
+    def _persist_done_count(self, cfg: ServiceConfig) -> None:
+        """Best-effort flush; mirrors `_persist_token_ema`."""
+        path = self._done_count_path(cfg)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps({"done_count": self._done_count}, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as exc:
+            log.warning("done_count_persist_failed", path=str(path), error=str(exc))
+
     def _maybe_run_wiki_sweep(self, cfg: ServiceConfig, *, identifier: str) -> None:
         """C5 — bump the Done counter and run wiki-sweep every Nth time.
 
@@ -821,21 +868,21 @@ class Orchestrator:
         auto-sweep entirely. The sweep is intentionally synchronous and
         best-effort: it runs in-process for simplicity (the typical wiki
         is small), failures only log a warning, and never block the
-        Done transition.
+        Done transition. The counter is persisted after every Done so
+        sweep cadence survives orchestrator restarts.
         """
         every = cfg.wiki.sweep_every_n
         if every <= 0:
             return
         self._done_count += 1
+        self._persist_done_count(cfg)
         if self._done_count % every != 0:
             return
         root = cfg.wiki.root
         if root is None:
             return
         try:
-            from . import wiki_sweep as _wiki_sweep
-
-            report = _wiki_sweep.sweep(root, dry_run=False)
+            report = _wiki_sweep_module.sweep(root, dry_run=False)
         except Exception as exc:
             log.warning(
                 "wiki_sweep_failed",
