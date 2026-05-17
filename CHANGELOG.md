@@ -10,6 +10,90 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-17 — Workflow accuracy + harness upgrade
+
+Eleven coordinated changes across the agent prompts and the orchestrator
+to make ticket outcomes more predictable and the system observable. Plan
+doc lives at `docs/improvements/workflow-v0.5.2.md`.
+
+### Added — Prompt contracts (agent-visible)
+- **Plan emits a Definition of Done** (`A1`): `plan.md` now requires two
+  new sections — `## Acceptance Tests` (test signatures, one per AC) and
+  `## Done Signals` (observable file paths, stdout substrings, exit
+  codes, HTTP shapes). `qa.md` scores them in a new `## AC Scorecard`
+  sub-block; missing rows fail QA. No more guessing what "done" means.
+- **Rewinds scope to flagged items** (`A2` — prompt half): when the
+  orchestrator dispatches a Review → In Progress or QA → In Progress
+  rewind, it injects `SYMPHONY_REWIND_SCOPE` as JSON. `in-progress.md`
+  step 2 instructs the agent to touch only those files; touching others
+  appends a `## Scope Expansion` rationale (non-blocking).
+- **Explore emits a scored reuse inventory** (`A3`):
+  `reuse-inventory.md` becomes a required output with a
+  `candidate | path:line | reuse_fit | adapt_cost | notes` table.
+  `plan.md` gains a `reuse_from` column and requires `## Plan Rationale`
+  when any `reuse_fit >= 0.7` row is rejected.
+- **Review emits a dedicated Security Audit** (`B2`): `review.md` adds a
+  `## Security Audit` section with exactly 7 rows (secrets,
+  input-validation, sql-injection, xss, csrf, authz, rate-limit). Any
+  `fail` row auto-promotes to a CRITICAL row in `## Review Findings`
+  and triggers rewind.
+- **Wiki entries record observability hooks** (`B3`): the Learn wiki
+  template adds an `**Observability hooks:**` block under
+  `## Technical Reference` (log / metric / trace anchors with
+  `path:line`). `plan.md` candidate table gains an `observability`
+  column so Plan declares intent up front. Both KO and EN templates
+  updated.
+
+### Added — Harness (orchestrator / hooks)
+- **System-side conflict pre-check at dispatch** (`C1`): the orchestrator
+  parses `## Touched Files` from every in-flight ticket and refuses to
+  dispatch a candidate whose touched paths overlap. The candidate is
+  moved to `Blocked` with an auto-generated `## Conflict` section. The
+  agent-side conflict pre-check in `in-progress.md` step 1 is removed.
+- **Adaptive token budget feedback to prompts** (`C3`): per-state EMA
+  (alpha 0.3) of completion tokens persists to `.symphony/token_ema.json`
+  across orchestrator restarts. Dispatch injects `SYMPHONY_TOKEN_EMA`
+  and `SYMPHONY_TOKEN_BUDGET` so the agent sees both the historical
+  per-stage cost and the hard cap.
+- **TDD enforcement marker in after_run hook** (`B1`): the per-turn
+  commit subject is prefixed `[no-test]` when the diff has production
+  code outside `tests/ docs/ kanban/ .symphony/` and no paired test
+  file. `review.md` step 3 scans for the marker and promotes each
+  occurrence to a HIGH severity finding (docs-only turns exempted).
+- **Backend stall-progress predicate is abstract** (`C2`): the meta-event
+  filter that fixed OLV-002 lives on a `BaseAgentBackend` superclass via
+  `is_progress_event(event)`. `ClaudeCodeBackend` and
+  `CodexAppServerBackend` override; `pi.py` and `gemini.py` inherit the
+  conservative default (every event counts as progress). New backends
+  opt in by overriding one method.
+- **`after_create` hook extracted to a versioned script** (`C4`): the
+  200-line bash heredoc previously embedded in WORKFLOW.md is now
+  `scripts/symphony-setup-worktree.sh`. The hook is a one-liner that
+  invokes the script. Cross-platform behaviour (Git Bash on Windows
+  with `mklink /J`) preserved.
+- **`symphony wiki-sweep` CLI + scheduled invocation** (`C5`): new
+  subcommand scans `docs/llm-wiki/` for duplicate slugs, INDEX↔file
+  orphans, missing files, and entries older than 90 days. Exit code is
+  non-zero on duplicate / orphan / missing-file findings. The
+  orchestrator runs the sweep after every Nth `Done` transition
+  (default `wiki.sweep_every_n: 10`; set 0 to disable). The Learn
+  prompt is reduced to per-ticket integrity updates plus the sweep
+  delegation, saving model tokens.
+
+### Fixed
+- `after_run` hook now uses a POSIX-portable `IFS=` trick
+  (`NL=$(printf '\nx'); NL=${NL%x}`) so the YAML literal block parses
+  cleanly. The previous `IFS='\n'` literal terminated the YAML block
+  prematurely on the bare closing quote at column 0.
+
+### Note
+- This release ships the eleven items as one logical bundle because the
+  prompt contracts depend on the harness-injected env vars (`A2` ↔
+  orchestrator, `B1` prompt half ↔ `after_run` marker). Partial rollout
+  is not supported — upgrade `WORKFLOW.md` and the package together.
+
+## [Pre-0.6.0]
+
 ### Added
 - macOS host wake-lock: while the orchestrator (and the `service start`
   detached child) is running, Symphony spawns `caffeinate -d -i -w <pid>`
