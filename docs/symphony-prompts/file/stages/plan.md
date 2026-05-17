@@ -3,9 +3,9 @@
 Turn Explore into a professional implementation plan that the next agent can
 execute by reading only `## Plan`. Do not write production code in this stage.
 
-1. Read `docs/{{ issue.identifier }}/explore/`, `## Domain Brief`,
-   `## Plan Candidates`, `## Recommendation`, and any `## Triage` /
-   `## Reproduction` sections.
+1. Read `docs/{{ issue.identifier }}/explore/` (including the required
+   `reuse-inventory.md`), `## Domain Brief`, `## Plan Candidates`,
+   `## Recommendation`, and any `## Triage` / `## Reproduction` sections.
 2. Choose or refine the recommended approach. If the Explore brief missed a
    blocking fact, set state to `Blocked` and append `## Plan Blocker` with
    the exact missing input. Do not guess.
@@ -21,5 +21,22 @@ execute by reading only `## Plan`. Do not write production code in this stage.
    - acceptance criteria, user-visible behavior, rollback/risk notes.
    If any bullet would be vague ("wire it up", "handle errors", "make UI
    nice"), replace it with concrete files, commands, states, or payloads.
-5. Set state to `In Progress`. In Progress must read this `## Plan` before
+   The candidate table inside `## Plan` (or `## Plan Candidates` if you
+   refresh it) must carry two extra columns:
+   `... | reuse_from | observability`
+   - `reuse_from`: a `path:line` from `reuse-inventory.md`, or `none`.
+   - `observability`: `add`, `change`, or `none` — declares whether this
+     candidate adds, modifies, or skips logs/metrics/traces.
+5. Append `## Acceptance Tests` — one bullet per AC, each a runnable test
+   signature (e.g. `tests/test_foo.py::test_bar` or
+   `pytest -k "expr"` / `npm test -- --grep "..."`). Empty list is invalid:
+   set state back to `Explore`, append `## Plan Gaps` with what is missing,
+   and STOP.
+6. Append `## Done Signals` — one bullet per observable signal QA can check
+   (file path that must exist, stdout substring, exit code, HTTP status +
+   body shape). Cap 8 lines. QA scores against this list row-for-row.
+7. If you rejected any `reuse-inventory.md` row with `reuse_fit >= 0.7`,
+   append `## Plan Rationale` with one line per rejected row explaining
+   why (e.g. `path:line — reuse_fit 0.8 rejected: API shape mismatch`).
+8. Set state to `In Progress`. In Progress must read this `## Plan` before
    editing code.

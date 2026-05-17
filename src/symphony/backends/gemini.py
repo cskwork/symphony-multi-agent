@@ -39,6 +39,7 @@ from . import (
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
     BackendInit,
+    BaseAgentBackend,
     TurnResult,
 )
 
@@ -56,7 +57,7 @@ def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-class GeminiBackend:
+class GeminiBackend(BaseAgentBackend):
     """One subprocess per turn; captures stdout as the turn result."""
 
     def __init__(self, init: BackendInit) -> None:

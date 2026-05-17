@@ -6,6 +6,7 @@ Subcommands:
     symphony board ...             file-tracker board helper
     symphony doctor [WORKFLOW]     preflight checks for WORKFLOW.md
     symphony service ...           managed background orchestrator + viewer
+    symphony wiki-sweep ...        scan docs/llm-wiki/ for dup/orphan/stale rows
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import signal
 import sys
 from pathlib import Path
 
+from . import wiki_sweep
 from .errors import SymphonyError
 from .keep_awake import KeepAwake
 from .logging import configure_logging
@@ -202,6 +204,43 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _wiki_sweep_main(argv: list[str]) -> int:
+    """`symphony wiki-sweep` — pure subcommand. No orchestrator boot."""
+    _wiki_sweep = wiki_sweep
+
+    parser = argparse.ArgumentParser(
+        prog="symphony wiki-sweep",
+        description=(
+            "Scan a docs/llm-wiki/ tree for duplicate slugs, INDEX↔file "
+            "orphans, missing files, and entries older than "
+            f"{_wiki_sweep.STALE_AFTER_DAYS} days. Non-zero exit if any "
+            "duplicate / orphan / missing-file is found."
+        ),
+    )
+    parser.add_argument(
+        "--root",
+        default="docs/llm-wiki",
+        help="wiki directory to sweep (default: docs/llm-wiki)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report only; do not append stale markers to INDEX.md",
+    )
+    args = parser.parse_args(argv)
+
+    root_path = Path(args.root).expanduser()
+    if not root_path.is_absolute():
+        root_path = (Path.cwd() / root_path).resolve()
+    else:
+        root_path = root_path.resolve()
+
+    report = _wiki_sweep.sweep(root_path, dry_run=args.dry_run)
+    for line in report.summary_lines():
+        print(line)
+    return 0 if report.is_clean() else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = argv if argv is not None else sys.argv[1:]
     if raw_argv and raw_argv[0] == "board":
@@ -216,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
         from . import service
 
         return service.main(raw_argv[1:])
+    if raw_argv and raw_argv[0] == "wiki-sweep":
+        return _wiki_sweep_main(raw_argv[1:])
     if raw_argv and raw_argv[0] == "tui":
         # Rewrite `symphony tui [...args]` as `symphony --tui [...args]`.
         raw_argv = ["--tui", *raw_argv[1:]]

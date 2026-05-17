@@ -398,6 +398,21 @@ class SystemConfig:
 
 
 @dataclass(frozen=True)
+class WikiConfig:
+    """Wiki integrity sweep config (C5).
+
+    `sweep_every_n` controls how often the orchestrator runs `symphony
+    wiki-sweep` automatically after a `Done` transition. 0 disables the
+    auto-sweep entirely; the manual CLI subcommand still works. `root`
+    is the wiki directory the sweep walks (defaults to `docs/llm-wiki`
+    relative to the workflow file).
+    """
+
+    sweep_every_n: int = 10
+    root: Path | None = None
+
+
+@dataclass(frozen=True)
 class PromptConfig:
     """External prompt files configured from WORKFLOW.md.
 
@@ -431,6 +446,7 @@ class ServiceConfig:
     progress: ProgressConfig = field(default_factory=ProgressConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     prompts: PromptConfig = field(default_factory=PromptConfig)
+    wiki: WikiConfig = field(default_factory=WikiConfig)
     raw: dict[str, Any] = field(default_factory=dict)
     prompt_template: str = ""
     workspace_reuse_policy: str = DEFAULT_WORKSPACE_REUSE_POLICY
@@ -962,6 +978,31 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
     prompt_template = workflow.prompt_template or DEFAULT_PROMPT
     prompts = _build_prompt_config(cfg.get("prompts"), base_dir)
 
+    wiki_raw = cfg.get("wiki") or {}
+    if not isinstance(wiki_raw, dict):
+        wiki_raw = {}
+    sweep_every_n = _validated_nonnegative_or_default(
+        wiki_raw.get("sweep_every_n"), 10, name="wiki.sweep_every_n"
+    )
+    raw_wiki_root = wiki_raw.get("root")
+    if isinstance(raw_wiki_root, str) and raw_wiki_root.strip():
+        resolved_wiki = (
+            resolve_var_indirection(raw_wiki_root)
+            if raw_wiki_root.startswith("$")
+            else raw_wiki_root
+        )
+        if isinstance(resolved_wiki, str) and resolved_wiki:
+            wiki_path = Path(expand_path_value(resolved_wiki))
+            if not wiki_path.is_absolute():
+                wiki_path = (base_dir / wiki_path).resolve()
+            else:
+                wiki_path = wiki_path.resolve()
+        else:
+            wiki_path = (base_dir / "docs" / "llm-wiki").resolve()
+    else:
+        wiki_path = (base_dir / "docs" / "llm-wiki").resolve()
+    wiki = WikiConfig(sweep_every_n=sweep_every_n, root=wiki_path)
+
     return ServiceConfig(
         workflow_path=workflow.source_path,
         poll_interval_ms=poll_interval_ms,
@@ -978,6 +1019,7 @@ def build_service_config(workflow: WorkflowDefinition) -> ServiceConfig:
         progress=progress,
         system=system,
         prompts=prompts,
+        wiki=wiki,
         raw=dict(cfg),
         prompt_template=prompt_template,
         workspace_reuse_policy=workspace_reuse_policy,

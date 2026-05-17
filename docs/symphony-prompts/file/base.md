@@ -81,10 +81,13 @@ the end: `_세부: docs/<id>/<stage>/details.md_`.
 | `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches            |
 | `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text        |
 | `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
+| `## Acceptance Tests`   | ≤ 10 lines (1 bullet per AC)           | per-test setup / fixtures           |
+| `## Done Signals`       | ≤ 8 lines (1 bullet per signal)        | full payload bodies, long curl logs |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
+| `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
-| `## QA Evidence`        | header + commands + 1-line `**판정**` + AC table | raw pytest/curl/Playwright output |
+| `## QA Evidence`        | header + commands + 1-line `**판정**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
 | As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |
@@ -134,10 +137,13 @@ the end: `_details: docs/<id>/<stage>/details.md_`.
 | `## Plan Candidates`    | ≤ 8 lines (1-2 per option)             | per-option diff sketches            |
 | `## Recommendation`     | ≤ 5 lines                              | first-failing-test full text        |
 | `## Plan`               | ≤ 10 lines                             | full step list, risk notes, fallback commands |
+| `## Acceptance Tests`   | ≤ 10 lines (1 bullet per AC)           | per-test setup / fixtures           |
+| `## Done Signals`       | ≤ 8 lines (1 bullet per signal)        | full payload bodies, long curl logs |
 | `## Implementation`     | ≤ 10 lines                             | per-file change list, helper names  |
+| `## Security Audit`     | exactly 7 rows (1 per check, no spillover) | per-check reasoning, suppression rationale |
 | `## Review`             | ≤ 6 rows in severity table             | full check-list reasoning, fix diffs |
 | `## Review Findings`    | severity table only (≤ 6 rows, 1 line each) | full check-list reasoning, fix diffs go to `docs/{{ issue.identifier }}/review/details.md` |
-| `## QA Evidence`        | header + commands + 1-line `**Verdict**` + AC table | raw pytest/curl/Playwright output |
+| `## QA Evidence`        | header + commands + 1-line `**Verdict**` + AC table + AC Scorecard | raw pytest/curl/Playwright output |
 | `## Learnings`          | ≤ 8 lines (3-4 bullets)                | extended rationale, follow-ups      |
 | `## Wiki Updates`       | ≤ 4 lines                              | n/a (wiki is the source of truth)   |
 | As-Is → To-Be Report    | ≤ 20 lines across all 4 sub-sections   | full evidence dump under docs/      |

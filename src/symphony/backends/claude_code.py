@@ -44,6 +44,7 @@ from . import (
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
     BackendInit,
+    BaseAgentBackend,
     TurnResult,
 )
 
@@ -64,7 +65,7 @@ def _utc_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-class ClaudeCodeBackend:
+class ClaudeCodeBackend(BaseAgentBackend):
     """One subprocess per turn; speaks Claude Code stream-json."""
 
     def __init__(self, init: BackendInit) -> None:
@@ -127,6 +128,19 @@ class ClaudeCodeBackend:
     @property
     def latest_rate_limits(self) -> dict[str, Any] | None:
         return dict(self._latest_rate_limits) if self._latest_rate_limits is not None else None
+
+    def is_progress_event(self, event: dict[str, Any]) -> bool:
+        """Only count claude `assistant` stream-json frames as progress.
+
+        The catch-all `EVENT_OTHER_MESSAGE` path also carries `user` frames
+        whose payload is a `tool_result` echo. Resetting the stall timer
+        on every echo masked a real 18-minute model stall in OLV-002
+        (commit 499e787). Restrict the predicate to real assistant output;
+        the orchestrator additionally treats lifecycle events and OUTPUT
+        token deltas as progress so this filter only narrows the catch-all
+        OTHER_MESSAGE bucket.
+        """
+        return event.get("type") == "assistant"
 
     async def initialize(self) -> dict[str, Any]:
         return {"agent": "claude_code"}

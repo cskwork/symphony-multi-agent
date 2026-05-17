@@ -520,6 +520,7 @@ def test_dispatch_task_cancelled_before_start_releases_running_slot():
         orch._loop = asyncio.get_running_loop()
         orch._dispatch(issue, cfg, attempt=None)
         task = orch._running[issue.id].worker_task
+        assert task is not None
         task.cancel()
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -2584,3 +2585,319 @@ def test_find_running_issue_id_resolves_human_identifier():
 
     assert orch.find_running_issue_id("OLV-002") == issue.id
     assert orch.find_running_issue_id("NOT-A-TICKET") is None
+
+
+# ---------------------------------------------------------------------------
+# C1 — system-level conflict pre-check (workflow-v0.5.2 § C1).
+# ---------------------------------------------------------------------------
+
+
+def test_touched_files_for_parses_bullet_list():
+    """`## Touched Files` section yields a set of repo-relative paths."""
+    orch = _orch()
+    issue = _issue(
+        "MT-1",
+        description=(
+            "## Brief\nHello\n\n"
+            "## Touched Files\n"
+            "- src/foo.py\n"
+            "- `src/bar.py`\n"
+            "- docs/notes.md — incidental\n\n"
+            "## Next\nbody"
+        ),
+    )
+    assert orch._touched_files_for(issue) == {
+        "src/foo.py",
+        "src/bar.py",
+        "docs/notes.md",
+    }
+
+
+def test_touched_files_for_missing_section_returns_empty_set():
+    orch = _orch()
+    issue = _issue("MT-1", description="## Brief only, no list")
+    assert orch._touched_files_for(issue) == set()
+    issue_none = _issue("MT-2", description=None)
+    assert orch._touched_files_for(issue_none) == set()
+
+
+def test_conflict_pre_check_blocks_overlapping_candidate(monkeypatch):
+    """Two tickets, one running with `src/foo.py`; candidate also touches it.
+
+    Outcome: candidate is moved to `Blocked` and `## Conflict` is appended,
+    no worker is dispatched. Mirrors workflow-v0.5.2 § C1 contract.
+    """
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    held = _issue(
+        "MT-1",
+        state="In Progress",
+        description=(
+            "## Brief\nfoo\n\n"
+            "## Touched Files\n- src/foo.py\n- src/util.py\n"
+        ),
+    )
+    candidate = _issue(
+        "MT-2",
+        state="Todo",
+        description=(
+            "## Brief\nbar\n\n"
+            "## Touched Files\n- src/foo.py\n- src/other.py\n"
+        ),
+    )
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+
+    # Install MT-1 as a live running entry — its description carries the
+    # `## Touched Files` body the conflict checker reads.
+    orch._running[held.id] = RunningEntry(
+        issue=held,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._claimed.add(held.id)
+
+    dispatched: list[str] = []
+    appended: list[tuple[str, str, str]] = []
+    moved: list[tuple[str, str]] = []
+
+    async def _fetch(_cfg):
+        return [candidate]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    def _append(_cfg, _issue, heading, body):
+        appended.append((_issue.identifier, heading, body))
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_append_note", staticmethod(_append)
+    )
+    monkeypatch.setattr(
+        Orchestrator, "_tracker_call_update_state", staticmethod(_move)
+    )
+
+    asyncio.run(orch._on_tick())
+
+    assert dispatched == [], "conflict must skip dispatch entirely"
+    assert moved == [("MT-2", "Blocked")], (
+        "candidate must be moved to Blocked on overlap"
+    )
+    assert appended == [
+        ("MT-2", "Conflict", appended[0][2])
+    ], "exactly one Conflict note must be appended"
+    note_body = appended[0][2]
+    assert "MT-1" in note_body, "Conflict note must name the other ticket"
+    assert "src/foo.py" in note_body, "Conflict note must list overlap path"
+    assert "src/other.py" not in note_body, (
+        "Non-overlapping paths must not appear in the Conflict note"
+    )
+
+
+def test_conflict_pre_check_no_overlap_dispatches_normally(monkeypatch):
+    """Non-overlapping `## Touched Files` lets dispatch proceed."""
+    cfg = _make_config(
+        tracker_kind="file",
+        active_states=("Todo", "In Progress"),
+    )
+    held = _issue(
+        "MT-1",
+        state="In Progress",
+        description="## Touched Files\n- src/foo.py\n",
+    )
+    candidate = _issue(
+        "MT-2",
+        state="Todo",
+        description="## Touched Files\n- src/bar.py\n",
+    )
+
+    orch = _orch()
+    monkeypatch.setattr(orch._workflow_state, "reload", lambda: (cfg, None))
+    orch._running[held.id] = RunningEntry(
+        issue=held,
+        started_at=datetime.now(timezone.utc),
+        retry_attempt=None,
+        worker_task=None,  # type: ignore[arg-type]
+        workspace_path=Path("/tmp"),
+    )
+    orch._claimed.add(held.id)
+
+    dispatched: list[str] = []
+
+    async def _fetch(_cfg):
+        return [candidate]
+
+    async def _archive(_cfg):
+        return None
+
+    def _dispatch(_issue, _cfg, *, attempt, attempt_kind=None):
+        dispatched.append(_issue.identifier)
+
+    monkeypatch.setattr(orch, "_fetch_candidates", _fetch)
+    monkeypatch.setattr(orch, "_archive_sweep", _archive)
+    monkeypatch.setattr(orch, "_dispatch", _dispatch)
+
+    asyncio.run(orch._on_tick())
+
+    assert dispatched == ["MT-2"], (
+        "non-overlapping touched files must not block dispatch"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C3 — adaptive token-budget EMA (workflow-v0.5.2 § C3).
+# ---------------------------------------------------------------------------
+
+
+def test_token_ema_first_then_second_sample_matches_formula(tmp_path):
+    """α=0.3 EMA over two samples produces the expected rounded value.
+
+    First sample 100k against ema=0 → 0.3·100k = 30k.
+    Second sample 200k → 0.3·200k + 0.7·30k = 60k + 21k = 81k.
+    """
+    cfg = _make_config()
+    # Redirect the EMA file to a temp dir so the test never writes into
+    # the real `.symphony/` next to the repo's WORKFLOW.md.
+    cfg_temp = replace(cfg, workflow_path=tmp_path / "WORKFLOW.md")
+    orch = _orch()
+
+    orch._update_token_ema("In Progress", 100_000, cfg_temp)
+    assert orch._token_ema_for_state("In Progress") == 30_000
+
+    orch._update_token_ema("In Progress", 200_000, cfg_temp)
+    assert orch._token_ema_for_state("In Progress") == 81_000
+
+
+def test_token_ema_persists_and_reloads(tmp_path):
+    """EMA round-trips through `.symphony/token_ema.json` on restart."""
+    cfg = _make_config()
+    cfg_temp = replace(cfg, workflow_path=tmp_path / "WORKFLOW.md")
+    orch = _orch()
+
+    orch._update_token_ema("In Progress", 100_000, cfg_temp)
+    orch._update_token_ema("In Progress", 200_000, cfg_temp)
+
+    # New orchestrator with the same workflow path: load reads the file.
+    fresh = _orch()
+    fresh._load_token_ema(cfg_temp)
+    assert fresh._token_ema_for_state("In Progress") == 81_000
+    # Unseen state still reports 0.
+    assert fresh._token_ema_for_state("Review") == 0
+
+
+def test_token_budget_for_state_falls_back_to_default():
+    """`max_total_tokens_by_state` overrides; absent state uses the
+    global `max_total_tokens` cap.
+    """
+    base = _make_config()
+    cfg_with_caps = _replace_agent_field(
+        base,
+        max_total_tokens=500_000,
+        max_total_tokens_by_state={"in progress": 750_000},
+    )
+    orch = _orch()
+    assert orch._token_budget_for_state(cfg_with_caps, "In Progress") == 750_000
+    assert orch._token_budget_for_state(cfg_with_caps, "Review") == 500_000
+
+
+# ---------------------------------------------------------------------------
+# A2-orch — SYMPHONY_REWIND_SCOPE env var on rewind dispatch.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_dispatch_env_sets_rewind_scope_on_rewind(monkeypatch):
+    """Rewind dispatch must export SYMPHONY_REWIND_SCOPE as JSON."""
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue(
+        "MT-REWIND",
+        state="In Progress",
+        description=(
+            "## Plan\nimplement\n\n"
+            "## Review Findings\n"
+            "- HIGH: src/foo.py:42 — switch to shared helper\n"
+            "- MEDIUM src/bar.py:7 add input validation\n"
+        ),
+    )
+
+    orch._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=True)
+
+    import os
+    import json as _json
+
+    raw = os.environ.get("SYMPHONY_REWIND_SCOPE")
+    assert raw is not None, "SYMPHONY_REWIND_SCOPE must be set on rewind"
+    rows = _json.loads(raw)
+    assert isinstance(rows, list) and rows, "rewind scope must parse to list"
+    severities = {row["severity"] for row in rows}
+    assert "HIGH" in severities
+    files = {row["file"] for row in rows}
+    assert "src/foo.py" in files
+    # Env vars for budget always present, regardless of rewind.
+    assert os.environ.get("SYMPHONY_TOKEN_BUDGET") is not None
+    assert os.environ.get("SYMPHONY_TOKEN_EMA") is not None
+
+    # Clean up so the env var doesn't leak to other tests.
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+
+
+def test_apply_dispatch_env_unsets_rewind_scope_on_forward(monkeypatch):
+    """Forward dispatch must NOT carry a stale SYMPHONY_REWIND_SCOPE."""
+    import os
+
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue(
+        "MT-FWD",
+        state="Plan",
+        description="## Brief\nnothing rewinding",
+    )
+
+    # Simulate a prior rewind dispatch leaving the env var set.
+    monkeypatch.setenv("SYMPHONY_REWIND_SCOPE", '[{"severity": "HIGH"}]')
+    orch._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=False)
+
+    assert os.environ.get("SYMPHONY_REWIND_SCOPE") is None, (
+        "forward dispatch must unset SYMPHONY_REWIND_SCOPE so a prior "
+        "rewind value cannot bleed across turns"
+    )
+
+
+def test_apply_dispatch_env_empty_list_when_findings_missing(monkeypatch):
+    """Rewind without parseable findings still sets the env (as `[]`)."""
+    import json as _json
+    import os
+
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)
+    cfg = _make_config()
+    orch = _orch()
+    issue = _issue(
+        "MT-EMPTY",
+        state="In Progress",
+        description="## Plan only, no review findings here",
+    )
+
+    orch._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=True)
+
+    raw = os.environ.get("SYMPHONY_REWIND_SCOPE")
+    assert raw is not None
+    assert _json.loads(raw) == [], (
+        "missing Review Findings / QA Failure must produce an empty list, "
+        "not omit the env var entirely"
+    )
+    monkeypatch.delenv("SYMPHONY_REWIND_SCOPE", raising=False)

@@ -13,6 +13,8 @@ Concurrency model:
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import re
 import subprocess
 import time
@@ -99,6 +101,139 @@ def _is_rewind_transition(prev_state: str, current_state: str) -> bool:
     would otherwise have no signal beyond the markdown trail itself.
     """
     return (prev_state, current_state) in _REWIND_TRANSITIONS
+
+
+# Adaptive token-budget EMA — C3 (workflow-v0.5.2.md).
+# Alpha=0.3 weights recent turns ~70% by the third sample, fast enough to
+# track stage-cost drift without single-turn whiplash. Persisted to disk so
+# the soft budget survives orchestrator restarts.
+_TOKEN_EMA_ALPHA = 0.3
+
+# Section heading patterns parsed out of ticket markdown bodies.
+# These are intentionally permissive: leading/trailing whitespace, optional
+# trailing colon, and content up to the next `## ` heading or end-of-body.
+_TOUCHED_FILES_HEADING_RE = re.compile(
+    r"^##\s+Touched\s+Files\s*:?\s*$", re.IGNORECASE | re.MULTILINE
+)
+_REVIEW_FINDINGS_HEADING_RE = re.compile(
+    r"^##\s+Review\s+Findings\s*:?\s*$", re.IGNORECASE | re.MULTILINE
+)
+_QA_FAILURE_HEADING_RE = re.compile(
+    r"^##\s+QA\s+Failure\s*:?\s*$", re.IGNORECASE | re.MULTILINE
+)
+_NEXT_HEADING_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+# Bullet list rows: `- path/to/file.py` (optionally with surrounding backticks).
+_BULLET_PATH_RE = re.compile(
+    r"^\s*[-*]\s+`?(?P<path>[^\s`]+)`?\s*(?:[—\-].*)?$"
+)
+
+
+def _section_body(text: str, heading_re: re.Pattern[str]) -> str | None:
+    """Return the body between `heading_re` and the next `## ` heading.
+
+    Returns None when the heading is absent. Returns "" when the heading is
+    present but the body is empty.
+    """
+    if not text:
+        return None
+    matches = list(heading_re.finditer(text))
+    if not matches:
+        return None
+    # Use the LAST occurrence so re-issued findings (e.g. Review→IP→Review)
+    # win over older sections in the same ticket body.
+    match = matches[-1]
+    after = text[match.end() :]
+    next_heading = _NEXT_HEADING_RE.search(after)
+    body = after if next_heading is None else after[: next_heading.start()]
+    return body.strip("\n")
+
+
+def _parse_touched_files(text: str | None) -> set[str]:
+    """Extract repo-relative paths from the `## Touched Files` bullet list.
+
+    Returns an empty set when the section is missing or contains no
+    bullet rows. Tolerant of trailing comments after the path (anything
+    after the first whitespace following a backticked path is ignored)."""
+    if not text:
+        return set()
+    body = _section_body(text, _TOUCHED_FILES_HEADING_RE)
+    if body is None:
+        return set()
+    out: set[str] = set()
+    for line in body.splitlines():
+        m = _BULLET_PATH_RE.match(line)
+        if not m:
+            continue
+        path = m.group("path").strip()
+        if path:
+            out.add(path)
+    return out
+
+
+def _parse_findings_rows(text: str | None) -> list[dict[str, Any]]:
+    """Best-effort parse of `## Review Findings` / `## QA Failure` bullets.
+
+    Returns a list of `{severity, file, line, fix}` dicts. Unrecognised
+    bullets are skipped silently — the env var is informational, not
+    contractual, so the agent prompt must already tolerate empty rows.
+
+    Heuristics (bullet variants we have seen in WORKFLOW prompts):
+      - ``- HIGH: src/foo.py:42 — refactor to use shared helper``
+      - ``- [CRITICAL] src/foo.py:42 fix XSS``
+      - ``- src/foo.py:42 fix XSS`` (severity defaults to empty string)
+    """
+    if not text:
+        return []
+    # Prefer Review Findings if both sections are present; QA Failure is a
+    # fallback because QA-stage tickets emit it instead.
+    body = _section_body(text, _REVIEW_FINDINGS_HEADING_RE)
+    if body is None:
+        body = _section_body(text, _QA_FAILURE_HEADING_RE)
+    if not body:
+        return []
+
+    severity_re = re.compile(
+        r"^\s*[-*]\s+"
+        r"(?:\[(?P<sev_b>[A-Za-z]+)\]\s*|"
+        r"(?P<sev_a>CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*[:\-—]?\s*)?"
+        r"(?P<rest>.+)$",
+        re.IGNORECASE,
+    )
+    path_line_re = re.compile(
+        r"`?(?P<file>[A-Za-z0-9_./\\-]+\.[A-Za-z0-9]+)`?"
+        r"(?::(?P<line>\d+))?"
+    )
+
+    rows: list[dict[str, Any]] = []
+    for raw in body.splitlines():
+        m = severity_re.match(raw)
+        if not m:
+            continue
+        rest = (m.group("rest") or "").strip()
+        if not rest:
+            continue
+        severity = (m.group("sev_a") or m.group("sev_b") or "").upper()
+        pm = path_line_re.search(rest)
+        file_path = pm.group("file") if pm else ""
+        try:
+            line_no = int(pm.group("line")) if pm and pm.group("line") else 0
+        except ValueError:
+            line_no = 0
+        # `fix` = the trailing free-text after the path (or the whole rest
+        # when no path was found). Strip common dash separators so the
+        # downstream prompt isn't fed `— foo`.
+        fix_text = rest
+        if pm:
+            fix_text = (rest[pm.end() :] or "").strip(" -—:\t")
+        rows.append(
+            {
+                "severity": severity,
+                "file": file_path,
+                "line": line_no,
+                "fix": fix_text,
+            }
+        )
+    return rows
 
 
 def _branch_hook_env(cfg: ServiceConfig) -> dict[str, str]:
@@ -208,6 +343,11 @@ class RunningEntry:
     workspace_path: Path
     attempt_kind: str = "initial"
     agent_kind: str = ""
+    # Live backend driver for this attempt. Populated by `_run_agent_attempt`
+    # immediately after `build_backend(...)` so `_on_codex_event` can route
+    # the stall-progress predicate through `backend.is_progress_event(...)`
+    # without re-implementing per-backend filters inside the orchestrator.
+    client: AgentBackend | None = None
     session_id: str | None = None
     thread_id: str | None = None
     turn_id: str | None = None
@@ -233,6 +373,11 @@ class RunningEntry:
     last_reported_cache_input_tokens: int = 0
     last_reported_output_tokens: int = 0
     last_reported_total_tokens: int = 0
+    # Cumulative state-local total tokens at the close of the previous
+    # turn — used by the EMA updater to derive per-turn deltas. Reset to
+    # 0 alongside `codex_state_total_tokens` on phase transitions so the
+    # EMA samples turn-cost-within-stage, not cross-stage history.
+    last_ema_state_total_tokens: int = 0
     codex_app_server_pid: int | None = None
     last_error: str | None = None
     # Set to `now` the first time stall detection cancels this worker. Used
@@ -303,6 +448,11 @@ class Orchestrator:
         self._claimed: set[str] = set()
         self._retry: dict[str, RetryEntry] = {}
         self._completed: set[str] = set()
+        # C5 — `Done`-transition counter for the periodic wiki sweep. Lives
+        # in-process; restart resets it (acceptable — the sweep is a
+        # housekeeping nudge, not a correctness gate). Wraparound at
+        # `sys.maxsize` is a non-issue at any realistic ticket throughput.
+        self._done_count: int = 0
         self._turn_budget_exhausted: set[str] = set()
         self._totals = _CodexTotals()
         self._latest_rate_limits: dict[str, Any] | None = None
@@ -327,6 +477,13 @@ class Orchestrator:
         #     pre-cleared event in `_dispatch`.
         self._paused_issue_ids: set[str] = set()
         self._pause_events: dict[str, asyncio.Event] = {}
+        # Rolling EMA of completion `total_tokens` per state. Keys are the
+        # lowercased state name (normalize_state). Persisted to
+        # `<workflow_dir>/.symphony/token_ema.json` so the soft budget the
+        # agent sees survives restarts. Updated on each EVENT_TURN_COMPLETED
+        # via `_update_token_ema_for_completed_turn`. C3 (workflow-v0.5.2).
+        self._token_ema: dict[str, float] = {}
+        self._token_ema_loaded: bool = False
 
     # ------------------------------------------------------------------
     # public lifecycle
@@ -354,6 +511,7 @@ class Orchestrator:
             reuse_policy=cfg.workspace_reuse_policy,
             hook_env=_branch_hook_env(cfg),
         )
+        self._load_token_ema(cfg)
         await self._startup_terminal_cleanup(cfg)
         self._tick_task = asyncio.create_task(self._tick_loop(), name="symphony-tick")
 
@@ -655,6 +813,51 @@ class Orchestrator:
             "paused": self.is_paused(entry.issue_id),
         }
 
+    def _maybe_run_wiki_sweep(self, cfg: ServiceConfig, *, identifier: str) -> None:
+        """C5 — bump the Done counter and run wiki-sweep every Nth time.
+
+        Called from the two Done-transition sites (`_on_worker_exit` and
+        the reconcile-driven path). `sweep_every_n: 0` disables the
+        auto-sweep entirely. The sweep is intentionally synchronous and
+        best-effort: it runs in-process for simplicity (the typical wiki
+        is small), failures only log a warning, and never block the
+        Done transition.
+        """
+        every = cfg.wiki.sweep_every_n
+        if every <= 0:
+            return
+        self._done_count += 1
+        if self._done_count % every != 0:
+            return
+        root = cfg.wiki.root
+        if root is None:
+            return
+        try:
+            from . import wiki_sweep as _wiki_sweep
+
+            report = _wiki_sweep.sweep(root, dry_run=False)
+        except Exception as exc:
+            log.warning(
+                "wiki_sweep_failed",
+                identifier=identifier,
+                root=str(root),
+                error=str(exc),
+            )
+            return
+        log.info(
+            "wiki_sweep_run",
+            identifier=identifier,
+            done_count=self._done_count,
+            sweep_every_n=every,
+            root=str(report.root) if report.root is not None else "",
+            duplicates=len(report.duplicates),
+            orphans=len(report.orphans),
+            missing_files=len(report.missing_files),
+            stale=len(report.stale_entries),
+            mutations=len(report.mutations),
+            clean=report.is_clean(),
+        )
+
     async def _after_done_then_remove_per_policy(
         self,
         cfg: "ServiceConfig",
@@ -845,8 +1048,21 @@ class Orchestrator:
                 continue
             if self._available_slots(cfg) <= 0:
                 break
-            if self._should_dispatch(issue, cfg):
-                self._dispatch(issue, cfg, attempt=None)
+            if not self._should_dispatch(issue, cfg):
+                continue
+            # C1 — system-level pre-check. An overlap with any in-flight
+            # ticket's `## Touched Files` would race two workers against
+            # the same paths. Move the candidate to Blocked instead of
+            # claiming the slot; the agent prompt no longer carries this
+            # check itself (workflow-v0.5.2 § C1).
+            conflict = self._conflict_blocker(issue)
+            if conflict is not None:
+                other_identifier, overlap = conflict
+                await self._block_ticket_for_conflict(
+                    cfg, issue, other_identifier, overlap
+                )
+                continue
+            self._dispatch(issue, cfg, attempt=None)
 
         await self._archive_sweep(cfg)
 
@@ -1021,6 +1237,266 @@ class Orchestrator:
         # still in Review" even though `max_concurrent_agents == 1`.
         in_flight = len(self._running) + len(self._retry)
         return max(cfg.agent.max_concurrent_agents - in_flight, 0)
+
+    # ------------------------------------------------------------------
+    # C1 — system-level conflict pre-check
+    # ------------------------------------------------------------------
+
+    def _touched_files_for(self, issue: Issue) -> set[str]:
+        """Return the `## Touched Files` paths declared on a ticket body.
+
+        Parses the issue's markdown description (set by every tracker
+        adapter on candidate fetch). Returns an empty set when the
+        section is missing or contains no bullet rows. Tolerant of
+        malformed bullets — anything we can't recognise is skipped.
+        """
+        return _parse_touched_files(issue.description)
+
+    def _conflict_blocker(
+        self, candidate: Issue
+    ) -> tuple[str, set[str]] | None:
+        """Return `(other_identifier, overlapping_paths)` when claiming
+        ``candidate`` would conflict with an in-flight ticket.
+
+        "In-flight" = currently in `_running` OR pending retry. Iterates
+        both, intersects each touched-file set against the candidate, and
+        returns the first overlap found (stable order: running before
+        retry, then insertion order within each).
+        """
+        candidate_files = self._touched_files_for(candidate)
+        if not candidate_files:
+            return None
+        for other_id, entry in self._running.items():
+            if other_id == candidate.id:
+                continue
+            other_files = self._touched_files_for(entry.issue)
+            overlap = candidate_files & other_files
+            if overlap:
+                return entry.issue.identifier, overlap
+        for other_id, retry_entry in self._retry.items():
+            if other_id == candidate.id:
+                continue
+            # Retry entries don't carry the full Issue. Look up the
+            # last-known body via running history when present; the
+            # common case (retry of an exited ticket) leaves no body to
+            # inspect, and the retry path re-evaluates on its own tick.
+            running_entry = self._running.get(other_id)
+            if running_entry is None:
+                continue
+            other_files = self._touched_files_for(running_entry.issue)
+            overlap = candidate_files & other_files
+            if overlap:
+                return retry_entry.identifier, overlap
+        return None
+
+    async def _block_ticket_for_conflict(
+        self,
+        cfg: ServiceConfig,
+        candidate: Issue,
+        other_identifier: str,
+        overlap: set[str],
+    ) -> None:
+        """Move ``candidate`` to ``Blocked`` and append a `## Conflict` note.
+
+        Lenient: tracker failures only log a warning. The in-memory
+        `_claimed` set still gets the candidate so the same dispatch loop
+        doesn't immediately retry it inside the same tick.
+        """
+        sorted_overlap = sorted(overlap)
+        note_body = (
+            f"Conflicts with `{other_identifier}` on overlapping "
+            f"`## Touched Files`:\n"
+            + "\n".join(f"- `{p}`" for p in sorted_overlap)
+        )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_append_note,
+                cfg,
+                candidate,
+                "Conflict",
+                note_body,
+            )
+        except Exception as exc:
+            log.warning(
+                "conflict_note_failed",
+                issue_id=candidate.id,
+                identifier=candidate.identifier,
+                error=str(exc),
+            )
+        try:
+            await asyncio.to_thread(
+                self._tracker_call_update_state,
+                cfg,
+                candidate,
+                "Blocked",
+            )
+        except Exception as exc:
+            log.warning(
+                "conflict_block_failed",
+                issue_id=candidate.id,
+                identifier=candidate.identifier,
+                error=str(exc),
+            )
+        # Keep the candidate out of this tick's dispatch loop even if the
+        # tracker mutation didn't land — the in-memory claim clears on
+        # the next reconcile if Blocked is terminal in the workflow.
+        self._claimed.add(candidate.id)
+        log.info(
+            "conflict_blocked",
+            issue_id=candidate.id,
+            identifier=candidate.identifier,
+            other=other_identifier,
+            overlap=sorted_overlap,
+        )
+
+    # ------------------------------------------------------------------
+    # C3 — adaptive token-budget EMA
+    # ------------------------------------------------------------------
+
+    def _token_ema_path(self, cfg: ServiceConfig) -> Path:
+        """Return the on-disk location for the persisted EMA snapshot."""
+        return cfg.workflow_path.parent / ".symphony" / "token_ema.json"
+
+    def _load_token_ema(self, cfg: ServiceConfig) -> None:
+        """Load `_token_ema` from disk on `start()`. Missing file = empty.
+
+        Idempotent: a second `start()` (e.g. reload) overwrites in-memory
+        EMA with the latest disk snapshot. Malformed payloads degrade to
+        empty rather than crash startup.
+        """
+        path = self._token_ema_path(cfg)
+        try:
+            if not path.exists():
+                self._token_ema = {}
+                self._token_ema_loaded = True
+                return
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning(
+                "token_ema_load_failed",
+                path=str(path),
+                error=str(exc),
+            )
+            self._token_ema = {}
+            self._token_ema_loaded = True
+            return
+        ema: dict[str, float] = {}
+        if isinstance(raw, dict):
+            for key, value in raw.items():
+                if not isinstance(key, str):
+                    continue
+                try:
+                    ema[key.lower()] = float(value)
+                except (TypeError, ValueError):
+                    continue
+        self._token_ema = ema
+        self._token_ema_loaded = True
+
+    def _persist_token_ema(self, cfg: ServiceConfig) -> None:
+        """Best-effort flush to disk via tmp+rename. Failures only log."""
+        path = self._token_ema_path(cfg)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps(self._token_ema, sort_keys=True, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as exc:
+            log.warning(
+                "token_ema_persist_failed",
+                path=str(path),
+                error=str(exc),
+            )
+
+    def _update_token_ema(
+        self, state: str, total_tokens: int, cfg: ServiceConfig | None
+    ) -> None:
+        """Fold ``total_tokens`` into the rolling EMA for ``state``.
+
+        Standard EMA recurrence: ``ema_new = α·sample + (1-α)·ema_prev``.
+        Unseen states start at zero, so a first sample lands at α·sample.
+        Persists every update so the budget survives mid-turn crashes.
+        """
+        if total_tokens <= 0:
+            return
+        key = (state or "").lower()
+        if not key:
+            return
+        prev = self._token_ema.get(key, 0.0)
+        self._token_ema[key] = (
+            _TOKEN_EMA_ALPHA * float(total_tokens)
+            + (1.0 - _TOKEN_EMA_ALPHA) * prev
+        )
+        if cfg is not None:
+            self._persist_token_ema(cfg)
+
+    def _token_ema_for_state(self, state: str) -> int:
+        """Rounded EMA for a state. 0 when unseen."""
+        key = (state or "").lower()
+        return int(round(self._token_ema.get(key, 0.0)))
+
+    def _token_budget_for_state(
+        self, cfg: ServiceConfig, state: str
+    ) -> int:
+        """Hard cap from `agent.max_total_tokens_by_state` w/ fallback."""
+        key = (state or "").lower()
+        by_state = cfg.agent.max_total_tokens_by_state
+        cap = by_state.get(key)
+        if cap is None and key == "learn":
+            cap = by_state.get("learning")
+        if cap is None and key == "learning":
+            cap = by_state.get("learn")
+        return cap if cap is not None else cfg.agent.max_total_tokens
+
+    # ------------------------------------------------------------------
+    # A2-orch + C3 — backend subprocess env injection
+    # ------------------------------------------------------------------
+
+    def _apply_dispatch_env(
+        self,
+        *,
+        issue: Issue,
+        cfg: ServiceConfig,
+        is_rewind: bool,
+    ) -> None:
+        """Set per-dispatch env vars consumed by the backend subprocess.
+
+        Always sets:
+          * ``SYMPHONY_TOKEN_EMA`` — rolling EMA of total tokens for the
+            current state (rounded int), 0 when unseen.
+          * ``SYMPHONY_TOKEN_BUDGET`` — hard cap for the current state
+            (max_total_tokens_by_state with fallback to max_total_tokens).
+
+        On rewind dispatches also sets:
+          * ``SYMPHONY_REWIND_SCOPE`` — JSON list of finding rows parsed
+            from the ticket's most recent `## Review Findings` or
+            `## QA Failure` section. Empty list when parsing fails (the
+            env var is informational; an empty list signals "rewind, no
+            machine-readable scope" without unsetting).
+
+        On forward dispatches the rewind scope env var is UNSET so a
+        previous-turn value can't bleed across.
+
+        Backends inherit `os.environ`, so this mutates process-global
+        state. Concurrent dispatches in the same tick are serialised by
+        the orchestrator's single event loop, and each backend spawns
+        its subprocess before the next dispatch lands.
+        """
+        ema_value = self._token_ema_for_state(issue.state)
+        budget_value = self._token_budget_for_state(cfg, issue.state)
+        os.environ["SYMPHONY_TOKEN_EMA"] = str(ema_value)
+        os.environ["SYMPHONY_TOKEN_BUDGET"] = str(budget_value)
+        if is_rewind:
+            rows = _parse_findings_rows(issue.description)
+            try:
+                payload = json.dumps(rows, ensure_ascii=False)
+            except (TypeError, ValueError):
+                payload = "[]"
+            os.environ["SYMPHONY_REWIND_SCOPE"] = payload
+        else:
+            os.environ.pop("SYMPHONY_REWIND_SCOPE", None)
 
     # ------------------------------------------------------------------
     # dispatch (§16.4)
@@ -1214,7 +1690,14 @@ class Orchestrator:
                     client_tools=tools,
                 )
             )
+            # Expose the live backend to `_on_codex_event` so the stall-progress
+            # predicate routes through `client.is_progress_event(...)`.
+            running.client = client
             after_run_pending = False
+            # Initial dispatch is always forward (no rewind); the env
+            # mutation MUST land before `client.start()` because the
+            # backend subprocess inherits os.environ at fork time.
+            self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=False)
             try:
                 await client.start()
                 await client.initialize()
@@ -1232,6 +1715,9 @@ class Orchestrator:
                     max_turns=cfg.agent.max_turns,
                     max_attempts=cfg.agent.max_attempts,
                     auto_merge_on_done=cfg.agent.auto_merge_on_done,
+                    token_ema=self._token_ema_for_state(issue.state),
+                    token_budget=self._token_budget_for_state(cfg, issue.state),
+                    rewind_scope=None,
                 )
                 await client.start_session(
                     initial_prompt=first_prompt,
@@ -1346,6 +1832,10 @@ class Orchestrator:
                             )
                             running_entry = self._running.get(running_issue_id)
                             if running_entry is not None:
+                                # New backend instance — refresh the
+                                # `_on_codex_event` reference so the stall
+                                # predicate keeps routing to the live driver.
+                                running_entry.client = client
                                 running_entry.thread_id = None
                                 running_entry.session_id = None
                                 running_entry.turn_id = None
@@ -1367,6 +1857,11 @@ class Orchestrator:
                                 running_entry.codex_state_cache_input_tokens = 0
                                 running_entry.codex_state_output_tokens = 0
                                 running_entry.codex_state_total_tokens = 0
+                                # Per-stage EMA window restarts with the
+                                # new state so first-turn cost in the new
+                                # stage isn't inflated by the prior
+                                # stage's cumulative total.
+                                running_entry.last_ema_state_total_tokens = 0
                                 running_entry.hit_token_budget = False
                                 running_entry.token_budget_cap = 0
                             log.info(
@@ -1590,6 +2085,10 @@ class Orchestrator:
                 client_tools=tools,
             )
         )
+        # Reset per-dispatch env BEFORE the new backend's subprocess spawns.
+        # Forward phase transitions unset SYMPHONY_REWIND_SCOPE; rewinds
+        # set it to the JSON of the latest finding rows.
+        self._apply_dispatch_env(issue=issue, cfg=cfg, is_rewind=is_rewind)
         await new_client.start()
         await new_client.initialize()
         first_prompt, _ = build_first_turn_prompt(
@@ -1601,6 +2100,11 @@ class Orchestrator:
             max_attempts=cfg.agent.max_attempts,
             is_rewind=is_rewind,
             auto_merge_on_done=cfg.agent.auto_merge_on_done,
+            token_ema=self._token_ema_for_state(issue.state),
+            token_budget=self._token_budget_for_state(cfg, issue.state),
+            rewind_scope=(
+                _parse_findings_rows(issue.description) if is_rewind else None
+            ),
         )
         await new_client.start_session(
             initial_prompt=first_prompt,
@@ -1807,7 +2311,21 @@ class Orchestrator:
         # model actually emits content, which is the signal we need.
         is_progress = ev_name != EVENT_OTHER_MESSAGE
         if not is_progress and isinstance(payload, dict):
-            is_progress = payload.get("type") == "assistant"
+            # Delegate the catch-all OTHER_MESSAGE filter to the backend so
+            # per-driver echo shapes (claude stream-json `user`/tool_result
+            # frames, codex preview items, future backends with their own
+            # keepalive types) live next to the code that knows their wire
+            # protocol. Claude and codex both narrow to `type=="assistant"`;
+            # pi/gemini inherit the conservative `BaseAgentBackend` default
+            # of always-True. When the backend reference isn't published
+            # yet (e.g. unit tests poking `_on_codex_event` directly without
+            # a build_backend call), apply the historical inline filter so
+            # existing invariants hold.
+            backend = entry.client
+            if backend is None:
+                is_progress = payload.get("type") == "assistant"
+            else:
+                is_progress = backend.is_progress_event(payload)
         if delta_out > 0:
             is_progress = True
         if is_progress:
@@ -1853,6 +2371,23 @@ class Orchestrator:
                 total_tokens=entry.codex_total_tokens,
                 last_message=(entry.last_codex_message or "")[:160],
             )
+            # C3 — adaptive token budget. Sample = per-turn state-local
+            # total tokens. `_update_token_ema` no-ops on non-positive
+            # samples, so a turn with zero token movement (e.g. an event
+            # that fires before any usage is reported) is skipped
+            # silently rather than dragging the EMA toward zero.
+            turn_sample = max(
+                entry.codex_state_total_tokens
+                - entry.last_ema_state_total_tokens,
+                0,
+            )
+            if turn_sample > 0:
+                self._update_token_ema(
+                    entry.issue.state, turn_sample, cfg
+                )
+                entry.last_ema_state_total_tokens = (
+                    entry.codex_state_total_tokens
+                )
         if ev_name == EVENT_TURN_FAILED:
             reason = payload.get("reason") if isinstance(payload, dict) else None
             stderr_tail = payload.get("stderr_tail") if isinstance(payload, dict) else None
@@ -2101,6 +2636,13 @@ class Orchestrator:
                         identifier=entry.issue.identifier,
                         title=entry.issue.title,
                         debug_target=debug,
+                    )
+                    # C5 — count this Done and run wiki-sweep if the cadence
+                    # configured by `wiki.sweep_every_n` is up. Failures are
+                    # absorbed inside the helper so we never block the
+                    # Done transition on a wiki housekeeping nudge.
+                    self._maybe_run_wiki_sweep(
+                        cfg, identifier=entry.issue.identifier
                     )
                 # Don't schedule a continuation — a Done ticket has nothing
                 # to continue. Skip straight to the worker_exit emit below.
@@ -2435,6 +2977,10 @@ class Orchestrator:
                                 identifier=entry.issue.identifier,
                                 title=entry.issue.title,
                                 debug_target=self._issue_debug.get(issue.id),
+                            )
+                            # C5 — see _on_worker_exit for the rationale.
+                            self._maybe_run_wiki_sweep(
+                                cfg, identifier=entry.issue.identifier
                             )
                     else:
                         # Non-Done terminal state (e.g. Cancelled, Blocked):

@@ -439,6 +439,9 @@ def build_prompt_env(
     is_rewind: bool = False,
     max_attempts: int = 3,
     auto_merge_on_done: bool = True,
+    token_ema: int = 0,
+    token_budget: int = 0,
+    rewind_scope: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """§12.1 — input variables for prompt rendering.
 
@@ -454,6 +457,19 @@ def build_prompt_env(
     inside a single worker run otherwise has no signal to give the agent.
     Always present in the env (default False) so strict templates that
     reference `{{ is_rewind }}` never fail to render.
+
+    `token_ema` / `token_budget` (C3, workflow-v0.5.2) are the rolling
+    EMA of completion tokens for this stage and the hard cap from
+    `agent.max_total_tokens_by_state`. Templates can render a soft
+    budget directive with `{{ token_ema }}` / `{{ token_budget }}`.
+    Default 0 keeps existing prompts that don't reference them safe;
+    base.md's directive can guard with `{% if token_ema %}`.
+
+    `rewind_scope` (A2-orch, workflow-v0.5.2) is the parsed list of
+    `{severity, file, line, fix}` finding rows for rewind turns. Empty
+    list when no rewind / parsing failed. Available to templates as
+    `{{ rewind_scope }}` (typically iterated with `{% for row in
+    rewind_scope %}…{% endfor %}`).
     """
     if hasattr(issue_obj, "to_template_dict"):
         issue_dict = issue_obj.to_template_dict()
@@ -470,6 +486,9 @@ def build_prompt_env(
             "max_attempts": max_attempts,
             "auto_merge_on_done": auto_merge_on_done,
         },
+        "token_ema": int(token_ema or 0),
+        "token_budget": int(token_budget or 0),
+        "rewind_scope": list(rewind_scope) if rewind_scope else [],
     }
 
 
@@ -483,6 +502,9 @@ def build_first_turn_prompt(
     max_attempts: int = 3,
     is_rewind: bool = False,
     auto_merge_on_done: bool = True,
+    token_ema: int = 0,
+    token_budget: int = 0,
+    rewind_scope: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Construct the first-turn prompt sent to a worker.
 
@@ -495,6 +517,10 @@ def build_first_turn_prompt(
     authors can branch the retry-preamble block on rewind specifically
     (in-flight `Review→In Progress` / `QA→In Progress` handoffs that
     don't trip the dispatch-level retry counter).
+
+    `token_ema` / `token_budget` / `rewind_scope` plumb the C3 + A2
+    template-context fields through to `build_prompt_env`. Defaults keep
+    older callers (and tests) unchanged.
 
     Returns `(final_prompt, env)` so callers can keep `env` for later
     bookkeeping (e.g. logging, tests).
@@ -509,6 +535,9 @@ def build_first_turn_prompt(
         is_rewind=is_rewind,
         max_attempts=max_attempts,
         auto_merge_on_done=auto_merge_on_done,
+        token_ema=token_ema,
+        token_budget=token_budget,
+        rewind_scope=rewind_scope,
     )
     env["turn_number"] = 1
     env["max_turns"] = max_turns

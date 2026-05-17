@@ -23,6 +23,7 @@ from symphony.backends import (
     EVENT_TURN_COMPLETED,
     EVENT_TURN_FAILED,
     BackendInit,
+    BaseAgentBackend,
     build_backend,
 )
 from symphony.backends.claude_code import ClaudeCodeBackend, _extract_text, _is_error_result
@@ -1142,7 +1143,7 @@ def test_pi_consume_stream_surfaces_compaction_events(tmp_path: Path) -> None:
             self.returncode = 0
 
     asyncio.run(
-        backend._consume_stream(_FakeProc())
+        backend._consume_stream(_FakeProc())  # type: ignore[arg-type]
     )
     kinds = [c["event"] for c in captured]
     # We expect: session_started, compaction(start), compaction(end),
@@ -1287,3 +1288,80 @@ async def test_codex_legacy_totals_path_still_works(tmp_path: Path) -> None:
         "output_tokens": 10,
         "total_tokens": 60,
     }
+
+
+# ---- Stall-progress predicate (C2) -------------------------------------
+# Backends share a `is_progress_event(event) -> bool` hook so the
+# orchestrator's stall-progress timer routes per-driver echo filtering
+# through the backend that knows its wire protocol. Default is conservative
+# (everything counts); only the Claude Code backend currently narrows.
+# Regression guard for the OLV-002 fix (commit 499e787).
+
+
+def test_base_backend_is_progress_event_is_true_by_default() -> None:
+    """Bare base class instance returns True for any event shape — the
+    conservative default that future backends inherit unless they override."""
+    backend = BaseAgentBackend()
+    assert backend.is_progress_event({"type": "assistant"}) is True
+    assert backend.is_progress_event({"type": "tool_result"}) is True
+    assert backend.is_progress_event({"type": "user"}) is True
+    assert backend.is_progress_event({}) is True
+
+
+def test_claude_backend_is_progress_event_filters_to_assistant(tmp_path: Path) -> None:
+    """ClaudeCodeBackend narrows the catch-all OTHER_MESSAGE bucket to
+    `type=="assistant"` only. `user`/`tool_result` echoes must NOT count
+    as progress, otherwise the 5-min stall timer never trips while the
+    model is silently spinning between tool calls (OLV-002 regression)."""
+    cfg = _make_cfg("claude", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = ClaudeCodeBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend.is_progress_event({"type": "assistant"}) is True
+    assert backend.is_progress_event({"type": "user"}) is False
+    assert backend.is_progress_event({"type": "tool_result"}) is False
+    assert backend.is_progress_event({}) is False
+
+
+def test_pi_backend_is_progress_event_defaults_to_true(tmp_path: Path) -> None:
+    cfg = _make_cfg("pi", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = PiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend.is_progress_event({"type": "assistant"}) is True
+    assert backend.is_progress_event({"type": "tool_result"}) is True
+    assert backend.is_progress_event({}) is True
+
+
+def test_gemini_backend_is_progress_event_defaults_to_true(tmp_path: Path) -> None:
+    cfg = _make_cfg("gemini", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = GeminiBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend.is_progress_event({"type": "assistant"}) is True
+    assert backend.is_progress_event({"type": "tool_result"}) is True
+    assert backend.is_progress_event({}) is True
+
+
+def test_codex_backend_is_progress_event_filters_to_assistant(tmp_path: Path) -> None:
+    """CodexAppServerBackend mirrors the claude filter: catch-all
+    OTHER_MESSAGE payloads count only when `type=="assistant"`. Codex
+    item / toolCall previews lack `type` and so must NOT advance the
+    stall clock by themselves — the orchestrator separately uses output
+    token deltas as the codex progress signal (IB-006 fix)."""
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+    assert backend.is_progress_event({"type": "assistant"}) is True
+    assert backend.is_progress_event({"type": "toolCall"}) is False
+    assert backend.is_progress_event({"item": {"type": "agentMessage"}}) is False
+    assert backend.is_progress_event({}) is False

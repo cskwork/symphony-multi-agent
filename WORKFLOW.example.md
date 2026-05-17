@@ -26,6 +26,13 @@ tracker:
 polling:
   interval_ms: 30000
 
+# Wiki integrity sweep — see `symphony wiki-sweep --help`. The orchestrator
+# runs the sweep automatically after every Nth `Done` transition. Set
+# `sweep_every_n: 0` to disable; the manual CLI still works either way.
+wiki:
+  sweep_every_n: 10
+  root: ./docs/llm-wiki
+
 workspace:
   root: ~/symphony_workspaces
 
@@ -38,46 +45,13 @@ hooks:
   # If your code lives in a *different* remote than where WORKFLOW.md
   # sits (common with Linear setups where the config repo is config-only),
   # replace the worktree commands with a `git clone <remote> .` instead.
+  # Body extracted to scripts/symphony-setup-worktree.sh — see C4 in
+  # docs/improvements/workflow-v0.5.2.md. The script worktree-adds the
+  # ticket branch, records basesha/basebranch/mergetargetbranch, and (when
+  # a host-owned `kanban/` exists) symlinks/junctions it back. Linear
+  # trackers read from their API so the symlink loop is a no-op here.
   after_create: |
-    set -euo pipefail
-    ISSUE_ID="$(basename "$PWD")"
-    HOST_REPO="${SYMPHONY_WORKFLOW_DIR:?SYMPHONY_WORKFLOW_DIR not set}"
-    WORKTREE_PATH="$PWD"
-    BRANCH="symphony/${ISSUE_ID}"
-    cd "$HOST_REPO"
-    BASE_BRANCH="$(git symbolic-ref --short HEAD 2>/dev/null || git branch --show-current 2>/dev/null || true)"
-    FEATURE_BASE_BRANCH="${SYMPHONY_FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
-    MERGE_TARGET_BRANCH="${SYMPHONY_MERGE_TARGET_BRANCH:-${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}}"
-    # `git worktree add` (git >= 2.30) tolerates an existing *empty* target
-    # directory — which is exactly what Symphony pre-creates as the workspace.
-    # We rely on that here to avoid an rmdir that on Windows races against
-    # the file-indexer / AV scan and used to trip the dispatcher into a
-    # `Device or resource busy` retry loop.
-    #
-    # A prior crashed attempt may have left `.git/worktrees/<ID>` registered;
-    # detach it first so the next `add` doesn't fail with
-    # "missing but already registered" or "already checked out".
-    git worktree remove --force "$WORKTREE_PATH" 2>/dev/null || true
-    git worktree prune 2>/dev/null || true
-    if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-      git worktree add "$WORKTREE_PATH" "$BRANCH"
-    elif [ -n "$FEATURE_BASE_BRANCH" ]; then
-      git worktree add "$WORKTREE_PATH" -b "$BRANCH" "$FEATURE_BASE_BRANCH"
-    else
-      git worktree add "$WORKTREE_PATH" -b "$BRANCH"
-    fi
-    # Record the fork point so commit_workspace_on_done can `git reset --soft`
-    # back to it and squash all per-turn work into a single ticket commit.
-    # Use --worktree so the value is scoped to .git/worktrees/<ID>/config.gitwt;
-    # writing without the flag leaks into the host repo's shared .git/config
-    # and corrupts auto_commit for unrelated workspaces nested in the host.
-    git -C "$WORKTREE_PATH" config extensions.worktreeConfig true
-    git -C "$WORKTREE_PATH" config --worktree symphony.basesha "$(git -C "$WORKTREE_PATH" rev-parse HEAD)"
-    git -C "$WORKTREE_PATH" config --worktree symphony.basebranch "${FEATURE_BASE_BRANCH:-${BASE_BRANCH:-}}"
-    git -C "$WORKTREE_PATH" config --worktree symphony.mergetargetbranch "${MERGE_TARGET_BRANCH:-}"
-    # Linear tracker reads from its API, not the file system, so no
-    # symlink-back step is needed. (For tracker.kind=file, symlink only
-    # host-owned board roots such as kanban — see WORKFLOW.file.example.md.)
+    bash "$SYMPHONY_WORKFLOW_DIR/scripts/symphony-setup-worktree.sh"
   before_run: |
     # NEVER `git reset --hard` inside a worktree — it discards in-progress
     # work between turns. Just refresh remotes; let the agent decide if/when
@@ -97,12 +71,88 @@ hooks:
       echo "run finished at $(date) (no changes)"
       exit 0
     fi
+    # Classify the staged diff so the wip subject carries machine-readable
+    # markers. `[no-test]` = production code changed with no paired test
+    # file in the same diff (workflow-v0.5.2 § B1 — review.md promotes it
+    # to a HIGH finding). `[scope-expand]` = a rewind dispatch (set by the
+    # orchestrator when SYMPHONY_REWIND_SCOPE is exported) but the diff
+    # touched a file outside the parsed scope list (workflow-v0.5.2 § A2).
+    # Both markers can stack.
+    STAGED_FILES="$(git diff --cached --name-only 2>/dev/null || true)"
+    PROD_CHANGED=0
+    TESTS_CHANGED=0
+    SCOPE_EXPAND=0
+    SCOPE_FILES=""
+    if [ -n "${SYMPHONY_REWIND_SCOPE:-}" ]; then
+      SCOPE_FILES="$(printf '%s' "$SYMPHONY_REWIND_SCOPE" \
+        | tr ',' '\n' \
+        | sed -n 's/.*"file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    fi
+    NL=$(printf '\nx'); NL=${NL%x}
+    OLDIFS="$IFS"
+    IFS="$NL"
+    for f in $STAGED_FILES; do
+      [ -n "$f" ] || continue
+      case "$f" in
+        tests/*|*_test.py|*.test.ts|*.test.tsx|*_test.go)
+          TESTS_CHANGED=1
+          ;;
+      esac
+      case "$f" in
+        tests/*|docs/*|kanban/*|.symphony/*)
+          : # carve-out: never counts as production change
+          ;;
+        *)
+          PROD_CHANGED=1
+          ;;
+      esac
+      if [ -n "$SCOPE_FILES" ] && [ "$SCOPE_EXPAND" = 0 ]; then
+        in_scope=0
+        for s in $SCOPE_FILES; do
+          if [ "$f" = "$s" ]; then
+            in_scope=1
+            break
+          fi
+        done
+        if [ "$in_scope" = 0 ]; then
+          SCOPE_EXPAND=1
+        fi
+      fi
+    done
+    IFS="$OLDIFS"
+    PREFIX=""
+    if [ "$PROD_CHANGED" = 1 ] && [ "$TESTS_CHANGED" = 0 ]; then
+      PREFIX="${PREFIX}[no-test]"
+    fi
+    if [ -n "${SYMPHONY_REWIND_SCOPE:-}" ] && [ "$SCOPE_EXPAND" = 1 ]; then
+      PREFIX="${PREFIX}[scope-expand]"
+    fi
     # Honors any pre-commit hooks in the host repo — if they fail, this
     # turn's snapshot fails and the next turn picks up where files are.
     MSG="$(sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}' .symphony/commit-message.txt 2>/dev/null || true)"
     [ -n "$MSG" ] || MSG="turn $(date -u +%FT%TZ)"
     case "$MSG" in wip:*) COMMIT_MSG="$MSG" ;; *) COMMIT_MSG="wip: $MSG" ;; esac
     LAST="$(git log -1 --format=%s 2>/dev/null || echo "")"
+    # On amend, preserve any markers the previous turn already set so a
+    # later test-passing turn doesn't drop the historical `[no-test]`.
+    # Markers are sticky within a wip subject.
+    PRIOR_PREFIX=""
+    case "$LAST" in
+      *"[no-test]"*) PRIOR_PREFIX="${PRIOR_PREFIX}[no-test]" ;;
+    esac
+    case "$LAST" in
+      *"[scope-expand]"*) PRIOR_PREFIX="${PRIOR_PREFIX}[scope-expand]" ;;
+    esac
+    MERGED_PREFIX=""
+    case "$PRIOR_PREFIX$PREFIX" in
+      *"[no-test]"*) MERGED_PREFIX="${MERGED_PREFIX}[no-test]" ;;
+    esac
+    case "$PRIOR_PREFIX$PREFIX" in
+      *"[scope-expand]"*) MERGED_PREFIX="${MERGED_PREFIX}[scope-expand]" ;;
+    esac
+    if [ -n "$MERGED_PREFIX" ]; then
+      COMMIT_MSG="${MERGED_PREFIX} ${COMMIT_MSG}"
+    fi
     if [ "${LAST#wip:}" != "$LAST" ]; then
       git -c user.email=symphony@local -c user.name=symphony \
           commit --amend -m "$COMMIT_MSG" >/dev/null 2>&1 || true

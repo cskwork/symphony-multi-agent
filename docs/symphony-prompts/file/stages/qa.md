@@ -24,7 +24,9 @@ You are the QA gate. Execute real code against both builds and prove the diff wo
 
 7. Bug repro closure (only if `bug` label): re-run `docs/{{ issue.identifier }}/reproduce/repro.spec.ts` against To-Be, save to `docs/{{ issue.identifier }}/qa/repro-after.log`, and require it to pass. Never skip.
 
-8. Append `## QA Evidence` with: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe used, exact commands run with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run result line for `bug` tickets, and paths under `docs/{{ issue.identifier }}/qa/`.
+8. Append `## QA Evidence` with: payload data source (DB tool + query, or `synthesized from <schema file>`), boot recipe used, exact commands run with exit codes, a `scenario × {As-Is status, As-Is ms, To-Be status, To-Be ms, verdict}` matrix, the repro re-run result line for `bug` tickets, and paths under `docs/{{ issue.identifier }}/qa/`. Inside the same `## QA Evidence` section, add a required `## AC Scorecard` sub-block:
+   `signal | source (Plan ## Done Signals row) | result (pass/fail) | evidence path`
+   Every row in the Plan's `## Done Signals` must appear here. A missing or `fail` row fails QA — proceed to step 9.
 
 9. On any failure (correctness, latency, repro, or any server-reported HIGH issue): set state to `In Progress`, append `## QA Failure` naming the scenario and exact field/status/latency/severity that regressed, stop. Never silence, retry, or skip.
 

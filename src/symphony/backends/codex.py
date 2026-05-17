@@ -51,6 +51,7 @@ from . import (
     EVENT_TURN_INPUT_REQUIRED,
     EVENT_UNSUPPORTED_TOOL_CALL,
     BackendInit,
+    BaseAgentBackend,
     ToolDescriptor,
     TurnResult,
 )
@@ -212,8 +213,21 @@ def _coerce_turn(result: Any) -> dict[str, Any]:
     return turn if isinstance(turn, dict) else {}
 
 
-class CodexAppServerBackend:
+class CodexAppServerBackend(BaseAgentBackend):
     """One subprocess instance per worker run; speaks Codex JSON-RPC."""
+
+    def is_progress_event(self, event: dict[str, Any]) -> bool:
+        """Treat only `type=="assistant"` OTHER_MESSAGE payloads as progress.
+
+        Codex app-server emits `OTHER_MESSAGE` for both real assistant
+        previews (which set `payload.type=="assistant"`) and tool / item
+        notifications (which do not). The orchestrator separately treats
+        OUTPUT token deltas as progress, so this predicate only narrows
+        the catch-all bucket. Matches the pre-abstraction inline filter
+        the orchestrator used to apply unconditionally; preserves the
+        OLV-002 / IB-006 fix semantics for codex.
+        """
+        return event.get("type") == "assistant"
 
     def __init__(self, init: BackendInit) -> None:
         validate_agent_cwd(init.cwd, init.workspace_root)
@@ -634,10 +648,11 @@ class CodexAppServerBackend:
                         handled = True
             # Fall back to legacy `totals` (or top-level snake_case).
             if not handled:
-                self._update_tokens_absolute(
-                    params.get("totals") if isinstance(params, dict) else None
-                    or params
-                )
+                totals: Any = None
+                if isinstance(params, dict):
+                    totals = params.get("totals") or params
+                if isinstance(totals, dict):
+                    self._update_tokens_absolute(totals)
             return
         # ----- rate limits (v2: account/rateLimits/updated) -----
         if method == NOTIF_RATE_LIMITS or method.endswith("/rateLimits"):

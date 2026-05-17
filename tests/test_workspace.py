@@ -226,6 +226,17 @@ async def test_file_workflow_after_create_hides_host_symlink_roots_from_git(tmp_
     (host / "docs").mkdir()
     (host / "kanban" / "DEMO-1.md").write_text("---\nstate: Review\n---\n")
     (host / "docs" / "seed.md").write_text("seed\n")
+    # C4 — the after_create hook now delegates to scripts/symphony-setup-worktree.sh
+    # under SYMPHONY_WORKFLOW_DIR. Copy the canonical script into the synthetic
+    # host so the hook can find it (real users have it next to WORKFLOW.md).
+    import shutil as _shutil
+    repo_root = Path(__file__).parents[1]
+    (host / "scripts").mkdir()
+    _shutil.copy2(
+        repo_root / "scripts" / "symphony-setup-worktree.sh",
+        host / "scripts" / "symphony-setup-worktree.sh",
+    )
+    (host / "scripts" / "symphony-setup-worktree.sh").chmod(0o755)
     _git(host, "add", "-A")
     _git(host, "commit", "-q", "-m", "seed")
 

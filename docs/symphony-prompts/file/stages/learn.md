@@ -52,6 +52,12 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    **Files of interest:**
    - `path/to/file.py:123` — what the line region does.
 
+   **Observability hooks:**
+   - log: `<event_name>` at `path:line` — 어떤 상황을 신호하는지
+   - metric: `<metric_name>` at `path:line` — 무엇을 세는지
+   - trace: `<span_name>` at `path:line` — 어디서 어디까지 감싸는지
+   (코드가 순수 유틸리티라 관측 표면이 없다면 `- none` 한 줄로 충분. QA/Review는 `none`을 강제하지 않는다.)
+
    **Decision log:**
    - YYYY-MM-DD | <issue.identifier> | what changed and why.
 
@@ -113,6 +119,12 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    **Files of interest:**
    - `path/to/file.py:123` — what the line region does.
 
+   **Observability hooks:**
+   - log: `<event_name>` at `path:line` — what it signals
+   - metric: `<metric_name>` at `path:line` — what it counts
+   - trace: `<span_name>` at `path:line` — what it spans
+   (If the code has no observability surface — a pure utility module — write `- none` and stop. QA/Review do not enforce on `none`.)
+
    **Decision log:**
    - YYYY-MM-DD | <issue.identifier> | what changed and why.
 
@@ -132,12 +144,10 @@ Make the next ticket cheaper. Distill what this ticket taught into `docs/llm-wik
    If the entry has no `## Getting the Feel` section, add one this turn. If it already exists, touch it only when this ticket invalidated the analogy or core flow — small wording tweaks are out of scope (a Decision log row is enough).
 {% endif %}
 
-4. Wiki integrity sweep before transitioning:
-   - Duplicates: merge same-slug rows into the entry with newer Last updated, absorb distinct Invariants/Decision log rows, `git rm` the loser file and drop its INDEX row.
-   - Orphans: every `docs/llm-wiki/*.md` (except `INDEX.md`) has an INDEX row; every INDEX row has a file. Reconcile both directions.
-   - Stale: if Last updated > 90 days, append ` (stale?)` to the INDEX summary cell (idempotent).
-   - Contradictions: if this ticket disproves an entry, update it and log the prior wrong claim; for cross-entry conflicts noticed in passing, append a `## Wiki Conflict` section to the ticket pointing at both files.
-   - Beginner block sanity: every existing `## 감 잡기` / `## Getting the Feel` still has 3-5 flow steps, exactly five terms, one-sentence takeaway. Fix only obvious shape violations; rewriting prose is out of scope unless this ticket changed the underlying truth.
+4. Wiki integrity (lightweight at the ticket level):
+   - If this ticket invalidated an entry, update it now and log the prior wrong claim in the Decision log. This is the only sweep work Learn owns at the per-ticket level.
+   - If you noticed a cross-entry contradiction in passing, append `## Wiki Conflict` to the ticket pointing at both files (do not fix it here).
+   - Bulk dup/orphan/stale/missing-file sweeping is handled by `symphony wiki-sweep` (run automatically every `wiki.sweep_every_n` Done transitions; also `symphony wiki-sweep --root docs/llm-wiki --dry-run` on demand). Do NOT re-do those checks by hand.
 5. Append `## Learnings` to the ticket — 3-4 bullets of new facts/constraints/surprises.
 6. Append `## Wiki Updates` to the ticket — paths created/modified/removed, one line each with a changelog tag (`merged`, `created`, `marked stale`, `dropped orphan row`, `updated invariant`, `added beginner block`, `refreshed beginner block`).
 {% if agent.auto_merge_on_done %}

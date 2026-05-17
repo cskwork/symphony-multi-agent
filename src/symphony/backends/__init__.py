@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Protocol, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, cast, runtime_checkable
 
 from ..errors import ConfigValidationError
 from ..workflow import ServiceConfig
@@ -125,26 +125,62 @@ class AgentBackend(Protocol):
     @property
     def latest_rate_limits(self) -> dict[str, Any] | None: ...
 
+    def is_progress_event(self, event: dict[str, Any]) -> bool: ...
+
+
+class BaseAgentBackend:
+    """Shared default behaviour for concrete backends.
+
+    Concrete backends inherit this so any future cross-cutting default
+    (currently just `is_progress_event`) lives in one place rather than
+    being copy-pasted into each driver.
+
+    Backends still match the `AgentBackend` Protocol structurally — the
+    base class is purely additive and does not constrain construction.
+    """
+
+    def is_progress_event(self, event: dict[str, Any]) -> bool:
+        """Return True when an event should reset the stall-progress timer.
+
+        Default is conservative: every event counts as progress so a new
+        backend doesn't accidentally trigger spurious stall cancellations.
+        Backends that produce keepalive / tool-echo events between real
+        model output (e.g. claude stream-json `user` frames carrying
+        `tool_result` echoes) override this to filter them out — see
+        `ClaudeCodeBackend.is_progress_event` for the canonical example.
+        """
+        del event
+        return True
+
 
 def build_backend(init: BackendInit) -> AgentBackend:
-    """Factory: pick a concrete backend by `agent.kind`."""
+    """Factory: pick a concrete backend by `agent.kind`.
+
+    Each concrete backend inherits `is_progress_event` from
+    `BaseAgentBackend` and structurally satisfies `AgentBackend`. Pyright
+    does not always trace Protocol membership through a non-Protocol base
+    class for methods that are only inherited (no override), so we `cast`
+    here to declare the structural compatibility explicitly. Runtime
+    duck-typing through `isinstance(..., AgentBackend)` still works
+    thanks to `@runtime_checkable`.
+    """
     kind = init.cfg.agent.kind
     if kind == "codex":
         from .codex import CodexAppServerBackend
 
-        return CodexAppServerBackend(init)
+        return cast(AgentBackend, CodexAppServerBackend(init))
     if kind == "claude":
         from .claude_code import ClaudeCodeBackend
 
-        return ClaudeCodeBackend(init)
+        return cast(AgentBackend, ClaudeCodeBackend(init))
     if kind == "gemini":
         from .gemini import GeminiBackend
 
-        return GeminiBackend(init)
+        return cast(AgentBackend, GeminiBackend(init))
     if kind == "pi":
         from .pi import PiBackend
 
-        return PiBackend(init)
+        return cast(AgentBackend, PiBackend(init))
     raise ConfigValidationError(
         f"unknown agent.kind {kind!r}; expected codex, claude, gemini, or pi"
     )
