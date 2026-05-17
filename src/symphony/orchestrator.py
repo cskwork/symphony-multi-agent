@@ -49,7 +49,7 @@ from .issue import Issue, normalize_state, sort_for_dispatch
 from .logging import get_logger
 from .prompt import build_continuation_prompt, build_first_turn_prompt
 from .tracker import build_tracker_client
-from . import wiki_sweep as _wiki_sweep_module
+from .wiki_sweep import sweep as _wiki_sweep_run
 from .workflow import (
     ServiceConfig,
     SUPPORTED_AGENT_KINDS,
@@ -898,7 +898,7 @@ class Orchestrator:
         if root is None:
             return
         try:
-            report = _wiki_sweep_module.sweep(root, dry_run=False)
+            report = _wiki_sweep_run(root, dry_run=False)
         except Exception as exc:
             log.warning(
                 "wiki_sweep_failed",

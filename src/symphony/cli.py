@@ -17,7 +17,7 @@ import signal
 import sys
 from pathlib import Path
 
-from . import wiki_sweep
+from . import wiki_sweep as wiki_sweep
 from .errors import SymphonyError
 from .keep_awake import KeepAwake
 from .logging import configure_logging
