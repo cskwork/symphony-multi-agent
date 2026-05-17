@@ -616,6 +616,48 @@ def test_codex_start_command_prep_injects_when_symlinks_exist(
     assert str(host_docs.resolve()) in env["SYMPHONY_CODEX_WRITABLE_ROOTS"]
 
 
+def test_codex_turn_payload_carries_symlink_writable_roots(tmp_path: Path) -> None:
+    host_docs = tmp_path / "host_docs"
+    host_docs.mkdir()
+    cwd = tmp_path / "ws"
+    cwd.mkdir()
+    (cwd / "docs").symlink_to(host_docs)
+
+    cfg = _make_cfg("codex", workspace_root=tmp_path)
+    cfg = ServiceConfig(
+        workflow_path=cfg.workflow_path,
+        poll_interval_ms=cfg.poll_interval_ms,
+        workspace_root=cfg.workspace_root,
+        tracker=cfg.tracker,
+        hooks=cfg.hooks,
+        agent=cfg.agent,
+        codex=CodexConfig(
+            command="codex app-server",
+            approval_policy=None,
+            thread_sandbox="workspace-write",
+            turn_sandbox_policy="workspace-write",
+            turn_timeout_ms=60_000,
+            read_timeout_ms=5_000,
+            stall_timeout_ms=30_000,
+        ),
+        claude=cfg.claude,
+        gemini=cfg.gemini,
+        pi=cfg.pi,
+        server=cfg.server,
+        prompt_template=cfg.prompt_template,
+    )
+    backend = CodexAppServerBackend(
+        BackendInit(cfg=cfg, cwd=cwd, workspace_root=tmp_path, on_event=_noop_event)
+    )
+
+    backend._prepare_command_and_env()
+    backend._thread_id = "thread-1"
+    params = backend._build_turn_params("hi")
+
+    assert params["sandboxPolicy"]["type"] == "workspaceWrite"
+    assert params["sandboxPolicy"]["writableRoots"] == [str(host_docs.resolve())]
+
+
 def test_codex_start_command_prep_noop_when_not_workspace_write(
     tmp_path: Path,
 ) -> None:

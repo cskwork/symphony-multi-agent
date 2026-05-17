@@ -97,17 +97,37 @@ _SANDBOX_POLICY_TAG: dict[str, str] = {
 }
 
 
-def _sandbox_policy_to_turn_payload(value: Any) -> Any:
+def _merge_writable_roots(
+    payload: Any, writable_roots: Sequence[str] | None
+) -> Any:
+    if (
+        not writable_roots
+        or not isinstance(payload, dict)
+        or payload.get("type") != "workspaceWrite"
+    ):
+        return payload
+    merged_roots = list(payload.get("writableRoots") or [])
+    for root in writable_roots:
+        if root not in merged_roots:
+            merged_roots.append(root)
+    if not merged_roots:
+        return payload
+    return {**payload, "writableRoots": merged_roots}
+
+
+def _sandbox_policy_to_turn_payload(
+    value: Any, writable_roots: Sequence[str] | None = None
+) -> Any:
     """Translate a workflow ``turn_sandbox_policy`` string to v2 payload."""
     if value is None:
         return None
     if isinstance(value, dict):
-        return value  # already v2-shaped
+        return _merge_writable_roots(value, writable_roots)  # already v2-shaped
     tag = _SANDBOX_POLICY_TAG.get(str(value))
     if tag is None:
         # Unknown — let codex reject with a clear error rather than guess.
         return value
-    return {"type": tag}
+    return _merge_writable_roots({"type": tag}, writable_roots)
 
 
 def _sandbox_uses_workspace_write(*values: Any) -> bool:
@@ -206,6 +226,7 @@ class CodexAppServerBackend:
         self._approval_policy = codex.approval_policy
         self._sandbox_policy = codex.turn_sandbox_policy
         self._thread_sandbox = codex.thread_sandbox
+        self._writable_roots: list[str] = []
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -269,10 +290,13 @@ class CodexAppServerBackend:
         env = os.environ.copy()
         command = self._codex.command
         if not _sandbox_uses_workspace_write(self._thread_sandbox, self._sandbox_policy):
+            self._writable_roots = []
             return command, env
         roots = _scan_workspace_symlinks(self._cwd, self._workspace_root)
         if not roots:
+            self._writable_roots = []
             return command, env
+        self._writable_roots = roots
         env["SYMPHONY_CODEX_WRITABLE_ROOTS"] = os.pathsep.join(roots)
         new_command = _inject_writable_roots(command, roots)
         if new_command != command:
@@ -407,7 +431,10 @@ class CodexAppServerBackend:
             "threadId": self._thread_id,
             "input": [{"type": "text", "text": prompt}],
         }
-        sandbox_payload = _sandbox_policy_to_turn_payload(self._sandbox_policy)
+        sandbox_payload = _sandbox_policy_to_turn_payload(
+            self._sandbox_policy,
+            self._writable_roots,
+        )
         if sandbox_payload is not None:
             params["sandboxPolicy"] = sandbox_payload
         if self._approval_policy is not None:

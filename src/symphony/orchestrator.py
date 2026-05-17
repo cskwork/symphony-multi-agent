@@ -1277,6 +1277,23 @@ class Orchestrator:
                                 running_entry.issue = issue
 
                     current_state = normalize_state(issue.state)
+                    debug = self._issue_debug.setdefault(
+                        running_issue_id, _IssueDebug()
+                    )
+                    if (
+                        cfg.agent.max_total_turns > 0
+                        and debug.completed_turn_count + turn_number
+                        > cfg.agent.max_total_turns
+                    ):
+                        log.warning(
+                            "worker_total_turn_budget_boundary",
+                            issue_id=running_issue_id,
+                            issue_identifier=issue.identifier,
+                            completed_turns=debug.completed_turn_count,
+                            next_turn=turn_number,
+                            max_total_turns=cfg.agent.max_total_turns,
+                        )
+                        break
                     is_phase_transition = (
                         turn_number > 1 and current_state != prev_phase_state
                     )

@@ -2483,6 +2483,99 @@ def test_normal_exit_does_not_continue_after_total_turn_budget():
     asyncio.run(_run())
 
 
+def test_worker_loop_stops_before_starting_past_total_turn_budget(monkeypatch, tmp_path):
+    """`max_total_turns` must be enforced at the turn boundary, not only exit.
+
+    Regression for OLV-150: the prompt said turn N of 60, but the worker kept
+    starting turns past 60 because `_on_worker_exit` was the only place that
+    checked the total-turn cap. A normal active-state loop must stop before
+    starting the extra turn.
+    """
+    import symphony.orchestrator as _orch_mod
+
+    orch = _orch()
+    issue = _issue("MT-TOTAL-LOOP", state="In Progress")
+    cfg = _make_config(
+        max_concurrent=1,
+        active_states=("In Progress",),
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
+    cfg = replace(
+        cfg,
+        agent=replace(
+            cfg.agent,
+            max_turns=100,
+            max_total_turns=2,
+            budget_exhausted_state="Blocked",
+            auto_commit_on_done=False,
+        ),
+    )
+    turns: list[str] = []
+    moved: list[tuple[str, str]] = []
+    notes: list[tuple[str, str, str]] = []
+
+    class _Backend:
+        async def start(self):
+            return None
+
+        async def initialize(self):
+            return None
+
+        async def start_session(self, *, initial_prompt, issue_title):
+            return "thread-1"
+
+        async def run_turn(self, *, prompt, is_continuation):
+            turns.append(prompt)
+            return None
+
+        async def stop(self):
+            return None
+
+    class _Workspace:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+    class _StubWS:
+        async def create_or_reuse(self, identifier):
+            return _Workspace(tmp_path)
+
+        async def before_run(self, path):
+            return None
+
+        async def after_run_best_effort(self, path):
+            return None
+
+    def _move(_cfg, captured_issue, target_state):
+        moved.append((captured_issue.identifier, target_state))
+
+    def _append(_cfg, captured_issue, heading, body):
+        notes.append((captured_issue.identifier, heading, body))
+
+    async def _run() -> None:
+        orch._loop = asyncio.get_running_loop()
+        _install_running_entry(orch, issue)
+        _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        orch._workspace_manager = _StubWS()  # type: ignore[assignment]
+        monkeypatch.setattr(_orch_mod, "build_backend", lambda _init: _Backend())
+        monkeypatch.setattr(orch, "_tracker_call_states_by_ids", lambda _cfg, _ids: [issue])
+        monkeypatch.setattr(orch, "_tracker_call_update_state", _move)
+        monkeypatch.setattr(orch, "_tracker_call_append_note", _append)
+
+        try:
+            await orch._run_agent_attempt(issue, attempt=None, cfg=cfg)
+
+            assert len(turns) == 2
+            assert issue.id in orch._turn_budget_exhausted
+            assert moved == [("MT-TOTAL-LOOP", "Blocked")]
+            assert notes and notes[0][1] == "Budget Exceeded"
+            assert "max_total_turns=2" in notes[0][2]
+        finally:
+            for retry in list(orch._retry.values()):
+                retry.timer_handle.cancel()
+
+    asyncio.run(_run())
+
+
 def test_find_running_issue_id_resolves_human_identifier():
     """Server endpoints take `OLV-002` style ids — resolve to internal id."""
     orch = _orch()
