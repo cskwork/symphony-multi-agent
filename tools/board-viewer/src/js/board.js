@@ -295,10 +295,20 @@ function cssEscape(s) {
   return String(s).replace(/(["\\])/g, "\\$1");
 }
 
+function normalizeStateName(s) {
+  return String(s || "").trim().toLowerCase();
+}
+
 function updateStatus() {
   if (state.symphonyAlive) {
-    statusDot.dataset.state = "alive";
-    statusText.textContent = "symphony: alive";
+    const blockedTickets = state.tickets.filter((t) => normalizeStateName(t.state) === "blocked");
+    if (blockedTickets.length > 0) {
+      statusDot.dataset.state = "blocked";
+      statusText.textContent = `symphony: blocked ${blockedTickets.length}`;
+    } else {
+      statusDot.dataset.state = "alive";
+      statusText.textContent = "symphony: alive";
+    }
   } else {
     statusDot.dataset.state = "down";
     statusText.textContent = "symphony: down (file-only)";

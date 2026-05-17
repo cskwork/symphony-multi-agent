@@ -30,6 +30,7 @@ def _make_config(
     max_concurrent: int = 5,
     per_state: dict[str, int] | None = None,
     active_states: tuple[str, ...] = ("Todo", "In Progress"),
+    terminal_states: tuple[str, ...] = ("Done", "Cancelled"),
     tracker_kind: str = "linear",
     auto_triage_actionable_todo: bool = True,
 ) -> ServiceConfig:
@@ -43,7 +44,7 @@ def _make_config(
             api_key="tok",
             project_slug="proj",
             active_states=active_states,
-            terminal_states=("Done", "Cancelled"),
+            terminal_states=terminal_states,
             board_root=Path("/tmp/kanban") if tracker_kind == "file" else None,
         ),
         hooks=HooksConfig(None, None, None, None, 60_000),
@@ -1784,25 +1785,38 @@ def test_after_done_failure_policy_warn_removes_workspace(monkeypatch):
     asyncio.run(_run())
 
 
-def test_on_worker_exit_hit_max_turns_skips_continuation(monkeypatch):
-    """Per-attempt `max_turns` exhaustion must NOT auto-schedule a continuation.
+def test_on_worker_exit_hit_max_turns_blocks_ticket_when_blocked_state_exists(monkeypatch):
+    """Per-attempt `max_turns` exhaustion should surface as a blocked ticket.
 
     Reproduces the issue Codex flagged 2026-05-16: `worker_run_loop` breaks
     out of its turn loop at `turn >= cfg.agent.max_turns`, then exits with
     `reason="normal"`. The old `_on_worker_exit` saw a non-terminal state
     and silently scheduled a continuation, so the ticket bounced against
-    the ceiling forever instead of waiting for operator action. Fix sets
-    `entry.hit_max_turns` at the break site and gates continuation on it.
+    the ceiling forever or sat invisibly claimed. Fix persists `Blocked`
+    when the workflow exposes that terminal state.
     """
-    cfg = _make_config(max_concurrent=1)
+    cfg = _make_config(
+        max_concurrent=1,
+        terminal_states=("Done", "Cancelled", "Blocked"),
+    )
     orch = _orch()
     issue = _issue("MT-MAX", state="In Progress")
+    moved: list[tuple[str, str]] = []
+    appended: list[tuple[str, str, str]] = []
+
+    def _move(_cfg, _issue, target):
+        moved.append((_issue.identifier, target))
+
+    def _append(_cfg, _issue, heading, body):
+        appended.append((_issue.identifier, heading, body))
 
     async def _run() -> None:
         orch._loop = asyncio.get_running_loop()
         entry = _install_running_entry(orch, issue)
         entry.hit_max_turns = True  # simulate the worker_run_loop break path
         _stub_workflow_state_returning(orch, cfg, monkeypatch)
+        monkeypatch.setattr(Orchestrator, "_tracker_call_update_state", staticmethod(_move))
+        monkeypatch.setattr(Orchestrator, "_tracker_call_append_note", staticmethod(_append))
 
         try:
             assert orch._retry == {}, "precondition: no retries scheduled"
@@ -1814,9 +1828,13 @@ def test_on_worker_exit_hit_max_turns_skips_continuation(monkeypatch):
                 "hit_max_turns path must mark the ticket as claimed so the "
                 "dispatcher doesn't immediately pick it up again"
             )
+            assert moved == [("MT-MAX", "Blocked")]
+            assert appended and appended[0][0:2] == ("MT-MAX", "Budget Exceeded")
+            assert "max_turns=20/attempt" in appended[0][2]
             assert "max_turns reached" in (
                 orch._issue_debug[issue.id].last_error or ""
             )
+            assert "Blocked" in (orch._issue_debug[issue.id].last_error or "")
         finally:
             for retry in list(orch._retry.values()):
                 retry.timer_handle.cancel()

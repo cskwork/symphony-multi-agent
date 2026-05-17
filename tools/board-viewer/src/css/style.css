@@ -312,6 +312,10 @@ pre,
   background: var(--danger);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 25%, transparent);
 }
+.status-dot[data-state="blocked"] {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 25%, transparent);
+}
 .status-dot[data-state="unknown"] {
   background: var(--fg-dim);
 }

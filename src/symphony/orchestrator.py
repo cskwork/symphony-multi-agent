@@ -1614,14 +1614,16 @@ class Orchestrator:
         issue_id: str,
         target_state: str,
         budget_kind: str,
-    ) -> None:
+    ) -> bool:
         if not target_state:
-            return
+            return False
         if budget_kind == "tokens":
             budget_detail = (
                 f"({entry.codex_state_total_tokens}/"
                 f"{entry.token_budget_cap or cfg.agent.max_total_tokens})"
             )
+        elif budget_kind == "max_turns":
+            budget_detail = f"(max_turns={cfg.agent.max_turns}/attempt)"
         else:
             budget_detail = f"(max_total_turns={cfg.agent.max_total_turns})"
         note_body = (
@@ -1650,6 +1652,7 @@ class Orchestrator:
                 target_state=target_state,
                 budget_kind=budget_kind,
             )
+            return True
         except Exception as persist_exc:
             # Lenient: the in-memory guard still prevents another dispatch in
             # this process; the log explains why restart persistence failed.
@@ -1661,6 +1664,7 @@ class Orchestrator:
                 budget_kind=budget_kind,
                 error=str(persist_exc),
             )
+            return False
 
     # ------------------------------------------------------------------
     # codex events
@@ -2094,15 +2098,31 @@ class Orchestrator:
                 )
             elif entry.hit_max_turns:
                 # `max_turns` exhausted without a terminal transition: stop
-                # auto-continuation. Record the reason on the debug entry so
-                # operators see "why is this ticket stalled?" in the TUI /
-                # state snapshot without having to chase log lines.
+                # auto-continuation and, when the workflow exposes a Blocked
+                # terminal state, persist that state so the web/TUI boards do
+                # not look idle while the ticket is actually operator-blocked.
                 self._claimed.add(issue_id)
                 attempt_cap = cfg.agent.max_turns if cfg is not None else 0
-                debug.last_error = (
-                    f"max_turns reached ({attempt_cap}/attempt) "
-                    f"— operator action required"
+                target_state = (
+                    _max_turns_exhausted_target_state(cfg) if cfg is not None else ""
                 )
+                persisted = False
+                if cfg is not None and target_state:
+                    persisted = await self._persist_budget_exhausted_state(
+                        cfg=cfg,
+                        entry=entry,
+                        issue_id=issue_id,
+                        target_state=target_state,
+                        budget_kind="max_turns",
+                    )
+                    if persisted:
+                        entry.issue = replace(entry.issue, state=target_state)
+                suffix = (
+                    f"; moved to {target_state}"
+                    if persisted
+                    else " — operator action required"
+                )
+                debug.last_error = f"max_turns reached ({attempt_cap}/attempt){suffix}"
         else:
             next_attempt = (entry.retry_attempt or 0) + 1
             cfg = self._workflow_state.current()
@@ -2580,6 +2600,15 @@ def _from_monotonic_to_iso(due_at_ms: float) -> str:
     delta_seconds = max((due_at_ms - now_mono) / 1000.0, 0.0)
     target = datetime.now(timezone.utc).timestamp() + delta_seconds
     return datetime.fromtimestamp(target, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _max_turns_exhausted_target_state(cfg: ServiceConfig) -> str:
+    if cfg.agent.budget_exhausted_state:
+        return cfg.agent.budget_exhausted_state
+    for state in cfg.tracker.terminal_states:
+        if normalize_state(state) == "blocked":
+            return state
+    return ""
 
 
 def _task_debug(task: asyncio.Task[Any] | None) -> dict[str, Any] | None:

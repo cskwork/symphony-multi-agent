@@ -69,6 +69,17 @@ def test_board_viewer_fallback_states_and_policy_mode() -> None:
     assert "repo_root" in js
 
 
+def test_board_viewer_header_surfaces_blocked_tickets() -> None:
+    js = Path("tools/board-viewer/src/js/board.js").read_text(encoding="utf-8")
+    css = Path("tools/board-viewer/src/css/style.css").read_text(encoding="utf-8")
+
+    assert "const blockedTickets = state.tickets.filter" in js
+    assert 'normalizeStateName(t.state) === "blocked"' in js
+    assert 'statusDot.dataset.state = "blocked"' in js
+    assert "`symphony: blocked ${blockedTickets.length}`" in js
+    assert '.status-dot[data-state="blocked"]' in css
+
+
 def test_kanban_index_exposes_nested_agent_kind(tmp_path, monkeypatch) -> None:
     server = _load_server_module()
     board = tmp_path / "kanban"
